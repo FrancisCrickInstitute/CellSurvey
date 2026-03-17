@@ -1,20 +1,29 @@
+import ctypes
+import ctypes.util
+ctypes.CDLL("/nemo/stp/lm/working/barryd/hpc/pixi/sopaspan/.pixi/envs/sopaspan/lib/libstdc++.so.6")
+
 import sopa
 import argparse
-import spatialdata as sd
+import spatialdata
 import re
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
 import muspan as ms
-import numpy as np
 import json
 import os
 import matplotlib.pyplot as plt
 import seaborn as sns
 import scanpy as sc
 from shapely.geometry import mapping
+import numpy as np
+from bioio import BioImage
+from spotiflow.model.spotiflow import Spotiflow as sp
+from spatialdata.models import PointsModel
+from spatialdata.transformations import Identity
+from dask_image.imread import imread
 
-plt.rcParams['font.size'] = 200
+plt.rcParams['font.size'] = 20
 plt.rcParams['axes.linewidth'] = 15
 fig_kwargs = dict(figsize=(200, 200))
 
@@ -68,7 +77,7 @@ def run_muspan(spatial_data, cell_boundaries='stardist_boundaries', index_name='
     spatial_data.shapes[cell_boundaries].index.name = index_name
 
     # Create clean version without image_patches
-    sdata_clean = sd.SpatialData(
+    sdata_clean = spatialdata.SpatialData(
         shapes={cell_boundaries: spatial_data.shapes[cell_boundaries]},
         tables=spatial_data.tables
     )
@@ -205,26 +214,54 @@ if __name__ == '__main__':
     parser.add_argument('-i', '--input_file', help='Path to input image',
                         default='/nemo/stp/lm/working/barryd/hpc/projects/stps/ehp/2026.01/comet_lunaphore/data/20251017_132551_2_p6Bnyk_EHP893_25_SPYREplus4_EHP893_25_Thymus_SPYREplus4_test1.tiff')
     parser.add_argument('-o', '--output_file', help='Path to output Zarr',
-                        default='/nemo/stp/lm/working/barryd/hpc/projects/stps/ehp/2026.01/comet_lunaphore/data/20251017_132551_2_p6Bnyk_EHP893_25_SPYREplus4_EHP893_25_Thymus_SPYREplus4_test1.zarr')
+                        default='/nemo/stp/lm/working/barryd/hpc/projects/stps/ehp/2026.01/comet_lunaphore/data/20251017_132551_2_p6Bnyk_EHP893_25_SPYREplus4_EHP893_25_Thymus_SPYREplus4_test1')
     parser.add_argument('-p', '--plot_dir', help='Output directory for data plots', default='.')
     args = parser.parse_args()
 
     imagepath = args.input_file
     zarr_path = args.output_file
 
-    print(f'Opening image from {imagepath}')
+    channel_index = 9
+    # Get a BioImage object
+    img = BioImage(imagepath)  # selects the first scene found
+    channel_names = img.channel_names
 
     dataset = sopa.io.ome_tif(imagepath, as_image=False)
 
-    print(f'Saving Zarr to {zarr_path}')
+    image = imread(imagepath)
 
-    dataset.write(zarr_path, overwrite=True)
+    result = sp().predict(img=image[channel_index], device="cuda", prob_thresh=0.75)
+    spots = result[0]  # np.ndarray, shape (N, 2), order (row, col)
+    details = result[1]
+    probs = details.prob  # np.ndarray, shape (N,)
+
+    # spots is (N, 2) in (row, col) order, so row=y, col=x
+    df = pd.DataFrame({
+        "x": spots[:, 1],
+        "y": spots[:, 0],
+        "prob": probs,
+        "gene": np.array([channel_names[channel_index]] * len(spots)),
+    })
+
+    points = PointsModel.parse(
+        df,
+        coordinates={"x": "x", "y": "y"},
+        transformations={"global": Identity()},
+    )
+
+    dataset["spots"] = points
+
+    orig_zarr_path = f'{zarr_path}.zarr'
+
+    print(f'Saving Zarr to {orig_zarr_path}')
+
+    dataset.write(f'{orig_zarr_path}')
 
     print("Done")
 
     print("Loading Zarr...")
 
-    dataset = spatialdata.read_zarr(zarr_path)  # we can read the data back
+    dataset = spatialdata.read_zarr(orig_zarr_path)  # we can read the data back
 
     image_name = list(dataset.images.keys())[0]
 
@@ -256,7 +293,13 @@ if __name__ == '__main__':
 
     print("Aggregating...")
 
-    sopa.aggregate(dataset)
+    sopa.aggregate(dataset, aggregate_genes=True, points_key='spots', gene_column='gene')
+
+    seg_zarr_path = f'{zarr_path}_seg.zarr'
+
+    print(f'Saving Zarr to {seg_zarr_path}')
+
+    dataset.write(f'{seg_zarr_path}', overwrite=True)
 
     print("Done")
 
@@ -264,15 +307,15 @@ if __name__ == '__main__':
     np.random.seed(42)
 
     # Load the data
-    path_to_spatialData_file = zarr_path
-    sdata = sd.read_zarr(path_to_spatialData_file)
+    path_to_spatialData_file = seg_zarr_path
+    sdata = spatialdata.read_zarr(path_to_spatialData_file)
 
     # Get the boundaries and measurements
     measurements = sdata.tables['table']
 
     # Convert AnnData to DataFrame
     intensity_df = pd.DataFrame(
-        measurements.X,
+        measurements.X.toarray(),
         index=measurements.obs.index,
         columns=measurements.var.index
     )
@@ -324,4 +367,3 @@ if __name__ == '__main__':
     plt.figure(figsize=(10, 10))
     sc.pl.umap(adata_subset, color="kmeans_cluster")
     sc.pl.umap(adata_subset, color="leiden")
-
