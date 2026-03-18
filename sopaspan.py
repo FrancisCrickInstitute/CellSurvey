@@ -24,8 +24,8 @@ from spatialdata.transformations import Identity
 from dask_image.imread import imread
 
 plt.rcParams['font.size'] = 20
-plt.rcParams['axes.linewidth'] = 15
-fig_kwargs = dict(figsize=(200, 200))
+plt.rcParams['axes.linewidth'] = 3
+fig_kwargs = dict(figsize=(20, 20))
 
 
 # Strip the _ch_N suffix from column names
@@ -72,7 +72,7 @@ def get_colors_for_communities(n_communities):
 
 
 def run_muspan(spatial_data, cell_boundaries='stardist_boundaries', index_name='cell_id', output_dir='.',
-               cell_colour='table: kmeans_cluster', comm_detect_res=0.01):
+               cell_colour='table: kmeans_cluster', comm_detect_res=0.1):
     # Set the index name (as we learned earlier)
     spatial_data.shapes[cell_boundaries].index.name = index_name
 
@@ -212,9 +212,9 @@ def export_to_qupath(domain, communities, clusters, output_path, cell_id='cell_i
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-i', '--input_file', help='Path to input image',
-                        default='/nemo/stp/lm/working/barryd/hpc/projects/stps/ehp/2026.01/comet_lunaphore/data/20251017_132551_2_p6Bnyk_EHP893_25_SPYREplus4_EHP893_25_Thymus_SPYREplus4_test1.tiff')
+                        default='/nemo/stp/lm/working/barryd/hpc/projects/stps/ehp/2026.01/comet_lunaphore/data/test_crop_2.ome.tiff')
     parser.add_argument('-o', '--output_file', help='Path to output Zarr',
-                        default='/nemo/stp/lm/working/barryd/hpc/projects/stps/ehp/2026.01/comet_lunaphore/data/20251017_132551_2_p6Bnyk_EHP893_25_SPYREplus4_EHP893_25_Thymus_SPYREplus4_test1')
+                        default='/nemo/stp/lm/working/barryd/hpc/projects/stps/ehp/2026.01/comet_lunaphore/data/test_crop_2')
     parser.add_argument('-p', '--plot_dir', help='Output directory for data plots', default='.')
     args = parser.parse_args()
 
@@ -230,7 +230,7 @@ if __name__ == '__main__':
 
     image = imread(imagepath)
 
-    result = sp().predict(img=image[channel_index], device="cuda", prob_thresh=0.75)
+    result = sp().predict(img=image[channel_index], device="cuda", prob_thresh=0.5)
     spots = result[0]  # np.ndarray, shape (N, 2), order (row, col)
     details = result[1]
     probs = details.prob  # np.ndarray, shape (N,)
@@ -347,8 +347,8 @@ if __name__ == '__main__':
     example_domain = run_muspan(sdata)
 
     adata = sdata.tables['table']
-    idx = np.random.choice(adata.n_obs, size=30000, replace=False)
-    adata_subset = adata[idx].copy()
+#    idx = np.random.choice(adata.n_obs, size=30000, replace=False)
+    adata_subset = adata
     sopa.spatial.spatial_neighbors(adata, radius=(0, 1000))
     cell_type_to_cell_type = sopa.spatial.mean_distance(adata, "kmeans_cluster", "kmeans_cluster")
     plt.rcParams['font.size'] = 10
