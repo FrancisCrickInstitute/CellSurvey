@@ -23,6 +23,7 @@ from spatialdata.models import PointsModel
 from spatialdata.transformations import Identity
 from dask_image.imread import imread
 import geopandas as gpd
+from skimage.feature import blob_log
 
 plt.rcParams['font.size'] = 20
 plt.rcParams['axes.linewidth'] = 3
@@ -239,6 +240,76 @@ def export_to_qupath(domain, communities, clusters, output_path, cell_id='cell_i
     print(f"Output file: {output_path}")
 
 
+def detect_blobs_tiled(image, tile_size=1024, overlap=50, min_sigma=1, max_sigma=5, num_sigma=5, threshold=0.1):
+    print(f"Detecting blobs in tiles of {tile_size}x{tile_size} with {overlap}px overlap...")
+
+    height, width = image.shape
+    all_blobs = []
+
+    # Calculate tile starts
+    y_starts = list(range(0, height, tile_size - overlap))
+    x_starts = list(range(0, width, tile_size - overlap))
+
+    total_tiles = len(y_starts) * len(x_starts)
+    tile_count = 0
+
+    # Compute once outside the loop for efficiency
+    image_min = image.min()
+    image_max = image.max()
+
+    for y in y_starts:
+        for x in x_starts:
+            tile_count += 1
+
+            # Calculate tile boundaries (clamp to image size)
+            y_end = min(y + tile_size, height)
+            x_end = min(x + tile_size, width)
+
+            # Extract and normalise tile
+            tile = image[y:y_end, x:x_end].astype(float)
+            tile = (tile - image_min) / (image_max - image_min + 1e-8)
+            print(f'Finding blobs in tile {tile.shape}')
+            # Detect blobs in tile
+            blobs = blob_log(
+                tile,
+                min_sigma=min_sigma,
+                max_sigma=max_sigma,
+                num_sigma=num_sigma,
+                threshold=threshold
+            )
+
+            if len(blobs) > 0:
+                # Convert tile coordinates back to global image coordinates
+                blobs[:, 0] += y
+                blobs[:, 1] += x
+
+                # Remove blobs detected in overlap region (keep only those in the
+                # non-overlapping part of the tile, except at image edges)
+                half_overlap = overlap // 2
+                y_min_keep = y + half_overlap if y > 0 else y
+                x_min_keep = x + half_overlap if x > 0 else x
+                y_max_keep = y_end - half_overlap if y_end < height else y_end
+                x_max_keep = x_end - half_overlap if x_end < width else x_end
+
+                mask = (
+                        (blobs[:, 0] >= y_min_keep) & (blobs[:, 0] < y_max_keep) &
+                        (blobs[:, 1] >= x_min_keep) & (blobs[:, 1] < x_max_keep)
+                )
+                blobs = blobs[mask]
+                all_blobs.append(blobs)
+
+            if tile_count % 10 == 0:
+                print(f"  Processed {tile_count}/{total_tiles} tiles...")
+
+    if all_blobs:
+        all_blobs = np.concatenate(all_blobs, axis=0)
+    else:
+        all_blobs = np.zeros((0, 3))
+
+    print(f"Found {len(all_blobs)} blobs total")
+    return all_blobs
+
+
 def assign_spots_to_cells(spatial_data, spots_key='spots', cell_boundaries='stardist_boundaries'):
     print("Computing spot-to-cell assignments...")
 
@@ -272,9 +343,9 @@ def assign_spots_to_cells(spatial_data, spots_key='spots', cell_boundaries='star
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-i', '--input_file', help='Path to input image',
-                        default='/nemo/stp/lm/working/barryd/hpc/projects/stps/ehp/2026.01/comet_lunaphore/data/test_crop_2_with_noise.ome.tiff')
+                        default='/nemo/stp/lm/working/barryd/hpc/projects/stps/ehp/2026.01/comet_lunaphore/data/test_crop_2.ome.tiff')
     parser.add_argument('-o', '--output_file', help='Path to output Zarr',
-                        default='/nemo/stp/lm/working/barryd/hpc/projects/stps/ehp/2026.01/comet_lunaphore/data/test_crop_2_with_noise')
+                        default='/nemo/stp/lm/working/barryd/hpc/projects/stps/ehp/2026.01/comet_lunaphore/data/test_crop_2')
     parser.add_argument('-p', '--plot_dir', help='Output directory for data plots', default='.')
     args = parser.parse_args()
 
@@ -290,17 +361,26 @@ if __name__ == '__main__':
 
     image = imread(imagepath)
 
-    result = sp().predict(img=image[channel_index], device="cuda", prob_thresh=0.5, subpix=True, peak_mode='skimage')
-    spots = result[0]  # np.ndarray, shape (N, 2), order (row, col)
-    details = result[1]
-    probs = details.prob  # np.ndarray, shape (N,)
+    # result = sp().predict(img=image[channel_index], device="cuda", prob_thresh=0.5, subpix=True, peak_mode='skimage')
+    # spots = result[0]  # np.ndarray, shape (N, 2), order (row, col)
+    # details = result[1]
+    # probs = details.prob  # np.ndarray, shape (N,)
+    #
+    # # spots is (N, 2) in (row, col) order, so row=y, col=x
+    # df = pd.DataFrame({
+    #     "x": spots[:, 1],
+    #     "y": spots[:, 0],
+    #     "prob": probs,
+    #     "gene": np.array([channel_names[channel_index]] * len(spots)),
+    # })
 
-    # spots is (N, 2) in (row, col) order, so row=y, col=x
+    blobs = detect_blobs_tiled(image[channel_index], tile_size=1024, overlap=50, threshold=0.01)
+
     df = pd.DataFrame({
-        "x": spots[:, 1],
-        "y": spots[:, 0],
-        "prob": probs,
-        "gene": np.array([channel_names[channel_index]] * len(spots)),
+        "x": blobs[:, 1],
+        "y": blobs[:, 0],
+        "sigma": blobs[:, 2],  # sigma as proxy for confidence
+        "gene": np.array([channel_names[channel_index]] * len(blobs)),
     })
 
     points = PointsModel.parse(
