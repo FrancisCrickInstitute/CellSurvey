@@ -1,5 +1,5 @@
-import ctypes
 import ctypes.util
+
 ctypes.CDLL("/nemo/stp/lm/working/barryd/hpc/pixi/sopaspan/.pixi/envs/sopaspan/lib/libstdc++.so.6")
 
 import sopa
@@ -22,6 +22,7 @@ from spotiflow.model.spotiflow import Spotiflow as sp
 from spatialdata.models import PointsModel
 from spatialdata.transformations import Identity
 from dask_image.imread import imread
+import geopandas as gpd
 
 plt.rcParams['font.size'] = 20
 plt.rcParams['axes.linewidth'] = 3
@@ -127,7 +128,7 @@ def run_muspan(spatial_data, cell_boundaries='stardist_boundaries', index_name='
     return muspan_domain
 
 
-def export_to_qupath(domain, communities, clusters, output_path, cell_id='cell_id'):
+def export_to_qupath(domain, communities, clusters, output_path, cell_id='cell_id', spots_with_cells=None):
     print("Exporting to QuPath GeoJSON format...")
 
     # Get cell IDs and community labels from the muspan domain
@@ -141,10 +142,8 @@ def export_to_qupath(domain, communities, clusters, output_path, cell_id='cell_i
 
     # Get unique communities for coloring
     unique_communities = np.unique(communities_labels)
-
     community_colors = get_colors_for_communities(len(unique_communities))
 
-    # Create GeoJSON features
     features = []
 
     print("Exporting cell boundaries with community labels...")
@@ -154,7 +153,7 @@ def export_to_qupath(domain, communities, clusters, output_path, cell_id='cell_i
         community = cell_to_community.get(idx, -1)
         cluster_id = cell_to_cluster.get(idx, -1)
 
-        # Get color based on community (res 0.3 as primary classification)
+        # Get color based on community
         if 0 <= community < len(community_colors):
             color = community_colors[int(community)]
             classification_name = f"Community_{int(community)}"
@@ -192,8 +191,39 @@ def export_to_qupath(domain, communities, clusters, output_path, cell_id='cell_i
                 "measurements": measurements_dict
             }
         }
-
         features.append(feature)
+
+    print(f"Exported {len(boundaries)} cell boundaries")
+
+    # Export spots as point detections with parent cell assignment
+    if spots_with_cells is not None:
+        print("Exporting spot detections with cell assignments...")
+        for idx, row in spots_with_cells.iterrows():
+            cell_id_val = row['cell_id']  # already a string hash or None
+
+            feature = {
+                "type": "Feature",
+                "geometry": {
+                    "type": "Point",
+                    "coordinates": [float(row['x']), float(row['y'])]
+                },
+                "properties": {
+                    "objectType": "detection",
+                    "parent_id": str(cell_id_val) if cell_id_val is not None else None,
+                    "classification": {
+                        "name": row['gene'],
+                        "color": [0, 255, 0]  # Green for spots
+                    },
+                    "measurements": {
+                        "prob": float(row['prob']),
+                    }
+                }
+            }
+            features.append(feature)
+
+        assigned = spots_with_cells['cell_id'].notna().sum()
+        print(f"Exported {len(spots_with_cells)} spots ({assigned} assigned to cells, "
+              f"{len(spots_with_cells) - assigned} unassigned)")
 
     # Create final GeoJSON
     geojson = {
@@ -205,16 +235,46 @@ def export_to_qupath(domain, communities, clusters, output_path, cell_id='cell_i
     with open(output_path, 'w') as f:
         json.dump(geojson, f, indent=2)
 
-    print(f"\n✓ Exported {len(features)} cells with community labels")
-    print(f"\nOutput file: {output_path}")
+    print(f"\n✓ Exported {len(features)} total features")
+    print(f"Output file: {output_path}")
+
+
+def assign_spots_to_cells(spatial_data, spots_key='spots', cell_boundaries='stardist_boundaries'):
+    print("Computing spot-to-cell assignments...")
+
+    spots_df = spatial_data.points[spots_key].compute()
+    spots_gdf = gpd.GeoDataFrame(
+        spots_df,
+        geometry=gpd.points_from_xy(spots_df['x'], spots_df['y']),
+        crs=spatial_data.shapes[cell_boundaries].crs
+    )
+
+    spots_with_cells = gpd.sjoin(
+        spots_gdf,
+        spatial_data.shapes[cell_boundaries][['geometry']],
+        how='left',
+        predicate='within'
+    )
+
+    # cell_id is a string hash - keep as string, use None for unassigned
+    spots_with_cells['cell_id'] = spots_with_cells['cell_id'].where(
+        spots_with_cells['cell_id'].notna(), other=None
+    )
+
+    assigned = spots_with_cells['cell_id'].notna().sum()
+    total = len(spots_with_cells)
+    print(f"Assigned {assigned} of {total} spots to cells ({100 * assigned / total:.1f}%)")
+    print(f"Unassigned spots: {total - assigned} ({100 * (total - assigned) / total:.1f}%)")
+
+    return spots_with_cells
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-i', '--input_file', help='Path to input image',
-                        default='/nemo/stp/lm/working/barryd/hpc/projects/stps/ehp/2026.01/comet_lunaphore/data/test_crop_2.ome.tiff')
+                        default='/nemo/stp/lm/working/barryd/hpc/projects/stps/ehp/2026.01/comet_lunaphore/data/test_crop_2_with_noise.ome.tiff')
     parser.add_argument('-o', '--output_file', help='Path to output Zarr',
-                        default='/nemo/stp/lm/working/barryd/hpc/projects/stps/ehp/2026.01/comet_lunaphore/data/test_crop_2')
+                        default='/nemo/stp/lm/working/barryd/hpc/projects/stps/ehp/2026.01/comet_lunaphore/data/test_crop_2_with_noise')
     parser.add_argument('-p', '--plot_dir', help='Output directory for data plots', default='.')
     args = parser.parse_args()
 
@@ -230,7 +290,7 @@ if __name__ == '__main__':
 
     image = imread(imagepath)
 
-    result = sp().predict(img=image[channel_index], device="cuda", prob_thresh=0.5)
+    result = sp().predict(img=image[channel_index], device="cuda", prob_thresh=0.5, subpix=True, peak_mode='skimage')
     spots = result[0]  # np.ndarray, shape (N, 2), order (row, col)
     details = result[1]
     probs = details.prob  # np.ndarray, shape (N,)
@@ -346,8 +406,13 @@ if __name__ == '__main__':
 
     example_domain = run_muspan(sdata)
 
+    spots_with_cells = assign_spots_to_cells(sdata)
+
+    export_to_qupath(example_domain, 'Communities', 'table: kmeans_cluster', output_path='./qupath_export.geojson',
+                     spots_with_cells=spots_with_cells)
+
     adata = sdata.tables['table']
-#    idx = np.random.choice(adata.n_obs, size=30000, replace=False)
+    #    idx = np.random.choice(adata.n_obs, size=30000, replace=False)
     adata_subset = adata
     sopa.spatial.spatial_neighbors(adata, radius=(0, 1000))
     cell_type_to_cell_type = sopa.spatial.mean_distance(adata, "kmeans_cluster", "kmeans_cluster")
