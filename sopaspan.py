@@ -216,7 +216,7 @@ def export_to_qupath(domain, communities, clusters, output_path, cell_id='cell_i
                         "color": [0, 255, 0]  # Green for spots
                     },
                     "measurements": {
-                        "prob": float(row['prob']),
+                        "sigma": float(row['sigma']),
                     }
                 }
             }
@@ -352,7 +352,8 @@ if __name__ == '__main__':
     imagepath = args.input_file
     zarr_path = args.output_file
 
-    channel_index = 9
+    channel_index = [9, 10, 11, 12]
+    thresholds = [0.01, 0.1, 0.1, 0.1]
     # Get a BioImage object
     img = BioImage(imagepath)  # selects the first scene found
     channel_names = img.channel_names
@@ -374,14 +375,19 @@ if __name__ == '__main__':
     #     "gene": np.array([channel_names[channel_index]] * len(spots)),
     # })
 
-    blobs = detect_blobs_tiled(image[channel_index], tile_size=1024, overlap=50, threshold=0.01)
+    df = pd.DataFrame()
 
-    df = pd.DataFrame({
-        "x": blobs[:, 1],
-        "y": blobs[:, 0],
-        "sigma": blobs[:, 2],  # sigma as proxy for confidence
-        "gene": np.array([channel_names[channel_index]] * len(blobs)),
-    })
+    for c, t in zip(channel_index, thresholds):
+        blobs = detect_blobs_tiled(image[c], tile_size=1024, overlap=50, threshold=t)
+
+        df = pd.concat([df, pd.DataFrame({
+            "x": blobs[:, 1],
+            "y": blobs[:, 0],
+            "sigma": blobs[:, 2],  # sigma as proxy for confidence
+            "gene": np.array([channel_names[c]] * len(blobs)),
+        })])
+
+    df = df.reset_index(drop=True)
 
     points = PointsModel.parse(
         df,
