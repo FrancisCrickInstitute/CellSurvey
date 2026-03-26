@@ -18,12 +18,14 @@ import scanpy as sc
 from shapely.geometry import mapping, Point
 import numpy as np
 from bioio import BioImage
-from spotiflow.model.spotiflow import Spotiflow as sp
 from spatialdata.models import PointsModel
 from spatialdata.transformations import Identity
 from dask_image.imread import imread
 import geopandas as gpd
 from skimage.feature import blob_log
+import dask
+from dask import delayed
+from tqdm import tqdm
 
 plt.rcParams['font.size'] = 20
 plt.rcParams['axes.linewidth'] = 3
@@ -251,67 +253,77 @@ def export_to_qupath(domain, communities, clusters, output_path, cell_id='cell_i
     print(f"Output file: {output_path}")
 
 
-def detect_blobs_tiled(image, tile_size=1024, overlap=50, min_sigma=1, max_sigma=5, num_sigma=5, threshold=0.1):
-    print(f"Detecting blobs in tiles of {tile_size}x{tile_size} with {overlap}px overlap...")
+def detect_blobs_in_tile(image, y, x, tile_size, overlap, image_min, image_max, min_sigma, max_sigma, num_sigma,
+                         threshold):
+    height, width = image.shape
+    y_end = min(y + tile_size, height)
+    x_end = min(x + tile_size, width)
+
+    actual_h = y_end - y
+    actual_w = x_end - x
+
+    tile = image[y:y_end, x:x_end].astype(float)
+    tile = (tile - image_min) / (image_max - image_min + 1e-8)
+
+    if actual_h < tile_size or actual_w < tile_size:
+        padded = np.zeros((tile_size, tile_size), dtype=tile.dtype)
+        padded[:actual_h, :actual_w] = tile
+        tile = padded
+
+    blobs = blob_log(tile, min_sigma=min_sigma, max_sigma=max_sigma, num_sigma=num_sigma, threshold=threshold)
+
+    if len(blobs) > 0:
+        # Discard blobs in padded region
+        blobs = blobs[(blobs[:, 0] < actual_h) & (blobs[:, 1] < actual_w)]
+
+        # Convert to global coordinates
+        blobs[:, 0] += y
+        blobs[:, 1] += x
+
+        # Remove blobs in overlap region
+        half_overlap = overlap // 2
+        y_min_keep = y + half_overlap if y > 0 else y
+        x_min_keep = x + half_overlap if x > 0 else x
+        y_max_keep = y_end - half_overlap if y_end < height else y_end
+        x_max_keep = x_end - half_overlap if x_end < width else x_end
+
+        mask = (
+                (blobs[:, 0] >= y_min_keep) & (blobs[:, 0] < y_max_keep) &
+                (blobs[:, 1] >= x_min_keep) & (blobs[:, 1] < x_max_keep)
+        )
+        blobs = blobs[mask]
+
+    return blobs
+
+
+def detect_blobs_tiled(image, tile_size=1024, overlap=50, min_sigma=2, max_sigma=5, num_sigma=5, threshold=0.1,
+                       n_workers=8):
+    print(f"Detecting blobs in tiles of {tile_size}x{tile_size} with {overlap}px overlap using {n_workers} workers...")
 
     height, width = image.shape
-    all_blobs = []
-
-    # Calculate tile starts
-    y_starts = list(range(0, height, tile_size - overlap))
-    x_starts = list(range(0, width, tile_size - overlap))
-
-    total_tiles = len(y_starts) * len(x_starts)
-    tile_count = 0
-
-    # Compute once outside the loop for efficiency
     image_min = image.min()
     image_max = image.max()
 
-    for y in y_starts:
-        for x in x_starts:
-            tile_count += 1
+    y_starts = list(range(0, height, tile_size - overlap))
+    x_starts = list(range(0, width, tile_size - overlap))
+    total_tiles = len(y_starts) * len(x_starts)
+    print(f"Total tiles: {total_tiles}")
 
-            # Calculate tile boundaries (clamp to image size)
-            y_end = min(y + tile_size, height)
-            x_end = min(x + tile_size, width)
+    # Build list of delayed tasks
+    tasks = [
+        delayed(detect_blobs_in_tile)(
+            image, y, x, tile_size, overlap, image_min, image_max,
+            min_sigma, max_sigma, num_sigma, threshold
+        )
+        for y in y_starts
+        for x in x_starts
+    ]
 
-            # Extract and normalise tile
-            tile = image[y:y_end, x:x_end].astype(float)
-            tile = (tile - image_min) / (image_max - image_min + 1e-8)
-            print(f'Finding blobs in tile {tile.shape}')
-            # Detect blobs in tile
-            blobs = blob_log(
-                tile,
-                min_sigma=min_sigma,
-                max_sigma=max_sigma,
-                num_sigma=num_sigma,
-                threshold=threshold
-            )
+    # Compute all tiles in parallel using a local thread pool
+    results = dask.compute(*tasks, scheduler='threads', num_workers=n_workers)
 
-            if len(blobs) > 0:
-                # Convert tile coordinates back to global image coordinates
-                blobs[:, 0] += y
-                blobs[:, 1] += x
-
-                # Remove blobs detected in overlap region (keep only those in the
-                # non-overlapping part of the tile, except at image edges)
-                half_overlap = overlap // 2
-                y_min_keep = y + half_overlap if y > 0 else y
-                x_min_keep = x + half_overlap if x > 0 else x
-                y_max_keep = y_end - half_overlap if y_end < height else y_end
-                x_max_keep = x_end - half_overlap if x_end < width else x_end
-
-                mask = (
-                        (blobs[:, 0] >= y_min_keep) & (blobs[:, 0] < y_max_keep) &
-                        (blobs[:, 1] >= x_min_keep) & (blobs[:, 1] < x_max_keep)
-                )
-                blobs = blobs[mask]
-                all_blobs.append(blobs)
-
-            if tile_count % 10 == 0:
-                print(f"  Processed {tile_count}/{total_tiles} tiles...")
-
+    # Concatenate results
+    all_blobs = [r for r in results if len(r) > 0]
     if all_blobs:
         all_blobs = np.concatenate(all_blobs, axis=0)
     else:
@@ -354,9 +366,9 @@ def assign_spots_to_cells(spatial_data, spots_key='spots', cell_boundaries='star
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-i', '--input_file', help='Path to input image',
-                        default='/nemo/stp/lm/working/barryd/hpc/projects/stps/ehp/2026.01/comet_lunaphore/data/test_crop_2.ome.tiff')
+                        default='/nemo/stp/lm/working/barryd/hpc/projects/stps/ehp/2026.01/comet_lunaphore/data/20260119_170817_1_6stkeU_RNAscope_HiPlex-4-plx_Mm_pos_test-TMA_RNAScope_HiPlex_4plx_Pos_Mm_TMA_test_for_Dave_B.ome.tiff')
     parser.add_argument('-o', '--output_file', help='Path to output Zarr',
-                        default='/nemo/stp/lm/working/barryd/hpc/projects/stps/ehp/2026.01/comet_lunaphore/data/test_crop_2')
+                        default='/nemo/stp/lm/working/barryd/hpc/projects/stps/ehp/2026.01/comet_lunaphore/data/20260119_170817_1_6stkeU_RNAscope_HiPlex-4-plx_Mm_pos_test-TMA_RNAScope_HiPlex_4plx_Pos_Mm_TMA_test_for_Dave_B')
     parser.add_argument('-p', '--plot_dir', help='Output directory for data plots', default='.')
     args = parser.parse_args()
 
@@ -389,7 +401,9 @@ if __name__ == '__main__':
     df = pd.DataFrame()
 
     for c, t in zip(channel_index, thresholds):
-        blobs = detect_blobs_tiled(image[c], tile_size=1024, overlap=50, threshold=t)
+        print(f'Finding blobs in channel {c}...')
+        blobs = detect_blobs_tiled(image[c], tile_size=2048, overlap=50, threshold=t,
+                                   n_workers=14)
 
         df = pd.concat([df, pd.DataFrame({
             "x": blobs[:, 1],
