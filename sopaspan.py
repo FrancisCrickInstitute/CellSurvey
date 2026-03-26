@@ -15,7 +15,7 @@ import os
 import matplotlib.pyplot as plt
 import seaborn as sns
 import scanpy as sc
-from shapely.geometry import mapping
+from shapely.geometry import mapping, Point
 import numpy as np
 from bioio import BioImage
 from spotiflow.model.spotiflow import Spotiflow as sp
@@ -196,27 +196,38 @@ def export_to_qupath(domain, communities, clusters, output_path, cell_id='cell_i
 
     print(f"Exported {len(boundaries)} cell boundaries")
 
-    # Export spots as point detections with parent cell assignment
+    # Export spots as circular detections with parent cell assignment
     if spots_with_cells is not None:
         print("Exporting spot detections with cell assignments...")
         for idx, row in spots_with_cells.iterrows():
-            cell_id_val = row['cell_id']  # already a string hash or None
+            cell_id_val = row['cell_id']
+            sigma = float(row['sigma'])
+
+            # Look up community colour from parent cell
+            community = cell_to_community.get(cell_id_val, -1)
+            if 0 <= community < len(community_colors):
+                spot_color = community_colors[int(community)]
+                spot_classification = f"Community_{int(community)}"
+            else:
+                spot_color = [128, 128, 128]  # Gray for unassigned spots
+                spot_classification = "Unassigned"
+
+            # Create circle with radius = sigma
+            circle = Point(float(row['x']), float(row['y'])).buffer(sigma)
 
             feature = {
                 "type": "Feature",
-                "geometry": {
-                    "type": "Point",
-                    "coordinates": [float(row['x']), float(row['y'])]
-                },
+                "geometry": mapping(circle),
                 "properties": {
                     "objectType": "detection",
                     "parent_id": str(cell_id_val) if cell_id_val is not None else None,
+                    "channel_name": str(row['gene']),
                     "classification": {
-                        "name": row['gene'],
-                        "color": [0, 255, 0]  # Green for spots
+                        "name": spot_classification,
+                        "color": spot_color
                     },
                     "measurements": {
-                        "sigma": float(row['sigma']),
+                        "sigma": sigma,
                     }
                 }
             }
@@ -401,7 +412,7 @@ if __name__ == '__main__':
 
     print(f'Saving Zarr to {orig_zarr_path}')
 
-    dataset.write(f'{orig_zarr_path}')
+    dataset.write(f'{orig_zarr_path}', overwrite=True)
 
     print("Done")
 
