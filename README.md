@@ -39,13 +39,20 @@ Hit Enter and all necessary packages will be downloaded and installed - this may
 
 SopaSpan depends on [Stardist](https://github.com/stardist/stardist) to segment cell nuclei, which in turn depends on Tensorflow.
 
-On Linux (assuming [the necessary CUDA drivers](https://developer.nvidia.com/cuda/toolkit) are installed), install tensorflow as follows:
+>[!NOTE]
+>Tensorflow can be run on CPUs, but this can be quite slow. To speed things up, a GPU-compatible installation is recommended. In order to enable this, you need to have the [the necessary CUDA drivers](https://developer.nvidia.com/cuda/toolkit). On linux, you can typically load the drivers ([CUDA](https://developer.nvidia.com/cuda) and [cuDNN](https://developer.nvidia.com/cudnn)) with commands such as:
+>```shell
+>ml CUDA/12.5.1 
+>ml cuDNN/9.3.0.75-CUDA-12.5.1
+>```
+
+Then, install tensorflow as follows:
 
 ```bash
 python -m pip install tensorflow[and-cuda]
 ```
 
-On any other operating system:
+On any other operating system, or for a CPU-only installation, use the following:
 
 ```bash
 python -m pip install tensorflow
