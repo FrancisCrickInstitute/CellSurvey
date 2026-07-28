@@ -16,6 +16,8 @@ Key dependency constraints:
 
 There is no Makefile, no CI/CD, and no tests. The source code is split across 6 files under the `sopaspan/` package, with `sopaspan.py` as the entry-point shim.
 
+**TODO**: Set up linting and formatting (Ruff, mypy) with a `pyproject.toml` config and pre-commit hooks.
+
 ## Commands
 
 **Development environment setup (pixi):**
