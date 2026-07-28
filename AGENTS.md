@@ -129,7 +129,7 @@ Grouped in dependency order — each chunk can ship independently. P0 blocks eve
 
 - **Lazy-load the image** (line 386): `dask_image.imread(imagepath)[channel_index]` now only loads the 4 channels needed for blob detection, not all channels. `BioImage` is still used for lightweight metadata (channel names).
 
-### Chunk 3: Correctness fixes (P1)
+### Chunk 3: Correctness fixes (P1) ✅ DONE
 
 - **Fix `pd.concat` in loop** (lines 401–415): collect DataFrames in a list, call `pd.concat(frames)` once at the end.
 - **Remove dead Spotiflow code** (lines 388–399): delete the commented block.
