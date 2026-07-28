@@ -1,5 +1,4 @@
 import ctypes.util
-import os as _os
 import pathlib as _pl
 
 # Preload the pixi environment's libstdc++ to avoid ABI conflicts with the
@@ -9,6 +8,7 @@ _libstdcpp = _pixi_env_lib / "libstdc++.so.6"
 if _libstdcpp.exists():
     ctypes.CDLL(str(_libstdcpp))
 
+import tensorflow as tf
 import sopa
 import argparse
 import spatialdata
@@ -19,11 +19,10 @@ from sklearn.cluster import KMeans
 import muspan as ms
 import json
 import os
+import sys
 import matplotlib.pyplot as plt
 import seaborn as sns
 import scanpy as sc
-from shapely.geometry import mapping, Point
-import numpy as np
 from shapely.geometry import mapping, Point
 import numpy as np
 from bioio import BioImage
@@ -34,7 +33,6 @@ import geopandas as gpd
 from skimage.feature import blob_log
 import dask
 from dask import delayed
-from tqdm import tqdm
 
 plt.rcParams['font.size'] = 20
 plt.rcParams['axes.linewidth'] = 3
@@ -398,6 +396,8 @@ if __name__ == '__main__':
                         help='Min radius for spatial neighbors graph (default: 0)')
     parser.add_argument('--radius-max', type=float, default=1000,
                         help='Max radius for spatial neighbors graph (default: 1000)')
+    parser.add_argument('--resume-from',
+                        help='Path to existing Zarr to resume from (skips image loading and spot detection)')
     args = parser.parse_args()
 
     imagepath = args.input_file
@@ -405,50 +405,66 @@ if __name__ == '__main__':
     if not zarr_path.endswith('.zarr'):
         zarr_path += '.zarr'
 
-    channel_index = list(map(int, args.channels.split(',')))
-    thresholds = list(map(float, args.thresholds.split(',')))
+    if args.resume_from:
+        orig_zarr_path = args.resume_from
+        if not orig_zarr_path.endswith('.zarr'):
+            orig_zarr_path += '.zarr'
+        if not os.path.exists(orig_zarr_path):
+            parser.error(f"Resume Zarr not found: {orig_zarr_path}")
+        print(f"Resuming from existing Zarr: {orig_zarr_path}")
 
-    if len(channel_index) != len(thresholds):
-        parser.error(f"Number of channels ({len(channel_index)}) must match number of thresholds ({len(thresholds)})")
+        # Need channel names later for resume path
+        channel_names = BioImage(imagepath).channel_names
+    else:
+        channel_index = list(map(int, args.channels.split(',')))
+        thresholds = list(map(float, args.thresholds.split(',')))
 
-    # Load only the channels needed for blob detection to limit memory usage
-    channel_names = BioImage(imagepath).channel_names
-    image = imread(imagepath)[channel_index]
+        if len(channel_index) != len(thresholds):
+            parser.error(
+                f"Number of channels ({len(channel_index)}) must match number of thresholds ({len(thresholds)})")
 
-    dataset = sopa.io.ome_tif(imagepath, as_image=False)
+        # Load only the channels needed for blob detection to limit memory usage
+        channel_names = BioImage(imagepath).channel_names
+        image = imread(imagepath)[channel_index]
 
-    frames = []
+        dataset = sopa.io.ome_tif(imagepath, as_image=False)
 
-    for i, (ci, t) in enumerate(zip(channel_index, thresholds)):
-        ch_name = channel_names[ci]
-        print(f'Finding blobs in channel {ch_name} (index {ci})...')
-        blobs = detect_blobs_tiled(image[i], tile_size=args.tile_size, overlap=args.overlap, threshold=t,
-                                   n_workers=args.workers)
+        frames = []
 
-        frames.append(pd.DataFrame({
-            "x": blobs[:, 1],
-            "y": blobs[:, 0],
-            "sigma": blobs[:, 2],  # sigma as proxy for confidence
-            "gene": np.array([ch_name] * len(blobs)),
-        }))
+        for i, (ci, t) in enumerate(zip(channel_index, thresholds)):
+            ch_name = channel_names[ci]
+            print(f'Finding blobs in channel {ch_name} (index {ci})...')
+            blobs = detect_blobs_tiled(image[i], tile_size=args.tile_size, overlap=args.overlap, threshold=t,
+                                       n_workers=args.workers)
 
-    df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=["x", "y", "sigma", "gene"])
+            frames.append(pd.DataFrame({
+                "x": blobs[:, 1],
+                "y": blobs[:, 0],
+                "sigma": blobs[:, 2],  # sigma as proxy for confidence
+                "gene": np.array([ch_name] * len(blobs)),
+            }))
 
-    points = PointsModel.parse(
-        df,
-        coordinates={"x": "x", "y": "y"},
-        transformations={"global": Identity()},
-    )
+        df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=["x", "y", "sigma", "gene"])
 
-    dataset["spots"] = points
+        points = PointsModel.parse(
+            df,
+            coordinates={"x": "x", "y": "y"},
+            transformations={"global": Identity()},
+        )
 
-    orig_zarr_path = zarr_path
+        dataset["spots"] = points
 
-    print(f'Saving Zarr to {orig_zarr_path}')
+        orig_zarr_path = zarr_path
 
-    dataset.write(f'{orig_zarr_path}', overwrite=True)
+        print(f'Saving Zarr to {orig_zarr_path}')
 
-    print("Done")
+        try:
+            dataset.write(orig_zarr_path, overwrite=True)
+        except Exception as e:
+            print(f"ERROR: Failed to write Zarr to {orig_zarr_path}: {e}", file=sys.stderr)
+            sys.exit(1)
+
+        print("Done")
 
     print("Loading Zarr...")
 
@@ -462,7 +478,6 @@ if __name__ == '__main__':
 
     print("Set backend to None (will use GPU)...")
 
-    import tensorflow as tf
     gpus = tf.config.list_physical_devices('GPU')
     if gpus:
         print(f"Found {len(gpus)} GPU(s), using GPU backend for Stardist")
@@ -497,7 +512,11 @@ if __name__ == '__main__':
 
     print(f'Saving Zarr to {seg_zarr_path}')
 
-    dataset.write(f'{seg_zarr_path}', overwrite=True)
+    try:
+        dataset.write(seg_zarr_path, overwrite=True)
+    except Exception as e:
+        print(f"ERROR: Failed to write segmented Zarr to {seg_zarr_path}: {e}", file=sys.stderr)
+        sys.exit(1)
 
     print("Done")
 

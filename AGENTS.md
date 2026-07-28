@@ -150,10 +150,10 @@ Grouped in dependency order — each chunk can ship independently. P0 blocks eve
 - `run_muspan` now accepts `max_edge_distance` as a parameter instead of hardcoding 1000.
 - Fixed `.zarr` suffix handling so `output.zarr_seg.zarr` becomes `output_seg.zarr`.
 
-### Chunk 6: Basic error resilience (P1)
+### Chunk 6: Basic error resilience (P1) ✅ DONE
 
-- **Wrap the two Zarr write blocks** (lines 429, 473) in try/except — if the write fails, print the error and the path so the user can debug disk space/permissions.
-- **Add a `--resume-from` flag**: if a Zarr already exists at the expected path, skip image loading and spot detection and resume from Stardist segmentation. This avoids re-running the most expensive steps after a crash in later stages.
+- **Wrap the two Zarr write blocks** (lines 429, 473): now in try/except — if the write fails, prints error with the path to stderr and exits with code 1.
+- **Add a `--resume-from` flag**: if provided, skips image loading and spot detection and resumes from Stardist segmentation using the existing Zarr. This avoids re-running the most expensive steps after a crash in later stages.
 
 ### Chunk 7: Structural refactor (P3)
 
