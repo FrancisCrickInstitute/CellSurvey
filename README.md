@@ -1,4 +1,4 @@
-[![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/release/python-31212/) ![Commit activity](https://img.shields.io/github/commit-activity/y/FrancisCrickInstitute/Spatial-Biology-Pipeline?style=plastic) ![GitHub](https://img.shields.io/github/license/FrancisCrickInstitute/Spatial-Biology-Pipeline?color=green&style=plastic)
+[![Python 3.10](https://img.shields.io/badge/python-3.10-blue.svg)](https://www.python.org/downloads/release/python-3100/) ![Commit activity](https://img.shields.io/github/commit-activity/y/FrancisCrickInstitute/Spatial-Biology-Pipeline?style=plastic) ![GitHub](https://img.shields.io/github/license/FrancisCrickInstitute/Spatial-Biology-Pipeline?color=green&style=plastic)
 
 # Overview
 
@@ -11,10 +11,28 @@ SopaSpan is a Python library for the analysis of spatial biology/omics data. It 
 
 # Installation
 
+SopaSpan can be installed using either pixi (recommended) or conda.
+
 > [!NOTE]
 > SopaSpan depends on Tensorflow and while Tensorflow will run on all operating systems, support for GPU processing is generally only supported on Linux - see [here](https://www.tensorflow.org/install) for more information.
 
-## Step 1: Install a Python Distribution
+## Option A: Pixi (recommended)
+
+[Pixi](https://pixi.sh/latest/) manages the full environment including Python, CUDA, cuDNN, and all Python packages in a single command.
+
+```bash
+pixi install
+```
+
+That's it — pixi reads `pixi.toml` and sets up everything. To run:
+
+```bash
+pixi run python sopaspan.py -i <input_tiff> -o <output_zarr> -p <plot_dir>
+```
+
+## Option B: Conda + pip
+
+### Step 1: Install a Python Distribution
 
 We recommend using conda as it's relatively straightforward and makes the management of different Python environments simple. You can install conda from [here](https://conda.io/projects/conda/en/latest/user-guide/install/index.html#regular-installation) (miniconda will suffice).
 
@@ -58,12 +76,12 @@ On any other operating system, or for a CPU-only installation, use the following
 python -m pip install tensorflow
 ```
 
-### 2.3: Install Sopa
+### 2.3: Install Sopa and bioio
 
-Install [Sopa](https://gustaveroussy.github.io/sopa/) with support for stardist and wsi (whole slide imaging) using the following:
+Install [Sopa](https://gustaveroussy.github.io/sopa/) with support for stardist and wsi (whole slide imaging), plus [bioio](https://github.com/bioio-devs/bioio) for image metadata:
 
 ```bash
-python -m pip install 'sopa[stardist,wsi]'
+python -m pip install 'sopa[stardist,wsi]' bioio bioio-ome-tiff
 ```
 
 ### 2.4: Install MuSpan
@@ -82,7 +100,7 @@ To get the necessary python code to run SopaSpan, the recommended approach is to
 
 <img width="472" height="369" alt="image" src="https://github.com/user-attachments/assets/ee52fdf5-1574-4342-aa85-77f623d60709" />
 
-Unzip the contents of the zip file once downloaded - the contents should contain a file called `sopaspan.py`.
+Unzip the contents of the zip file once downloaded - the contents should contain a file called `sopaspan.py` and a `sopaspan/` directory of supporting modules.
 
 ## Installation Complete
 
@@ -105,10 +123,29 @@ python <path_to_sopaspan.py> -i <path_to_input_file> -o <path_to_output_zarr> -p
 
 ## Parameters
 
-Three arguments can be passed, specifying the input and where outputs should be saved:
-* -i: this is the path to the input image. While only TIFF files have been tested, it should be possible to run SopaSpan on most common file formats.
-* -o: before running, the input image will be converted to a [SpatialData object](https://www.nature.com/articles/s41592-024-02212-x), a form of Zarr file. This parameter tells SopaSpan where to save this Zarr file.
-* -p: path to directory where all output plots will be saved
+### Required
+* `-i`, `--input_file`: Path to the input image. While only TIFF files have been tested, most common microscopy formats should work.
+* `-o`, `--output_file`: Path for the output Zarr file (`.zarr` suffix appended automatically if missing). The input image is converted to a [SpatialData](https://www.nature.com/articles/s41592-024-02212-x) Zarr object.
+* `-p`, `--plot_dir`: Directory where all output plots will be saved.
+
+### Blob detection
+* `--channels`: Comma-separated channel indices to process (default: `9,10,11,12`)
+* `--thresholds`: Comma-separated detection thresholds per channel (default: `0.01,0.1,0.1,0.1`)
+* `--tile-size`: Tile size in pixels for tiled processing (default: `2048`)
+* `--overlap`: Overlap between tiles in pixels (default: `50`)
+* `--workers`: Number of worker threads for parallel detection (default: `14`)
+
+### Clustering and network analysis
+* `--n-clusters`: Number of k-means clusters (default: `10`)
+* `--community-resolution`: Louvain community detection resolution (default: `0.1`)
+* `--max-edge-distance`: Maximum edge distance for Delaunay network (default: `1000`)
+
+### Spatial analysis
+* `--radius-min`: Minimum radius for spatial neighbors graph (default: `0`)
+* `--radius-max`: Maximum radius for spatial neighbors graph (default: `1000`)
+
+### Crash recovery
+* `--resume-from`: Path to an existing Zarr file to resume from. Skips image loading and spot detection, resuming directly at Stardist segmentation.
 
 ## Full Example
 
