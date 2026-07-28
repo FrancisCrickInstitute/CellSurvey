@@ -140,7 +140,8 @@ def run_muspan(spatial_data, cell_boundaries='stardist_boundaries', index_name='
     return muspan_domain
 
 
-def export_to_qupath(domain, communities, clusters, output_path, cell_id='cell_id', spots_with_cells=None):
+def export_to_qupath(domain, communities, clusters, output_path, sdata, intensity_df,
+                     cell_id='cell_id', spots_with_cells=None):
     print("Exporting to QuPath GeoJSON format...")
 
     # Get cell IDs and community labels from the muspan domain
@@ -520,7 +521,9 @@ if __name__ == '__main__':
 
     spots_with_cells = assign_spots_to_cells(sdata)
 
-    export_to_qupath(example_domain, 'Communities', 'table: kmeans_cluster', output_path='./qupath_export.geojson',
+    export_to_qupath(example_domain, 'Communities', 'table: kmeans_cluster',
+                     output_path='./qupath_export.geojson',
+                     sdata=sdata, intensity_df=intensity_df,
                      spots_with_cells=spots_with_cells)
 
     adata = sdata.tables['table']
