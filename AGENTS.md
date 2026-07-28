@@ -125,9 +125,9 @@ Grouped in dependency order — each chunk can ship independently. P0 blocks eve
 - **Remove HPC defaults from argparse** (lines 366–372): `-i` and `-o` are now required with no defaults.
 - **Detect GPU and warn on fallback** (line 445): checks `tf.config.list_physical_devices('GPU')` before setting backend. Prints warning if no GPU found.
 
-### Chunk 2: Memory safety (P1)
+### Chunk 2: Memory safety (P1) ✅ DONE
 
-- **Lazy-load the image** (line 386): replace `dask_image.imread` with a chunked/delayed read. Alternatively, only load the channel subset needed for blob detection rather than all channels.
+- **Lazy-load the image** (line 386): `dask_image.imread(imagepath)[channel_index]` now only loads the 4 channels needed for blob detection, not all channels. `BioImage` is still used for lightweight metadata (channel names).
 
 ### Chunk 3: Correctness fixes (P1)
 
