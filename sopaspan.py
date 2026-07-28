@@ -391,20 +391,7 @@ if __name__ == '__main__':
 
     dataset = sopa.io.ome_tif(imagepath, as_image=False)
 
-    # result = sp().predict(img=image[channel_index], device="cuda", prob_thresh=0.5, subpix=True, peak_mode='skimage')
-    # spots = result[0]  # np.ndarray, shape (N, 2), order (row, col)
-    # details = result[1]
-    # probs = details.prob  # np.ndarray, shape (N,)
-    #
-    # # spots is (N, 2) in (row, col) order, so row=y, col=x
-    # df = pd.DataFrame({
-    #     "x": spots[:, 1],
-    #     "y": spots[:, 0],
-    #     "prob": probs,
-    #     "gene": np.array([channel_names[channel_index]] * len(spots)),
-    # })
-
-    df = pd.DataFrame()
+    frames = []
 
     for i, (ci, t) in enumerate(zip(channel_index, thresholds)):
         ch_name = channel_names[ci]
@@ -412,14 +399,14 @@ if __name__ == '__main__':
         blobs = detect_blobs_tiled(image[i], tile_size=2048, overlap=50, threshold=t,
                                    n_workers=14)
 
-        df = pd.concat([df, pd.DataFrame({
+        frames.append(pd.DataFrame({
             "x": blobs[:, 1],
             "y": blobs[:, 0],
             "sigma": blobs[:, 2],  # sigma as proxy for confidence
             "gene": np.array([ch_name] * len(blobs)),
-        })])
+        }))
 
-    df = df.reset_index(drop=True)
+    df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=["x", "y", "sigma", "gene"])
 
     points = PointsModel.parse(
         df,
@@ -537,8 +524,6 @@ if __name__ == '__main__':
                      spots_with_cells=spots_with_cells)
 
     adata = sdata.tables['table']
-    #    idx = np.random.choice(adata.n_obs, size=30000, replace=False)
-    adata_subset = adata
     sopa.spatial.spatial_neighbors(adata, radius=(0, 1000))
     cell_type_to_cell_type = sopa.spatial.mean_distance(adata, "kmeans_cluster", "kmeans_cluster")
     plt.rcParams['font.size'] = 10
@@ -549,11 +534,14 @@ if __name__ == '__main__':
     plt.tight_layout()
     plt.savefig(os.path.join(args.plot_dir, 'cell_type_to_cell_type.png'))
 
-    sc.pp.normalize_total(adata_subset)
-    sc.pp.log1p(adata_subset)
-    sc.pp.neighbors(adata_subset)
-    sc.tl.umap(adata_subset)
-    sc.tl.leiden(adata_subset)
-    plt.figure(figsize=(10, 10))
-    sc.pl.umap(adata_subset, color="kmeans_cluster")
-    sc.pl.umap(adata_subset, color="leiden")
+    sc.pp.normalize_total(adata)
+    sc.pp.log1p(adata)
+    sc.pp.neighbors(adata)
+    sc.tl.umap(adata)
+    sc.tl.leiden(adata)
+    sc.pl.umap(adata, color="kmeans_cluster")
+    plt.savefig(os.path.join(args.plot_dir, 'umap_kmeans_cluster.png'))
+    plt.close()
+    sc.pl.umap(adata, color="leiden")
+    plt.savefig(os.path.join(args.plot_dir, 'umap_leiden.png'))
+    plt.close()
