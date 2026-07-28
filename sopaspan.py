@@ -1,6 +1,9 @@
 import ctypes.util
+import os as _os
 
-ctypes.CDLL("/nemo/stp/lm/working/barryd/hpc/pixi/sopaspan/.pixi/envs/sopaspan/lib/libstdc++.so.6")
+_libstdcpp_path = "/nemo/stp/lm/working/barryd/hpc/pixi/sopaspan/.pixi/envs/sopaspan/lib/libstdc++.so.6"
+if _os.path.exists(_libstdcpp_path):
+    ctypes.CDLL(_libstdcpp_path)
 
 import sopa
 import argparse
@@ -365,10 +368,8 @@ def assign_spots_to_cells(spatial_data, spots_key='spots', cell_boundaries='star
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('-i', '--input_file', help='Path to input image',
-                        default='/nemo/stp/lm/working/barryd/hpc/projects/stps/ehp/2026.01/comet_lunaphore/data/20260119_170817_1_6stkeU_RNAscope_HiPlex-4-plx_Mm_pos_test-TMA_RNAScope_HiPlex_4plx_Pos_Mm_TMA_test_for_Dave_B.ome.tiff')
-    parser.add_argument('-o', '--output_file', help='Path to output Zarr',
-                        default='/nemo/stp/lm/working/barryd/hpc/projects/stps/ehp/2026.01/comet_lunaphore/data/20260119_170817_1_6stkeU_RNAscope_HiPlex-4-plx_Mm_pos_test-TMA_RNAScope_HiPlex_4plx_Pos_Mm_TMA_test_for_Dave_B')
+    parser.add_argument('-i', '--input_file', help='Path to input image', required=True)
+    parser.add_argument('-o', '--output_file', help='Path to output Zarr', required=True)
     parser.add_argument('-p', '--plot_dir', help='Output directory for data plots', default='.')
     args = parser.parse_args()
 
@@ -442,7 +443,14 @@ if __name__ == '__main__':
 
     print("Set backend to None (will use GPU)...")
 
-    sopa.settings.parallelization_backend = None
+    import tensorflow as tf
+    gpus = tf.config.list_physical_devices('GPU')
+    if gpus:
+        print(f"Found {len(gpus)} GPU(s), using GPU backend for Stardist")
+        sopa.settings.parallelization_backend = None
+    else:
+        print("WARNING: No GPU detected. Stardist segmentation will run on CPU and may be very slow.")
+        sopa.settings.parallelization_backend = None
 
     print("Get channel names...")
 
