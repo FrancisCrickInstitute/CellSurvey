@@ -1,9 +1,13 @@
 import ctypes.util
 import os as _os
+import pathlib as _pl
 
-_libstdcpp_path = "/nemo/stp/lm/working/barryd/hpc/pixi/sopaspan/.pixi/envs/sopaspan/lib/libstdc++.so.6"
-if _os.path.exists(_libstdcpp_path):
-    ctypes.CDLL(_libstdcpp_path)
+# Preload the pixi environment's libstdc++ to avoid ABI conflicts with the
+# system library. Locate it relative to this script's pixi env directory.
+_pixi_env_lib = _pl.Path(__file__).resolve().parent / ".pixi" / "envs" / "default" / "lib"
+_libstdcpp = _pixi_env_lib / "libstdc++.so.6"
+if _libstdcpp.exists():
+    ctypes.CDLL(str(_libstdcpp))
 
 import sopa
 import argparse
