@@ -141,12 +141,14 @@ Grouped in dependency order — each chunk can ship independently. P0 blocks eve
 
 - **Pass `intensity_df` and `sdata` as parameters** to `export_to_qupath` instead of relying on implicit closure (line 174). Added both as required arguments.
 
-### Chunk 5: Expose hardcoded parameters as CLI flags (P2)
+### Chunk 5: Expose hardcoded parameters as CLI flags (P2) ✅ DONE
 
-- Add argparse arguments for: `--channels`, `--thresholds`, `--tile-size`, `--overlap`, `--workers`, `--n-clusters`, `--community-resolution`, `--max-edge-distance`, `--radius-min`, `--radius-max`.
+- Added argparse arguments for: `--channels`, `--thresholds`, `--tile-size`, `--overlap`, `--workers`, `--n-clusters`, `--community-resolution`, `--max-edge-distance`, `--radius-min`, `--radius-max`.
 - Sensible defaults match current hardcoded values.
-- `--channels` and `--thresholds` accept comma-separated lists parsed with `list(map(int, ...))` / `list(map(float, ...))`.
-- Make `-o` behavior explicit: if the path doesn't end in `.zarr`, append it, and document this.
+- `--channels` and `--thresholds` accept comma-separated lists parsed with `list(map(int, ...))` / `list(map(float, ...))`, with validation that they match in length.
+- `-o` behavior made explicit: if the path doesn't end in `.zarr`, append it.
+- `run_muspan` now accepts `max_edge_distance` as a parameter instead of hardcoding 1000.
+- Fixed `.zarr` suffix handling so `output.zarr_seg.zarr` becomes `output_seg.zarr`.
 
 ### Chunk 6: Basic error resilience (P1)
 
