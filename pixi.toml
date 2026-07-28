@@ -21,3 +21,5 @@ tensorflow = "<2.11"
 stardist = ">=0.9.2, <0.10"
 sopa = ">=2.1.11, <3"
 muspan = { path = "./latest.zip" }
+bioio = ">=3.4.0, <4"
+bioio-ome-tiff = ">=1.4.0, <2"
