@@ -24,6 +24,8 @@ import seaborn as sns
 import scanpy as sc
 from shapely.geometry import mapping, Point
 import numpy as np
+from shapely.geometry import mapping, Point
+import numpy as np
 from bioio import BioImage
 from spatialdata.models import PointsModel
 from spatialdata.transformations import Identity
@@ -382,13 +384,12 @@ if __name__ == '__main__':
 
     channel_index = [9, 10, 11, 12]
     thresholds = [0.01, 0.1, 0.1, 0.1]
-    # Get a BioImage object
-    img = BioImage(imagepath)  # selects the first scene found
-    channel_names = img.channel_names
+
+    # Load only the channels needed for blob detection to limit memory usage
+    channel_names = BioImage(imagepath).channel_names
+    image = imread(imagepath)[channel_index]
 
     dataset = sopa.io.ome_tif(imagepath, as_image=False)
-
-    image = imread(imagepath)
 
     # result = sp().predict(img=image[channel_index], device="cuda", prob_thresh=0.5, subpix=True, peak_mode='skimage')
     # spots = result[0]  # np.ndarray, shape (N, 2), order (row, col)
@@ -405,16 +406,17 @@ if __name__ == '__main__':
 
     df = pd.DataFrame()
 
-    for c, t in zip(channel_index, thresholds):
-        print(f'Finding blobs in channel {c}...')
-        blobs = detect_blobs_tiled(image[c], tile_size=2048, overlap=50, threshold=t,
+    for i, (ci, t) in enumerate(zip(channel_index, thresholds)):
+        ch_name = channel_names[ci]
+        print(f'Finding blobs in channel {ch_name} (index {ci})...')
+        blobs = detect_blobs_tiled(image[i], tile_size=2048, overlap=50, threshold=t,
                                    n_workers=14)
 
         df = pd.concat([df, pd.DataFrame({
             "x": blobs[:, 1],
             "y": blobs[:, 0],
             "sigma": blobs[:, 2],  # sigma as proxy for confidence
-            "gene": np.array([channel_names[c]] * len(blobs)),
+            "gene": np.array([ch_name] * len(blobs)),
         })])
 
     df = df.reset_index(drop=True)
