@@ -119,11 +119,11 @@ Several important values are hardcoded in `__main__` rather than exposed as CLI 
 
 Grouped in dependency order — each chunk can ship independently. P0 blocks everything else.
 
-### Chunk 1: Make pipeline runnable anywhere (P0)
+### Chunk 1: Make pipeline runnable anywhere (P0) ✅ DONE
 
-- **Remove/guard `ctypes.CDLL` call** (line 1–3): wrap in `if os.path.exists(...)` or accept a `--libstdcpp` CLI flag so the HPC C++ library is only loaded when present.
-- **Remove HPC defaults from argparse** (lines 366–372): `-i` and `-o` should be required with no defaults, or default to `'.'`.
-- **Detect GPU and warn on fallback** (line 445): check `len(tf.config.list_physical_devices('GPU')) > 0` before setting `parallelization_backend = None`. If no GPU, print a loud warning and set `parallelization_backend = 'multiprocessing'` or fall back gracefully.
+- **Remove/guard `ctypes.CDLL` call** (line 1–3): wrapped in `os.path.exists()` check so the HPC C++ library is only loaded when present.
+- **Remove HPC defaults from argparse** (lines 366–372): `-i` and `-o` are now required with no defaults.
+- **Detect GPU and warn on fallback** (line 445): checks `tf.config.list_physical_devices('GPU')` before setting backend. Prints warning if no GPU found.
 
 ### Chunk 2: Memory safety (P1)
 
