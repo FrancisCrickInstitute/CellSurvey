@@ -85,7 +85,7 @@ def get_colors_for_communities(n_communities):
 
 
 def run_muspan(spatial_data, cell_boundaries='stardist_boundaries', index_name='cell_id', output_dir='.',
-               cell_colour='table: kmeans_cluster', comm_detect_res=0.1):
+               cell_colour='table: kmeans_cluster', comm_detect_res=0.1, max_edge_distance=1000):
     # Set the index name (as we learned earlier)
     spatial_data.shapes[cell_boundaries].index.name = index_name
 
@@ -108,7 +108,7 @@ def run_muspan(spatial_data, cell_boundaries='stardist_boundaries', index_name='
         muspan_domain,
         network_name='Centroid Delaunay',
         network_type='Delaunay',
-        max_edge_distance=1000
+        max_edge_distance=max_edge_distance
     )
 
     print("\nVisualising Delauney network...")
@@ -378,13 +378,38 @@ if __name__ == '__main__':
     parser.add_argument('-i', '--input_file', help='Path to input image', required=True)
     parser.add_argument('-o', '--output_file', help='Path to output Zarr', required=True)
     parser.add_argument('-p', '--plot_dir', help='Output directory for data plots', default='.')
+    parser.add_argument('--channels', help='Comma-separated channel indices for blob detection',
+                        default='9,10,11,12')
+    parser.add_argument('--thresholds', help='Comma-separated blob detection thresholds (one per channel)',
+                        default='0.01,0.1,0.1,0.1')
+    parser.add_argument('--tile-size', type=int, default=2048,
+                        help='Tile size for blob detection (default: 2048)')
+    parser.add_argument('--overlap', type=int, default=50,
+                        help='Tile overlap for blob detection (default: 50)')
+    parser.add_argument('--workers', type=int, default=14,
+                        help='Number of worker threads for blob detection (default: 14)')
+    parser.add_argument('--n-clusters', type=int, default=10,
+                        help='Number of clusters for k-means (default: 10)')
+    parser.add_argument('--community-resolution', type=float, default=0.1,
+                        help='Resolution for Louvain community detection (default: 0.1)')
+    parser.add_argument('--max-edge-distance', type=float, default=1000,
+                        help='Max edge distance for Delaunay network (default: 1000)')
+    parser.add_argument('--radius-min', type=float, default=0,
+                        help='Min radius for spatial neighbors graph (default: 0)')
+    parser.add_argument('--radius-max', type=float, default=1000,
+                        help='Max radius for spatial neighbors graph (default: 1000)')
     args = parser.parse_args()
 
     imagepath = args.input_file
     zarr_path = args.output_file
+    if not zarr_path.endswith('.zarr'):
+        zarr_path += '.zarr'
 
-    channel_index = [9, 10, 11, 12]
-    thresholds = [0.01, 0.1, 0.1, 0.1]
+    channel_index = list(map(int, args.channels.split(',')))
+    thresholds = list(map(float, args.thresholds.split(',')))
+
+    if len(channel_index) != len(thresholds):
+        parser.error(f"Number of channels ({len(channel_index)}) must match number of thresholds ({len(thresholds)})")
 
     # Load only the channels needed for blob detection to limit memory usage
     channel_names = BioImage(imagepath).channel_names
@@ -397,8 +422,8 @@ if __name__ == '__main__':
     for i, (ci, t) in enumerate(zip(channel_index, thresholds)):
         ch_name = channel_names[ci]
         print(f'Finding blobs in channel {ch_name} (index {ci})...')
-        blobs = detect_blobs_tiled(image[i], tile_size=2048, overlap=50, threshold=t,
-                                   n_workers=14)
+        blobs = detect_blobs_tiled(image[i], tile_size=args.tile_size, overlap=args.overlap, threshold=t,
+                                   n_workers=args.workers)
 
         frames.append(pd.DataFrame({
             "x": blobs[:, 1],
@@ -417,7 +442,7 @@ if __name__ == '__main__':
 
     dataset["spots"] = points
 
-    orig_zarr_path = f'{zarr_path}.zarr'
+    orig_zarr_path = zarr_path
 
     print(f'Saving Zarr to {orig_zarr_path}')
 
@@ -468,7 +493,7 @@ if __name__ == '__main__':
 
     sopa.aggregate(dataset, aggregate_genes=True, points_key='spots', gene_column='gene')
 
-    seg_zarr_path = f'{zarr_path}_seg.zarr'
+    seg_zarr_path = zarr_path.replace('.zarr', '_seg.zarr')
 
     print(f'Saving Zarr to {seg_zarr_path}')
 
@@ -501,7 +526,7 @@ if __name__ == '__main__':
     print(f"Number of cells: {len(intensity_df)}")
 
     # ===== ADD CLUSTERING RESULTS TO SPATIALDATA =====
-    cluster_labels = cluster_data(intensity_df)
+    cluster_labels = cluster_data(intensity_df, n_clusters=args.n_clusters)
 
     # Add cluster labels to the AnnData obs (as categorical for efficiency)
     sdata.tables['table'].obs['kmeans_cluster'] = pd.Categorical(cluster_labels)
@@ -517,7 +542,8 @@ if __name__ == '__main__':
     # Verify it was added
     print(f"\nUpdated obs columns: {list(sdata.tables['table'].obs.columns)}")
 
-    example_domain = run_muspan(sdata)
+    example_domain = run_muspan(sdata, comm_detect_res=args.community_resolution,
+                                max_edge_distance=args.max_edge_distance)
 
     spots_with_cells = assign_spots_to_cells(sdata)
 
@@ -527,7 +553,7 @@ if __name__ == '__main__':
                      spots_with_cells=spots_with_cells)
 
     adata = sdata.tables['table']
-    sopa.spatial.spatial_neighbors(adata, radius=(0, 1000))
+    sopa.spatial.spatial_neighbors(adata, radius=(args.radius_min, args.radius_max))
     cell_type_to_cell_type = sopa.spatial.mean_distance(adata, "kmeans_cluster", "kmeans_cluster")
     plt.rcParams['font.size'] = 10
     plt.rcParams['axes.linewidth'] = 2
