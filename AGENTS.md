@@ -137,9 +137,9 @@ Grouped in dependency order — each chunk can ship independently. P0 blocks eve
 - **Save UMAP/Leiden plots to `plot_dir`** (lines 543–545): wrap `sc.pl.umap` calls with `plt.savefig(os.path.join(args.plot_dir, ...))` and `plt.close()`.
 - **Drop the ignored `plt.figure()` before `sc.pl.umap`** (line 543).
 
-### Chunk 4: Remove module-level global dependency (P2)
+### Chunk 4: Remove module-level global dependency (P2) ✅ DONE
 
-- **Pass `intensity_df` as a parameter** to `export_to_qupath` instead of relying on implicit closure (line 174). Add it as a required argument. This also means `sdata` accessed at line 153 needs to become a parameter.
+- **Pass `intensity_df` and `sdata` as parameters** to `export_to_qupath` instead of relying on implicit closure (line 174). Added both as required arguments.
 
 ### Chunk 5: Expose hardcoded parameters as CLI flags (P2)
 
