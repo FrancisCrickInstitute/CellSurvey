@@ -37,7 +37,7 @@ setuptools = ">=72.1.0,<82"
 tensorflow = { version = "<2.11", extras = ["and-cuda"] }
 
 [target.linux-64.pypi-dependencies]
-tensorflow = { version = ">=2.11, <2.18", extras = ["and-cuda"] }
+tensorflow = ">=2.18"
 
 [target.osx-64.pypi-dependencies]
 tensorflow = ">=2.11"
