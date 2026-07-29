@@ -24,10 +24,10 @@ from dask_image.imread import imread
 from spatialdata.models import PointsModel
 from spatialdata.transformations import Identity
 
-from sopaspan.utils import remove_channel_suffix, cluster_data, assign_spots_to_cells
-from sopaspan.blob_detection import detect_blobs_tiled
-from sopaspan.muspan_workflow import run_muspan
-from sopaspan.export import export_to_qupath
+from cellsurvey.utils import remove_channel_suffix, cluster_data, assign_spots_to_cells
+from cellsurvey.blob_detection import detect_blobs_tiled
+from cellsurvey.muspan_workflow import run_muspan
+from cellsurvey.export import export_to_qupath
 
 
 def main():

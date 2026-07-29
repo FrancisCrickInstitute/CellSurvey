@@ -2,7 +2,7 @@ import json
 import numpy as np
 import pandas as pd
 from shapely.geometry import mapping, Point
-from sopaspan.muspan_workflow import get_colors_for_communities
+from cellsurvey.muspan_workflow import get_colors_for_communities
 
 
 def export_to_qupath(domain, communities, clusters, output_path, sdata, intensity_df,
