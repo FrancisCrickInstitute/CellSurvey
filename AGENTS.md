@@ -2,7 +2,7 @@
 
 ## Project overview
 
-SopaSpan is a single-script spatial biology/omics analysis pipeline combining [Sopa](https://gustaveroussy.github.io/sopa/) (segmentation, aggregation) and [MuSpAn](https://www.muspan.co.uk/) (network analysis, community detection). It processes multichannel microscopy images (OME-TIFF) into spatial data objects, segments nuclei with Stardist, detects RNA spots via blob detection, clusters cells with k-means, builds Delaunay networks, detects Louvain communities, and exports GeoJSON for QuPath visualization.
+CellSurvey is a spatial biology/omics analysis pipeline combining [Sopa](https://gustaveroussy.github.io/sopa/) (segmentation, aggregation) and [MuSpAn](https://www.muspan.co.uk/) (network analysis, community detection). It processes multichannel microscopy images (OME-TIFF) into spatial data objects, segments nuclei with Stardist, detects RNA spots via blob detection, clusters cells with k-means, builds Delaunay networks, detects Louvain communities, and exports GeoJSON for QuPath visualization.
 
 ## Environment and package management
 
@@ -14,7 +14,7 @@ Key dependency constraints:
 - **CUDA 11.2 / cuDNN 8.1.0** for GPU acceleration
 - **MuSpAn** is distributed as a password-protected zip from `https://docs.muspan.co.uk/code/latest.zip` and installed from `./latest.zip` via `pixi.toml`
 
-There is no Makefile, no CI/CD, and no tests. The source code is split across 6 files under the `sopaspan/` package, with `sopaspan.py` as the entry-point shim.
+There is no Makefile, no CI/CD, and no tests. The source code is split across 6 files under the `cellsurvey/` package, with `run.py` as the entry-point shim.
 
 **TODO**: Set up linting and formatting (Ruff, mypy) with a `pyproject.toml` config and pre-commit hooks.
 
@@ -27,7 +27,7 @@ pixi install
 
 **Run the pipeline:**
 ```bash
-python sopaspan.py -i <input_tiff> -o <output_zarr_prefix> -p <plot_output_dir>
+python run.py -i <input_tiff> -o <output_zarr_prefix> -p <plot_output_dir>
 ```
 
 Three arguments:
@@ -39,7 +39,7 @@ There is no build step, no test command, and no linting configured.
 
 ## Architecture and data flow
 
-The pipeline is split into modules under the `sopaspan/` package. `sopaspan.py` is a shim that guards the libstdc++ preload and delegates to `sopaspan.cli.main()`. The pipeline runs these stages sequentially:
+The pipeline is split into modules under the `cellsurvey/` package. `run.py` is a shim that guards the libstdc++ preload and delegates to `cellsurvey.cli.main()`. The pipeline runs these stages sequentially:
 
 1. **Image loading** (`cli.py`): Reads the OME-TIFF via `BioImage` (from `bioio`) to get channel names, and via `sopa.io.ome_tif()` as a SpatialData dataset. Only loads the subset of channels needed for blob detection via `dask_image.imread` to limit memory usage.
 
@@ -84,7 +84,7 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 
 ## Key gotchas
 
-- **System-specific shared library**: `sopaspan.py` preloads the pixi environment's `libstdc++.so.6` (resolved relative to the script's `.pixi/` directory) to avoid ABI conflicts with the system library. If the file doesn't exist (e.g., on Windows or a non-pixi setup), it silently skips.
+- **System-specific shared library**: `run.py` preloads the pixi environment's `libstdc++.so.6` (resolved relative to the script's `.pixi/` directory) to avoid ABI conflicts with the system library. If the file doesn't exist (e.g., on Windows or a non-pixi setup), it silently skips.
 
 - **GPU vs CPU**: GPU is detected at runtime via `tf.config.list_physical_devices('GPU')`. If no GPU is found, a warning is printed but execution continues — Stardist will run on CPU and be very slow.
 
@@ -108,21 +108,21 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 
 ## Code patterns and conventions
 
-- Modular package structure under `sopaspan/` — functions grouped by concern (blob detection, MuSpAn workflow, export, utilities, CLI orchestration)
+- Modular package structure under `cellsurvey/` — functions grouped by concern (blob detection, MuSpAn workflow, export, utilities, CLI orchestration)
 - Matplotlib global rcParams are set inside `cli.main()` at startup
 - Random seeds (42) are used at multiple points for reproducibility
 - Print-based logging with no logging framework
 - Dask is used for parallel blob detection but the scheduler is explicitly set to `'threads'` (not the default multiprocessing)
 - NumPy, pandas, GeoPandas, and AnnData/Scanpy are the primary data structures
-- `sopaspan.py` is the entry-point shim — all logic lives in the `sopaspan/` package modules
+- `run.py` is the entry-point shim — all logic lives in the `cellsurvey/` package modules
 - `export_to_qupath` takes `sdata` and `intensity_df` as explicit parameters (no implicit closure on module globals)
 
 ## File structure
 
 ```
 .
-├── sopaspan.py                       # Entry-point shim: libstdc++ guard + delegates to cli.main()
-├── sopaspan/
+├── run.py                            # Entry-point shim: libstdc++ guard + delegates to cli.main()
+├── cellsurvey/
 │   ├── __init__.py                   # Re-exports all public symbols
 │   ├── cli.py                        # main() with argparse and pipeline orchestration
 │   ├── blob_detection.py             # detect_blobs_in_tile, detect_blobs_tiled

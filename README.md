@@ -2,7 +2,7 @@
 
 # Overview
 
-SopaSpan is a Python library for the analysis of spatial biology/omics data. It is heavily based on Sopa and MuSpan, combining elements of both into a single generic workflow:
+CellSurvey is a Python pipeline for image-based spatial biology/omics analysis. It combines [Sopa](https://gustaveroussy.github.io/sopa/) (segmentation, aggregation) and [MuSpAn](https://www.muspan.co.uk/) (network analysis, community detection) into a single workflow: multichannel microscopy images → segmented cells → RNA spot detection → spatial networks → community maps → QuPath-ready GeoJSON.
 * Blampey, Q., Mulder, K., Gardet, M. et al. Sopa: a technology-invariant pipeline for analyses of image-based spatial omics. _Nat Commun_ 15, 4981 (2024).
 * Bull, J. A., Moore, J. W., Corry S. M., el al. MuSpAn: A Toolbox for Multiscale Spatial Analysis. _bioRxiv_ 2024.12.06.627195
 
@@ -11,13 +11,13 @@ SopaSpan is a Python library for the analysis of spatial biology/omics data. It 
 
 # Installation
 
-SopaSpan can be installed using either pixi (recommended) or conda.
+CellSurvey can be installed using either pixi (recommended) or conda.
 
 > [!IMPORTANT]
 > **MuSpAn requires a separate download.** MuSpAn is not publicly available on PyPI. Before installing, you must request access at [muspan.co.uk/get-the-code](https://www.muspan.co.uk/get-the-code). You'll receive credentials by email. Once you have the MuSpAn zip file (`latest.zip`), place it in the repository root alongside `pixi.toml`. Both pixi and conda will install it from there.
 
 > [!NOTE]
-> SopaSpan depends on Tensorflow and while Tensorflow will run on all operating systems, support for GPU processing is generally only supported on Linux - see [here](https://www.tensorflow.org/install) for more information.
+> CellSurvey depends on Tensorflow and while Tensorflow will run on all operating systems, support for GPU processing is generally only supported on Linux - see [here](https://www.tensorflow.org/install) for more information.
 
 ## Option A: Pixi (recommended)
 
@@ -42,7 +42,7 @@ pixi install
 That's it — pixi reads `pixi.toml` and sets up everything. To run:
 
 ```bash
-pixi run python sopaspan.py -i <input_tiff> -o <output_zarr> -p <plot_dir>
+pixi run python run.py -i <input_tiff> -o <output_zarr> -p <plot_dir>
 ```
 
 ## Option B: Conda + pip
@@ -70,7 +70,7 @@ Hit Enter and all necessary packages will be downloaded and installed - this may
 
 #### 2.2: Install Tensorflow
 
-SopaSpan depends on [Stardist](https://github.com/stardist/stardist) to segment cell nuclei, which in turn depends on Tensorflow.
+CellSurvey depends on [Stardist](https://github.com/stardist/stardist) to segment cell nuclei, which in turn depends on Tensorflow.
 
 >[!NOTE]
 >Tensorflow can be run on CPUs, but this can be quite slow. To speed things up, a GPU-compatible installation is recommended. In order to enable this, you need to have the [the necessary CUDA drivers](https://developer.nvidia.com/cuda/toolkit). On linux, you can typically load the drivers ([CUDA](https://developer.nvidia.com/cuda) and [cuDNN](https://developer.nvidia.com/cudnn)) with commands such as:
@@ -111,11 +111,11 @@ You will then be prompted to enter the login credentials you received by email a
 
 ### Step 3: Get the code for this repository
 
-To get the necessary python code to run SopaSpan, the recommended approach is to [clone this repository using Git](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository). Alternatively, you can download a Zip file of the repo by clicking on the green code button above and then clicking "Download Zip":
+To get the code, the recommended approach is to [clone this repository using Git](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository). Alternatively, you can download a Zip file of the repo by clicking on the green code button above and then clicking "Download Zip":
 
 <img width="472" height="369" alt="image" src="https://github.com/user-attachments/assets/ee52fdf5-1574-4342-aa85-77f623d60709" />
 
-Unzip the contents of the zip file once downloaded - the contents should contain a file called `sopaspan.py` and a `sopaspan/` directory of supporting modules.
+Unzip the contents of the zip file once downloaded - the contents should contain a file called `run.py` and a `cellsurvey/` directory of supporting modules.
 
 ## Installation Complete
 
@@ -134,14 +134,14 @@ conda deactivate
 **With pixi:**
 
 ```bash
-pixi run python sopaspan.py -i <path_to_input_file> -o <path_to_output_zarr> -p <path_to_output_plots_directory>
+pixi run python run.py -i <path_to_input_file> -o <path_to_output_zarr> -p <path_to_output_plots_directory>
 ```
 
 **With conda:**
 
 ```bash
 conda activate spatial-bio
-python <path_to_sopaspan.py> -i <path_to_input_file> -o <path_to_output_zarr> -p <path_to_output_plots_directory>
+python run.py -i <path_to_input_file> -o <path_to_output_zarr> -p <path_to_output_plots_directory>
 ```
 
 ## Parameters
@@ -173,5 +173,5 @@ python <path_to_sopaspan.py> -i <path_to_input_file> -o <path_to_output_zarr> -p
 ## Full Example
 
 ```bash
-python ~/Downloads/SopaSpan/sopaspan.py -i ~/data/sample.tiff -o ~/results/output.zarr -p ~/results/plots/
+python ~/Downloads/SopaSpan/run.py -i ~/data/sample.tiff -o ~/results/output.zarr -p ~/results/plots/
 ```
