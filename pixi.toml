@@ -32,3 +32,4 @@ sopa = ">=2.1.11, <3"
 muspan = { path = "./latest.zip" }
 bioio = ">=3.4.0, <4"
 bioio-ome-tiff = ">=1.4.0, <2"
+setuptools = ">=69, <70"
