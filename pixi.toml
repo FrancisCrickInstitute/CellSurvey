@@ -8,28 +8,36 @@ version = "0.1.0"
 [tasks]
 
 [dependencies]
-python = "<3.11"
 
-# GPU-accelerated TensorFlow (used by StarDist segmentation) via CUDA. conda-forge only ships
-# cudatoolkit/cudnn for Windows and Linux - there's no NVIDIA GPU support on macOS, so StarDist
-# falls back to CPU there (still fully functional, just slower; --segmentation-method
-# conventional is also available and needs no GPU at all).
 [target.win-64.dependencies]
+python = "<3.11"
 cudatoolkit = "11.2.*"
 cudnn = "8.1.0.*"
 
 [target.linux-64.dependencies]
+python = ">=3.11,<3.12"
 cudatoolkit = "11.2.*"
 cudnn = "8.1.0.*"
+
+[target.osx-64.dependencies]
+python = ">=3.11,<3.12"
 
 [environments]
 spatial = ["default"]
 
 [pypi-dependencies]
-tensorflow = "<2.11"
 stardist = ">=0.9.2, <0.10"
 sopa = ">=2.1.11, <3"
 muspan = { path = "./latest.zip" }
 bioio = ">=3.4.0, <4"
 bioio-ome-tiff = ">=1.4.0, <2"
 setuptools = ">=72.1.0,<82"
+
+[target.win-64.pypi-dependencies]
+tensorflow = "<2.11"
+
+[target.linux-64.pypi-dependencies]
+tensorflow = ">=2.11"
+
+[target.osx-64.pypi-dependencies]
+tensorflow = ">=2.11"
