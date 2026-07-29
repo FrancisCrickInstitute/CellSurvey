@@ -1,7 +1,7 @@
 [workspace]
 authors = ["Dave Barry <david.barry@crick.ac.uk>"]
 channels = ["conda-forge"]
-name = "Spatial-Biology-Pipeline"
+name = "CellSurvey"
 platforms = ["win-64", "linux-64", "osx-64"]
 version = "0.1.0"
 
