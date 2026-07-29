@@ -2,14 +2,23 @@
 authors = ["Dave Barry <david.barry@crick.ac.uk>"]
 channels = ["conda-forge"]
 name = "Spatial-Biology-Pipeline"
-platforms = ["win-64"]
+platforms = ["win-64", "linux-64", "osx-64"]
 version = "0.1.0"
 
 [tasks]
 
 [dependencies]
 python = "<3.11"
-pixi-pycharm = ">=0.0.12,<0.0.13"
+
+# GPU-accelerated TensorFlow (used by StarDist segmentation) via CUDA. conda-forge only ships
+# cudatoolkit/cudnn for Windows and Linux - there's no NVIDIA GPU support on macOS, so StarDist
+# falls back to CPU there (still fully functional, just slower; --segmentation-method
+# conventional is also available and needs no GPU at all).
+[target.win-64.dependencies]
+cudatoolkit = "11.2.*"
+cudnn = "8.1.0.*"
+
+[target.linux-64.dependencies]
 cudatoolkit = "11.2.*"
 cudnn = "8.1.0.*"
 
