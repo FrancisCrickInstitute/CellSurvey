@@ -98,6 +98,8 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 
 - **MuSpAn dependency is not public**: `muspan` requires a username/password obtained from https://www.muspan.co.uk/get-the-code. The `latest.zip` in the repo root is the MuSpAn distribution file referenced in `pixi.toml` as a path dependency.
 
+**TODO**: Evaluate replacing MuSpAn with an alternative network analysis / community detection library (e.g., Scanpy's native spatial tools, Squidpy, or NetworkX + GeoPandas) to eliminate the private-dependency friction. The pipeline currently uses MuSpAn only for Delaunay triangulation + Louvain community detection + visualization — all of which have equivalents in open, pip-installable libraries.
+
 - **Zarr writes have basic error handling**: Both Zarr write points are wrapped in try/except — if a write fails, the error and path are printed to stderr and the script exits with code 1.
 
 - **`--resume-from` enables crash recovery**: If a Zarr already exists at the expected path, you can skip image loading and spot detection and resume from Stardist segmentation. This saves re-running expensive steps after a crash in later stages.

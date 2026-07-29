@@ -13,6 +13,9 @@ SopaSpan is a Python library for the analysis of spatial biology/omics data. It 
 
 SopaSpan can be installed using either pixi (recommended) or conda.
 
+> [!IMPORTANT]
+> **MuSpAn requires a separate download.** MuSpAn is not publicly available on PyPI. Before installing, you must request access at [muspan.co.uk/get-the-code](https://www.muspan.co.uk/get-the-code). You'll receive credentials by email. Once you have the MuSpAn zip file (`latest.zip`), place it in the repository root alongside `pixi.toml`. Both pixi and conda will install it from there.
+
 > [!NOTE]
 > SopaSpan depends on Tensorflow and while Tensorflow will run on all operating systems, support for GPU processing is generally only supported on Linux - see [here](https://www.tensorflow.org/install) for more information.
 
@@ -30,7 +33,7 @@ curl -fsSL https://pixi.sh/install.sh | bash
 iwr -useb https://pixi.sh/install.ps1 | iex
 ```
 
-Then, from the repository root:
+Then, **place the MuSpAn `latest.zip` file in the repository root** (see the note above about requesting access). From the repository root:
 
 ```bash
 pixi install
