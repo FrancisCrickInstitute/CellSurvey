@@ -38,6 +38,8 @@ def main():
     parser.add_argument('-i', '--input_file', help='Path to input image', required=True)
     parser.add_argument('-o', '--output_file', help='Path to output Zarr', required=True)
     parser.add_argument('-p', '--plot_dir', help='Output directory for data plots', default='.')
+    parser.add_argument('--detect-blobs', action='store_true',
+                        help='Enable RNA spot blob detection on the specified channels')
     parser.add_argument('--channels', help='Comma-separated channel indices for blob detection',
                         default='9,10,11,12')
     parser.add_argument('--thresholds', help='Comma-separated blob detection thresholds (one per channel)',
@@ -76,7 +78,7 @@ def main():
         print(f"Resuming from existing Zarr: {orig_zarr_path}")
 
         channel_names = BioImage(imagepath).channel_names
-    else:
+    elif args.detect_blobs:
         channel_index = list(map(int, args.channels.split(',')))
         thresholds = list(map(float, args.thresholds.split(',')))
 
@@ -114,6 +116,20 @@ def main():
 
         dataset["spots"] = points
 
+        orig_zarr_path = zarr_path
+
+        print(f'Saving Zarr to {orig_zarr_path}')
+
+        try:
+            dataset.write(orig_zarr_path, overwrite=True)
+        except Exception as e:
+            print(f"ERROR: Failed to write Zarr to {orig_zarr_path}: {e}", file=sys.stderr)
+            sys.exit(1)
+
+        print("Done")
+    else:
+        channel_names = BioImage(imagepath).channel_names
+        dataset = sopa.io.ome_tif(imagepath, as_image=False)
         orig_zarr_path = zarr_path
 
         print(f'Saving Zarr to {orig_zarr_path}')
