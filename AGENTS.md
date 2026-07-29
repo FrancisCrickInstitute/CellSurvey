@@ -6,7 +6,7 @@ SopaSpan is a single-script spatial biology/omics analysis pipeline combining [S
 
 ## Environment and package management
 
-This project uses **pixi** (via `pixi.toml`) for environment management targeting `win-64`. The lockfile is `pixi.lock` (marked as binary/generated in `.gitattributes`).
+This project uses **pixi** (via `pixi.toml`) for environment management targeting `win-64`, `linux-64`, and `osx-64`. The lockfile is `pixi.lock` (marked as binary/generated in `.gitattributes`).
 
 Key dependency constraints:
 - **Python < 3.11** (pixi), though the README documents Python 3.12 with conda — both work; the pixi config is the authoritative development environment

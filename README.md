@@ -48,14 +48,14 @@ pixi run python sopaspan.py -i <input_tiff> -o <output_zarr> -p <plot_dir>
 
 We recommend using conda as it's relatively straightforward and makes the management of different Python environments simple. You can install conda from [here](https://conda.io/projects/conda/en/latest/user-guide/install/index.html#regular-installation) (miniconda will suffice).
 
-## Step 2: Create Environment and Install Pip Dependencies
+### Step 2: Create Environment and Install Pip Dependencies
 
-### 2.1: Create an environment
+#### 2.1: Create an environment
 
 Once conda is installed, open a terminal (Mac) or Anaconda Prompt (Windows) and run the following series of commands:
 
 ```bash
-conda create --name spatial-bio python=3.12
+conda create --name spatial-bio python=3.10
 conda activate spatial-bio
 ```
 
@@ -65,7 +65,7 @@ Proceed ([y]/n)?
 ```
 Hit Enter and all necessary packages will be downloaded and installed - this may take some time.
 
-### 2.2: Install Tensorflow
+#### 2.2: Install Tensorflow
 
 SopaSpan depends on [Stardist](https://github.com/stardist/stardist) to segment cell nuclei, which in turn depends on Tensorflow.
 
@@ -88,7 +88,7 @@ On any other operating system, or for a CPU-only installation, use the following
 python -m pip install tensorflow
 ```
 
-### 2.3: Install Sopa and bioio
+#### 2.3: Install Sopa and bioio
 
 Install [Sopa](https://gustaveroussy.github.io/sopa/) with support for stardist and wsi (whole slide imaging), plus [bioio](https://github.com/bioio-devs/bioio) for image metadata:
 
@@ -96,7 +96,7 @@ Install [Sopa](https://gustaveroussy.github.io/sopa/) with support for stardist 
 python -m pip install 'sopa[stardist,wsi]' bioio bioio-ome-tiff
 ```
 
-### 2.4: Install MuSpan
+#### 2.4: Install MuSpan
 
 Unfortunately, at this time, MuSpan requires a username and password to install. You can obtain these by completing the form [here](https://www.muspan.co.uk/get-the-code). Once you receive a response by email, MuSpan can be installed as follows:
 
@@ -106,7 +106,7 @@ python -m pip install https://docs.muspan.co.uk/code/latest.zip
 
 You will then be prompted to enter the login credentials you received by email and the installation should proceed.
 
-## Step 3: Get the code for this repository
+### Step 3: Get the code for this repository
 
 To get the necessary python code to run SopaSpan, the recommended approach is to [clone this repository using Git](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository). Alternatively, you can download a Zip file of the repo by clicking on the green code button above and then clicking "Download Zip":
 
@@ -116,7 +116,9 @@ Unzip the contents of the zip file once downloaded - the contents should contain
 
 ## Installation Complete
 
-That's it - your set up is complete. You can deactivate the environment you have created with the following command.
+That's it — your setup is complete.
+
+If using conda, you can deactivate the environment with:
 
 ```bash
 conda deactivate
@@ -126,7 +128,13 @@ conda deactivate
 
 ## Basic Usage
 
-To run SopaSpan, use the following:
+**With pixi:**
+
+```bash
+pixi run python sopaspan.py -i <path_to_input_file> -o <path_to_output_zarr> -p <path_to_output_plots_directory>
+```
+
+**With conda:**
 
 ```bash
 conda activate spatial-bio
