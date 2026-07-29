@@ -181,7 +181,10 @@ def main():
 
     print("Aggregating...")
 
-    sopa.aggregate(dataset, aggregate_genes=True, points_key='spots', gene_column='gene')
+    if "spots" in dataset.points:
+        sopa.aggregate(dataset, aggregate_genes=True, points_key='spots', gene_column='gene')
+    else:
+        sopa.aggregate(dataset)
 
     seg_zarr_path = zarr_path.replace('.zarr', '_seg.zarr')
 
