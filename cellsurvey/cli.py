@@ -186,6 +186,12 @@ def main():
     else:
         sopa.aggregate(dataset)
 
+    # Force obs/var indices to plain string dtype to avoid ArrowStringArray
+    # write errors with Zarr backing stores (pandas 2.x + anndata compat)
+    if 'table' in dataset.tables:
+        dataset.tables['table'].obs.index = dataset.tables['table'].obs.index.astype(str)
+        dataset.tables['table'].var.index = dataset.tables['table'].var.index.astype(str)
+
     seg_zarr_path = zarr_path.replace('.zarr', '_seg.zarr')
 
     print(f'Saving Zarr to {seg_zarr_path}')
@@ -224,6 +230,10 @@ def main():
     sdata.tables['table'].obs['kmeans_cluster_label'] = pd.Categorical(
         [f'Cluster_{i}' for i in cluster_labels]
     )
+
+    # Force obs index to plain string dtype to avoid ArrowStringArray
+    # write errors with Zarr backing stores
+    sdata.tables['table'].obs.index = sdata.tables['table'].obs.index.astype(str)
 
     print("\n\u2713 Cluster labels added to sdata.tables['table'].obs['kmeans_cluster']")
     print("\u2713 Cluster labels added to sdata.tables['table'].obs['kmeans_cluster_label']")
