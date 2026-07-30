@@ -85,8 +85,10 @@ Then, install tensorflow as follows:
 
 **On Linux (GPU):**
 ```bash
-python -m pip install "tensorflow[and-cuda]>=2.18"
+python -m pip install "tensorflow[and-cuda]>=2.18" tf_keras
 ```
+
+> **Note:** `tf_keras` is required on Linux with TF >=2.18 to use legacy Keras 2 API, which avoids a cuDNN 9 autotuner incompatibility in Stardist's GPU convolution path.
 
 **On Windows (GPU, requires TF <2.11):**
 ```bash
@@ -108,9 +110,9 @@ Install [Sopa](https://gustaveroussy.github.io/sopa/) with support for stardist 
 python -m pip install 'sopa[stardist,wsi]' bioio bioio-ome-tiff
 ```
 
-#### 2.4: Install MuSpan
+#### 2.4: Install MuSpAn
 
-Unfortunately, at this time, MuSpan requires a username and password to install. You can obtain these by completing the form [here](https://www.muspan.co.uk/get-the-code). Once you receive a response by email, MuSpan can be installed as follows:
+Unfortunately, at this time, MuSpAn requires a username and password to install. You can obtain these by completing the form [here](https://www.muspan.co.uk/get-the-code). Once you receive a response by email, MuSpAn can be installed as follows:
 
 ```bash
 python -m pip install https://docs.muspan.co.uk/code/latest.zip
