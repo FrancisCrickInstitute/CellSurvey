@@ -142,72 +142,92 @@ def main():
 
         print("Done")
 
-    print("Loading Zarr...")
-
-    dataset = spatialdata.read_zarr(orig_zarr_path)
-
-    image_name = list(dataset.images.keys())[0]
-
-    print("Make image patches...")
-
-    sopa.make_image_patches(dataset)
-
-    print("Set backend to None (will use GPU)...")
-
-    gpus = tf.config.list_physical_devices('GPU')
-    if gpus:
-        print(f"Found {len(gpus)} GPU(s), using GPU backend for Stardist")
-        sopa.settings.parallelization_backend = None
-    else:
-        print("WARNING: No GPU detected. Stardist segmentation will run on CPU and may be very slow.")
-        sopa.settings.parallelization_backend = None
-
-    print("Get channel names...")
-
-    channels = sopa.utils.get_channel_names(dataset)
-
-    print(channels)
-
-    unique_channels = [f"{ch}_ch_{i}" for i, ch in enumerate(channels)]
-    print("Fixed channels:", unique_channels)
-
-    for scale_name in dataset.images[image_name].children:
-        scale_node = dataset.images[image_name][scale_name]
-        scale_node.ds = scale_node.ds.assign_coords(c=unique_channels)
-
-    print("Run stardist...")
-
-    sopa.segmentation.stardist(dataset, model_type='2D_versatile_fluo', channels=unique_channels[0])
-
-    print("Aggregating...")
-
-    if "spots" in dataset.points:
-        sopa.aggregate(dataset, aggregate_genes=True, points_key='spots', gene_column='gene')
-    else:
-        sopa.aggregate(dataset)
-
-    # Force obs/var indices to plain string dtype to avoid ArrowStringArray
-    # write errors with Zarr backing stores (pandas 2.x + anndata compat)
-    if 'table' in dataset.tables:
-        dataset.tables['table'].obs.index = dataset.tables['table'].obs.index.astype(str)
-        dataset.tables['table'].var.index = dataset.tables['table'].var.index.astype(str)
-
     seg_zarr_path = zarr_path.replace('.zarr', '_seg.zarr')
 
-    print(f'Saving Zarr to {seg_zarr_path}')
+    # Check if the segmented Zarr already has a completed table (aggregation done)
+    if os.path.exists(seg_zarr_path):
+        try:
+            dataset = spatialdata.read_zarr(seg_zarr_path)
+            if 'table' in dataset.tables and dataset.tables['table'] is not None:
+                print(f"Segmented Zarr with table found, skipping to clustering: {seg_zarr_path}")
+                path_to_spatialData_file = seg_zarr_path
+                sdata = dataset
+            else:
+                print(f"Segmented Zarr exists but has no table, re-running aggregation only")
+                # Don't delete the Zarr — it has the stardist boundaries already
+                pass  # fall through to aggregation below
+        except Exception:
+            import shutil
+            shutil.rmtree(seg_zarr_path, ignore_errors=True)
+            raise  # fall through to reprocess below
 
-    try:
-        dataset.write(seg_zarr_path, overwrite=True)
-    except Exception as e:
-        print(f"ERROR: Failed to write segmented Zarr to {seg_zarr_path}: {e}", file=sys.stderr)
-        sys.exit(1)
+    if not os.path.exists(seg_zarr_path) or 'sdata' not in locals():
+        print("Loading Zarr...")
 
-    print("Done")
+        dataset = spatialdata.read_zarr(orig_zarr_path)
 
-    np.random.seed(42)
+        image_name = list(dataset.images.keys())[0]
 
-    path_to_spatialData_file = seg_zarr_path
-    sdata = spatialdata.read_zarr(path_to_spatialData_file)
+        print("Make image patches...")
+
+        sopa.make_image_patches(dataset)
+
+        print("Set backend to None (will use GPU)...")
+
+        gpus = tf.config.list_physical_devices('GPU')
+        if gpus:
+            print(f"Found {len(gpus)} GPU(s), using GPU backend for Stardist")
+            sopa.settings.parallelization_backend = None
+        else:
+            print("WARNING: No GPU detected. Stardist segmentation will run on CPU and may be very slow.")
+            sopa.settings.parallelization_backend = None
+
+        print("Get channel names...")
+
+        channels = sopa.utils.get_channel_names(dataset)
+
+        print(channels)
+
+        unique_channels = [f"{ch}_ch_{i}" for i, ch in enumerate(channels)]
+        print("Fixed channels:", unique_channels)
+
+        for scale_name in dataset.images[image_name].children:
+            scale_node = dataset.images[image_name][scale_name]
+            scale_node.ds = scale_node.ds.assign_coords(c=unique_channels)
+
+        print("Run stardist...")
+
+        sopa.segmentation.stardist(dataset, model_type='2D_versatile_fluo', channels=unique_channels[0])
+
+        print("Aggregating...")
+
+        if "spots" in dataset.points:
+            sopa.aggregate(dataset, aggregate_genes=True, points_key='spots', gene_column='gene')
+        else:
+            sopa.aggregate(dataset)
+
+        # Force obs/var indices to plain string dtype to avoid ArrowStringArray
+        # write errors with Zarr backing stores (pandas 2.x + anndata compat)
+        if 'table' in dataset.tables:
+            dataset.tables['table'].obs.index = dataset.tables['table'].obs.index.astype(str)
+            dataset.tables['table'].var.index = dataset.tables['table'].var.index.astype(str)
+
+        seg_zarr_path = zarr_path.replace('.zarr', '_seg.zarr')
+
+        print(f'Saving Zarr to {seg_zarr_path}')
+
+        try:
+            dataset.write(seg_zarr_path, overwrite=True)
+        except Exception as e:
+            print(f"ERROR: Failed to write segmented Zarr to {seg_zarr_path}: {e}", file=sys.stderr)
+            sys.exit(1)
+
+        print("Done")
+
+        np.random.seed(42)
+
+        path_to_spatialData_file = seg_zarr_path
+        sdata = spatialdata.read_zarr(path_to_spatialData_file)
 
     measurements = sdata.tables['table']
 
