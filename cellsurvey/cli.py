@@ -143,25 +143,26 @@ def main():
         print("Done")
 
     seg_zarr_path = zarr_path.replace('.zarr', '_seg.zarr')
+    needs_stardist = True
+    needs_aggregation = True
 
-    # Check if the segmented Zarr already has a completed table (aggregation done)
     if os.path.exists(seg_zarr_path):
         try:
             dataset = spatialdata.read_zarr(seg_zarr_path)
             if 'table' in dataset.tables and dataset.tables['table'] is not None:
                 print(f"Segmented Zarr with table found, skipping to clustering: {seg_zarr_path}")
-                path_to_spatialData_file = seg_zarr_path
+                needs_stardist = False
+                needs_aggregation = False
                 sdata = dataset
-            else:
-                print(f"Segmented Zarr exists but has no table, re-running aggregation only")
-                # Don't delete the Zarr — it has the stardist boundaries already
-                pass  # fall through to aggregation below
+            elif 'stardist_boundaries' in dataset.shapes:
+                print(f"Segmented Zarr has boundaries but no table, re-running aggregation only")
+                needs_stardist = False
+                # dataset is loaded, proceed to aggregation
         except Exception:
             import shutil
             shutil.rmtree(seg_zarr_path, ignore_errors=True)
-            raise  # fall through to reprocess below
 
-    if not os.path.exists(seg_zarr_path) or 'sdata' not in locals():
+    if needs_stardist:
         print("Loading Zarr...")
 
         dataset = spatialdata.read_zarr(orig_zarr_path)
@@ -199,18 +200,16 @@ def main():
 
         sopa.segmentation.stardist(dataset, model_type='2D_versatile_fluo', channels=unique_channels[0])
 
+    if needs_aggregation:
         print("Aggregating...")
 
-        if "spots" in dataset.points:
-            sopa.aggregate(dataset, aggregate_genes=True, points_key='spots', gene_column='gene')
-        else:
-            sopa.aggregate(dataset)
-
-        # Force obs/var indices to plain string dtype to avoid ArrowStringArray
-        # write errors with Zarr backing stores (pandas 2.x + anndata compat)
-        if 'table' in dataset.tables:
-            dataset.tables['table'].obs.index = dataset.tables['table'].obs.index.astype(str)
-            dataset.tables['table'].var.index = dataset.tables['table'].var.index.astype(str)
+        # Force pandas to use plain object dtype for strings, not ArrowStringArray,
+        # which can't be written to Zarr backing stores by anndata
+        with pd.option_context('future.infer_string', False):
+            if "spots" in dataset.points:
+                sopa.aggregate(dataset, aggregate_genes=True, points_key='spots', gene_column='gene')
+            else:
+                sopa.aggregate(dataset)
 
         seg_zarr_path = zarr_path.replace('.zarr', '_seg.zarr')
 
