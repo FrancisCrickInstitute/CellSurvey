@@ -75,11 +75,7 @@ Hit Enter and all necessary packages will be downloaded and installed - this may
 CellSurvey depends on [Stardist](https://github.com/stardist/stardist) to segment cell nuclei, which in turn depends on Tensorflow.
 
 >[!NOTE]
->Tensorflow can be run on CPUs, but this can be quite slow. To speed things up, a GPU-compatible installation is recommended. In order to enable this, you need to have the [the necessary CUDA drivers](https://developer.nvidia.com/cuda/toolkit). On linux, you can typically load the drivers ([CUDA](https://developer.nvidia.com/cuda) and [cuDNN](https://developer.nvidia.com/cudnn)) with commands such as:
->```shell
->ml CUDA/12.5.1 
->ml cuDNN/9.3.0.75-CUDA-12.5.1
->```
+>Tensorflow can be run on CPUs, but this can be quite slow. To speed things up, a GPU-compatible installation is recommended. TF 2.18 bundles its own CUDA/cuDNN libraries — no separate CUDA installation or module loading is needed.
 
 Then, install tensorflow as follows:
 
