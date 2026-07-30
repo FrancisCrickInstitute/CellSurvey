@@ -14,6 +14,12 @@ if _libstdcpp.exists():
 # numpy 2.x import, but we only need TF for Stardist segmentation later.
 _os.environ["POT_BACKEND"] = "numpy"
 
+# Force TF to use legacy Keras 2 API. TF >=2.16 defaults to Keras 3,
+# which compiles Stardist's model with XLA JIT and triggers a cuDNN
+# autotuner failure on 1x1 convolutions with HPC CUDA 12/cuDNN 9.
+# Legacy Keras 2 uses the non-XLA cuDNN path which works correctly.
+_os.environ["TF_USE_LEGACY_KERAS"] = "1"
+
 from cellsurvey.cli import main
 
 if __name__ == '__main__':
