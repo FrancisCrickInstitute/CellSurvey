@@ -1,4 +1,4 @@
-[![Python 3.10](https://img.shields.io/badge/python-3.10-blue.svg)](https://www.python.org/downloads/release/python-3100/) [![Built with Pixi](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/prefix-dev/pixi/main/assets/badge/v0.json)](https://pixi.sh) ![Commit activity](https://img.shields.io/github/commit-activity/y/FrancisCrickInstitute/Spatial-Biology-Pipeline?style=plastic) ![GitHub](https://img.shields.io/github/license/FrancisCrickInstitute/Spatial-Biology-Pipeline?color=green&style=plastic)
+[![Python 3.10–3.11](https://img.shields.io/badge/python-3.10--3.11-blue.svg)](https://www.python.org/downloads/) [![Built with Pixi](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/prefix-dev/pixi/main/assets/badge/v0.json)](https://pixi.sh) ![Commit activity](https://img.shields.io/github/commit-activity/y/FrancisCrickInstitute/Spatial-Biology-Pipeline?style=plastic) ![GitHub](https://img.shields.io/github/license/FrancisCrickInstitute/Spatial-Biology-Pipeline?color=green&style=plastic)
 
 # Overview
 
@@ -68,6 +68,8 @@ Proceed ([y]/n)?
 ```
 Hit Enter and all necessary packages will be downloaded and installed - this may take some time.
 
+> **Note:** The pixi environment uses Python <3.11 on Windows and >=3.11,<3.12 on Linux/macOS. For conda, Python 3.10 or 3.11 is recommended.
+
 #### 2.2: Install Tensorflow
 
 CellSurvey depends on [Stardist](https://github.com/stardist/stardist) to segment cell nuclei, which in turn depends on Tensorflow.
@@ -81,15 +83,22 @@ CellSurvey depends on [Stardist](https://github.com/stardist/stardist) to segmen
 
 Then, install tensorflow as follows:
 
+**On Linux (GPU):**
 ```bash
-python -m pip install tensorflow[and-cuda]
+python -m pip install "tensorflow[and-cuda]>=2.18"
 ```
 
-On any other operating system, or for a CPU-only installation, use the following:
+**On Windows (GPU, requires TF <2.11):**
+```bash
+python -m pip install "tensorflow[and-cuda]<2.11"
+```
 
+**On any other operating system, or for a CPU-only installation:**
 ```bash
 python -m pip install tensorflow
 ```
+
+See `pixi.toml` for the exact version constraints per platform.
 
 #### 2.3: Install Sopa and bioio
 
@@ -152,6 +161,7 @@ python run.py -i <path_to_input_file> -o <path_to_output_zarr> -p <path_to_outpu
 * `-p`, `--plot_dir`: Directory where all output plots will be saved.
 
 ### Blob detection
+* `--detect-blobs`: Enable RNA spot blob detection on the specified channels. Without this flag, blob detection is skipped entirely (default: off).
 * `--channels`: Comma-separated channel indices to process (default: `9,10,11,12`)
 * `--thresholds`: Comma-separated detection thresholds per channel (default: `0.01,0.1,0.1,0.1`)
 * `--tile-size`: Tile size in pixels for tiled processing (default: `2048`)
@@ -173,5 +183,5 @@ python run.py -i <path_to_input_file> -o <path_to_output_zarr> -p <path_to_outpu
 ## Full Example
 
 ```bash
-python ~/Downloads/SopaSpan/run.py -i ~/data/sample.tiff -o ~/results/output.zarr -p ~/results/plots/
+python run.py -i ~/data/sample.tiff -o ~/results/output -p ~/results/plots/
 ```
