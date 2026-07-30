@@ -16,8 +16,8 @@ cudnn = "8.1.0.*"
 
 [target.linux-64.dependencies]
 python = ">=3.11,<3.12"
-cudatoolkit = "11.2.*"
-cudnn = "8.1.0.*"
+cudatoolkit = ">=12,<13"
+cudnn = ">=9,<10"
 
 [target.osx-64.dependencies]
 python = ">=3.11,<3.12"
