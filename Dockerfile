@@ -12,15 +12,9 @@ ENV PATH="/root/.pixi/bin:${PATH}"
 
 WORKDIR /app
 
-# Copy pixi config and lockfile first for caching
 COPY pixi.toml pixi.lock latest.zip ./
 
-# Install dependencies
 RUN pixi install
-
-# Copy source
-COPY cellsurvey/ cellsurvey/
-COPY run.py .
 
 ENV POT_BACKEND=numpy
 ENV TF_USE_LEGACY_KERAS=1
