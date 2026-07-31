@@ -10,10 +10,10 @@ version = "0.1.0"
 [dependencies]
 
 [target.linux-64.dependencies]
-python = ">=3.11,<3.12"
+python = ">=3.12, <3.12"
 
 [target.osx-64.dependencies]
-python = ">=3.11,<3.12"
+python = ">=3.12, <3.12"
 
 [environments]
 spatial = ["default"]
