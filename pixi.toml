@@ -2,18 +2,12 @@
 authors = ["Dave Barry <david.barry@crick.ac.uk>"]
 channels = ["conda-forge"]
 name = "CellSurvey"
-platforms = ["win-64", "linux-64", "osx-64"]
+platforms = ["linux-64", "osx-64"]
 version = "0.1.0"
 
 [tasks]
 
 [dependencies]
-
-[target.win-64.dependencies]
-python = "<3.11"
-numpy = "<2"
-cudatoolkit = "11.2.*"
-cudnn = "8.1.0.*"
 
 [target.linux-64.dependencies]
 python = ">=3.11,<3.12"
@@ -32,9 +26,6 @@ bioio = ">=3.4.0, <4"
 bioio-ome-tiff = ">=1.4.0, <2"
 setuptools = ">=72.1.0,<82"
 tf_keras = "*"
-
-[target.win-64.pypi-dependencies]
-tensorflow = { version = "<2.11", extras = ["and-cuda"] }
 
 [target.linux-64.pypi-dependencies]
 tensorflow = { version = ">=2.18", extras = ["and-cuda"] }
