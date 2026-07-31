@@ -230,8 +230,10 @@ def main():
 
     measurements = sdata.tables['table']
 
+    X_data = measurements.X.toarray() if hasattr(measurements.X, 'toarray') else measurements.X
+
     intensity_df = pd.DataFrame(
-        measurements.X.toarray(),
+        X_data,
         index=measurements.obs.index,
         columns=measurements.var.index
     )
