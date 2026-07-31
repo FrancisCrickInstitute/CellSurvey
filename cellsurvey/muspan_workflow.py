@@ -1,5 +1,6 @@
 import os
 import numpy as np
+import spatialdata
 import muspan as ms
 import matplotlib.pyplot as plt
 
@@ -23,26 +24,29 @@ def get_colors_for_communities(n_communities):
     return colors
 
 
-def run_muspan(sdata, cell_boundaries='stardist_boundaries', index_name='cell_id', output_dir='.',
+def run_muspan(spatial_data, cell_boundaries='stardist_boundaries', index_name='cell_id', output_dir='.',
                cell_colour='table: kmeans_cluster', comm_detect_res=0.1, max_edge_distance=1000):
-    # Extract boundaries and centroids
-    boundaries = sdata.shapes[cell_boundaries]
-    boundaries.index.name = index_name
-    centroids = boundaries.geometry.centroid
-    coords = np.column_stack([centroids.x.values, centroids.y.values])
+    spatial_data.shapes[cell_boundaries].index.name = index_name
 
-    # Build MuSpAn domain from points
-    domain_data = {
-        'positions': coords,
-        'cell_ids': boundaries.index.values,
-    }
+    # Filter table to only include cells present in shapes (SOPA may filter some)
+    shape_ids = set(spatial_data.shapes[cell_boundaries].index.astype(str))
+    table = spatial_data.tables['table']
+    cell_ids = table.obs['cell_id'].astype(str)
+    keep_mask = cell_ids.isin(shape_ids)
+    if not keep_mask.all():
+        print(f"Filtering {keep_mask.sum()} of {len(keep_mask)} cells in table to match shapes")
+        table = table[keep_mask].copy()
 
-    # Attach table columns as labels
-    table = sdata.tables['table']
-    for col in table.obs.columns:
-        domain_data[col] = table.obs[col].values
+    spatial_data.tables['table'] = table
 
-    muspan_domain = ms.domain.Domain(domain_data)
+    # Create clean version without image_patches
+    sdata_clean = spatialdata.SpatialData(
+        shapes={cell_boundaries: spatial_data.shapes[cell_boundaries]},
+        tables=spatial_data.tables
+    )
+
+    # Convert to muspan domain
+    muspan_domain = ms.io.spatialdata_to_domain(sdata_clean, import_shapes_as_points=True)
 
     print("\nVisualising cells...")
     ms.visualise.visualise(muspan_domain, color_by=cell_colour, marker_size=3.0, figure_kwargs=fig_kwargs)
