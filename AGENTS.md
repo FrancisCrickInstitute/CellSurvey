@@ -133,6 +133,10 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 
 - **Channel subset loading**: The full multichannel image is not loaded into memory for blob detection. Only the channels specified by `--channels` are loaded via `dask_image.imread`, reducing memory footprint. The full image is available on disk via the Zarr for Stardist segmentation.
 
+- **AnnData `.X` can be sparse or dense**: `sopa.aggregate()` may produce either a scipy sparse matrix or a dense numpy array depending on the input data size and sopa version. The intensity extraction at `cli.py:233` handles both with `hasattr(measurements.X, 'toarray')`. Never assume `.X` is sparse.
+
+- **Windows: `numpy<2` required with TF <2.11**: TF 2.10.1 was compiled against numpy 1.x and crashes with `AttributeError: _ARRAY_API not found` on numpy 2.x. The win-64 target in `pixi.toml` must pin `numpy = "<2"`.
+
 - **Hardcoded output paths**: The GeoJSON export always writes to `./qupath_export.geojson` regardless of the `-o` or `-p` flags.
 
 - **Matplotlib rcParams are set twice**: Global `font.size=20` and `axes.linewidth=3` at the start of `main()`, then overridden to `font.size=10` and `axes.linewidth=2` before the heatmap/UMAP plots.
