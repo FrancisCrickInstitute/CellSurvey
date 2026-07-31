@@ -6,14 +6,15 @@ CellSurvey is a spatial biology/omics analysis pipeline combining [Sopa](https:/
 
 ## Environment and package management
 
-This project uses **pixi** (via `pixi.toml`) for environment management targeting `win-64`, `linux-64`, and `osx-64`. The lockfile is `pixi.lock`.
+This project uses **pixi** (via `pixi.toml`) for environment management targeting `linux-64` and `osx-64`. The lockfile is `pixi.lock`.
 
 Key dependency constraints:
-- **Python < 3.11** on `win-64`, `>=3.11,<3.12` on `linux-64` and `osx-64`
-- **TensorFlow**: Platform-specific — `<2.11` on `win-64` (with `and-cuda` extras), `>=2.18` on `linux-64` (with `and-cuda` extras), `>=2.11` on `osx-64`
-- **CUDA 11.2 / cuDNN 8.1.0** for GPU acceleration on `win-64` only. On `linux-64`, TF >=2.18 bundles its own CUDA/cuDNN.
-- **`tf_keras`** is a required pypi dependency — TF >=2.16 defaults to Keras 3, but Stardist needs legacy Keras 2 API to avoid cuDNN autotuner failures on CUDA 12/cuDNN 9.
-- **MuSpAn** is distributed as a password-protected zip from `https://docs.muspan.co.uk/code/latest.zip` and installed from `./latest.zip` via `pixi.toml` as a path dependency.
+- **Python**: `>=3.11,<3.12` on both `linux-64` and `osx-64`
+- **TensorFlow**: `>=2.18` on `linux-64` (with `and-cuda` extras for GPU), `>=2.11` on `osx-64`
+- **CUDA/cuDNN**: TF >=2.18 bundles its own CUDA 12/cuDNN 9 libraries; no separate conda CUDA/cuDNN packages are needed
+- **`tf_keras`** is a required pypi dependency — TF >=2.16 defaults to Keras 3, but Stardist needs legacy Keras 2 API to avoid cuDNN autotuner failures on CUDA 12/cuDNN 9
+- **MuSpAn** is distributed as a password-protected zip from `https://docs.muspan.co.uk/code/latest.zip` and installed from `./latest.zip` via `pixi.toml` as a path dependency. MuSpAn requires `numpy>=2.0`.
+- **Windows is not supported** via pixi — TF 2.10 (the last version that works with CUDA 11.2/cuDNN 8.1) requires `numpy<2`, but MuSpAn requires `numpy>=2`, creating an unresolvable conflict.
 
 There is no Makefile, no CI/CD, and no tests. The source code is split across 6 files under the `cellsurvey/` package, with `run.py` as the entry-point shim.
 
@@ -134,8 +135,6 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 - **Channel subset loading**: The full multichannel image is not loaded into memory for blob detection. Only the channels specified by `--channels` are loaded via `dask_image.imread`, reducing memory footprint. The full image is available on disk via the Zarr for Stardist segmentation.
 
 - **AnnData `.X` can be sparse or dense**: `sopa.aggregate()` may produce either a scipy sparse matrix or a dense numpy array depending on the input data size and sopa version. The intensity extraction at `cli.py:233` handles both with `hasattr(measurements.X, 'toarray')`. Never assume `.X` is sparse.
-
-- **Windows: `numpy<2` required with TF <2.11**: TF 2.10.1 was compiled against numpy 1.x and crashes with `AttributeError: _ARRAY_API not found` on numpy 2.x. The win-64 target in `pixi.toml` must pin `numpy = "<2"`.
 
 - **Hardcoded output paths**: The GeoJSON export always writes to `./qupath_export.geojson` regardless of the `-o` or `-p` flags.
 
