@@ -1,4 +1,4 @@
-[![Python 3.10–3.11](https://img.shields.io/badge/python-3.10--3.11-blue.svg)](https://www.python.org/downloads/) [![Built with Pixi](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/prefix-dev/pixi/main/assets/badge/v0.json)](https://pixi.sh) ![Commit activity](https://img.shields.io/github/commit-activity/y/FrancisCrickInstitute/Spatial-Biology-Pipeline?style=plastic) ![GitHub](https://img.shields.io/github/license/FrancisCrickInstitute/Spatial-Biology-Pipeline?color=green&style=plastic)
+[![Python 3.11–3.12](https://img.shields.io/badge/python-3.11--3.12-blue.svg)](https://www.python.org/downloads/) [![Built with Pixi](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/prefix-dev/pixi/main/assets/badge/v0.json)](https://pixi.sh) ![Commit activity](https://img.shields.io/github/commit-activity/y/FrancisCrickInstitute/Spatial-Biology-Pipeline?style=plastic) ![GitHub](https://img.shields.io/github/license/FrancisCrickInstitute/Spatial-Biology-Pipeline?color=green&style=plastic)
 
 # Overview
 
@@ -86,10 +86,7 @@ python -m pip install "tensorflow[and-cuda]>=2.18" tf_keras
 
 > **Note:** `tf_keras` is required on Linux with TF >=2.18 to use legacy Keras 2 API, which avoids a cuDNN 9 autotuner incompatibility in Stardist's GPU convolution path.
 
-**On Windows (GPU, requires TF <2.11):**
-```bash
-python -m pip install "tensorflow[and-cuda]<2.11"
-```
+**On Windows:** Windows is not supported via pixi due to a TF/numpy version conflict. Use WSL2 with the Linux pixi setup instead.
 
 **On any other operating system, or for a CPU-only installation:**
 ```bash
@@ -174,6 +171,9 @@ python run.py -i <path_to_input_file> -o <path_to_output_zarr> -p <path_to_outpu
 ### Spatial analysis
 * `--radius-min`: Minimum radius for spatial neighbors graph (default: `0`)
 * `--radius-max`: Maximum radius for spatial neighbors graph (default: `1000`)
+
+### GPU and Stardist segmentation
+* `--use-gpu`: Force GPU usage for Stardist segmentation. Without this flag, GPU is auto-detected and used if available. Useful when auto-detection fails (default: off).
 
 ### Crash recovery
 * `--resume-from`: Path to an existing Zarr file to resume from. Skips image loading and spot detection, resuming directly at Stardist segmentation.
