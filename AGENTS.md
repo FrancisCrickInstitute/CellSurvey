@@ -128,6 +128,13 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 
 **TODO**: Evaluate replacing MuSpAn with an alternative network analysis / community detection library (e.g., Scanpy's native spatial tools, Squidpy, or NetworkX + GeoPandas) to eliminate the private-dependency friction. The pipeline currently uses MuSpAn only for Delaunay triangulation + Louvain community detection + visualization — all of which have equivalents in open, pip-installable libraries.
 
+   **Remove MuSpAn plan:**
+   1. Replace `muspan_workflow.py` `run_muspan()` with direct calls to `scipy.spatial.Delaunay` for triangulation and `scanpy.tl.louvain()` or `networkx.algorithms.community.louvain_communities()` for community detection.
+   2. Replace MuSpAn `visualise()` calls with matplotlib/scatter plots directly on the GeoDataFrame centroids + community labels.
+   3. Remove `muspan` from `pixi.toml` dependencies and delete `latest.zip` from the repo.
+   4. Drop `POT_BACKEND=numpy` from `run.py` (only needed because MuSpAn transitively imports TF via POT).
+   5. Verify `export.py` no longer depends on `muspan_workflow` (`get_colors_for_communities` is a simple colormap — move it to `utils.py`).
+
 - **Zarr writes have basic error handling**: Both Zarr write points are wrapped in try/except — if a write fails, the error and path are printed to stderr and the script exits with code 1.
 
 - **`--resume-from` enables crash recovery**: If a Zarr already exists at the expected path, you can skip image loading and spot detection and resume from Stardist segmentation. When used with the segmented Zarr reuse logic, this provides two levels of checkpoint restart.
