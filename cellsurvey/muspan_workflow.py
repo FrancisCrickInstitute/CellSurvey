@@ -1,6 +1,5 @@
 import os
 import numpy as np
-import spatialdata
 import muspan as ms
 import matplotlib.pyplot as plt
 
@@ -24,22 +23,23 @@ def get_colors_for_communities(n_communities):
     return colors
 
 
-def run_muspan(spatial_data, cell_boundaries='stardist_boundaries', index_name='cell_id', output_dir='.',
+def run_muspan(sdata, cell_boundaries='stardist_boundaries', index_name='cell_id', output_dir='.',
                cell_colour='table: kmeans_cluster', comm_detect_res=0.1, max_edge_distance=1000):
-    spatial_data.shapes[cell_boundaries].index.name = index_name
+    boundaries = sdata.shapes[cell_boundaries]
+    boundaries.index.name = index_name
 
-    # MuSpAn expects the table obs index to match the shapes index
-    table = spatial_data.tables['table']
-    table.obs.index = table.obs['cell_id'].astype(str)
+    centroids = boundaries.geometry.centroid
+    coords = np.column_stack([centroids.x.values, centroids.y.values])
 
-    # Create clean version without image_patches
-    sdata_clean = spatialdata.SpatialData(
-        shapes={cell_boundaries: spatial_data.shapes[cell_boundaries]},
-        tables=spatial_data.tables
-    )
+    # Build MuSpAn domain manually to avoid spatialdata_to_domain indexing bugs
+    muspan_domain = ms.domain
+    muspan_domain.add_points(muspan_domain, points=coords, labels=boundaries.index.values, label_name=index_name)
 
-    # Convert to muspan domain
-    muspan_domain = ms.io.spatialdata_to_domain(sdata_clean, import_shapes_as_points=True)
+    # Attach table columns as labels
+    table = sdata.tables['table']
+    for col in table.obs.columns:
+        values = dict(zip(table.obs['cell_id'].astype(str), table.obs[col].values))
+        muspan_domain.add_labels(muspan_domain, labels=values, label_name=col, label_key=index_name)
 
     print("\nVisualising cells...")
     ms.visualise.visualise(muspan_domain, color_by=cell_colour, marker_size=3.0, figure_kwargs=fig_kwargs)
