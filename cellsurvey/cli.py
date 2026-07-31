@@ -40,6 +40,8 @@ def main():
     parser.add_argument('-p', '--plot_dir', help='Output directory for data plots', default='.')
     parser.add_argument('--detect-blobs', action='store_true',
                         help='Enable RNA spot blob detection on the specified channels')
+    parser.add_argument('--use-gpu', action='store_true',
+                        help='Force GPU usage for Stardist segmentation (auto-detected if not specified)')
     parser.add_argument('--channels', help='Comma-separated channel indices for blob detection',
                         default='9,10,11,12')
     parser.add_argument('--thresholds', help='Comma-separated blob detection thresholds (one per channel)',
@@ -176,8 +178,11 @@ def main():
         print("Set backend to None (will use GPU)...")
 
         gpus = tf.config.list_physical_devices('GPU')
-        if gpus:
-            print(f"Found {len(gpus)} GPU(s), using GPU backend for Stardist")
+        if args.use_gpu or gpus:
+            if gpus:
+                print(f"Found {len(gpus)} GPU(s), using GPU backend for Stardist")
+            else:
+                print("No GPU detected but --use-gpu specified, attempting GPU backend")
             sopa.settings.parallelization_backend = None
         else:
             print("WARNING: No GPU detected. Stardist segmentation will run on CPU and may be very slow.")
