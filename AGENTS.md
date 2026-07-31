@@ -6,13 +6,14 @@ CellSurvey is a spatial biology/omics analysis pipeline combining [Sopa](https:/
 
 ## Environment and package management
 
-This project uses **pixi** (via `pixi.toml`) for environment management targeting `win-64`, `linux-64`, and `osx-64`. The lockfile is `pixi.lock` (marked as binary/generated in `.gitattributes`).
+This project uses **pixi** (via `pixi.toml`) for environment management targeting `win-64`, `linux-64`, and `osx-64`. The lockfile is `pixi.lock`.
 
 Key dependency constraints:
-- **Python < 3.11** on `win-64`, `>=3.11,<3.12` on `linux-64` and `osx-64` — the README documents Python 3.12 with conda; both work; the pixi config is the authoritative development environment
-- **TensorFlow**: Constraints are platform-specific in `pixi.toml` — `<2.11` on `win-64` (with `and-cuda` extras), `>=2.18` on `linux-64`, `>=2.11` on `osx-64`
-- **CUDA 11.2 / cuDNN 8.1.0** for GPU acceleration (on win-64 and linux-64; osx-64 has no CUDA deps)
-- **MuSpAn** is distributed as a password-protected zip from `https://docs.muspan.co.uk/code/latest.zip` and installed from `./latest.zip` via `pixi.toml`
+- **Python < 3.11** on `win-64`, `>=3.11,<3.12` on `linux-64` and `osx-64`
+- **TensorFlow**: Platform-specific — `<2.11` on `win-64` (with `and-cuda` extras), `>=2.18` on `linux-64` (with `and-cuda` extras), `>=2.11` on `osx-64`
+- **CUDA 11.2 / cuDNN 8.1.0** for GPU acceleration on `win-64` only. On `linux-64`, TF >=2.18 bundles its own CUDA/cuDNN.
+- **`tf_keras`** is a required pypi dependency — TF >=2.16 defaults to Keras 3, but Stardist needs legacy Keras 2 API to avoid cuDNN autotuner failures on CUDA 12/cuDNN 9.
+- **MuSpAn** is distributed as a password-protected zip from `https://docs.muspan.co.uk/code/latest.zip` and installed from `./latest.zip` via `pixi.toml` as a path dependency.
 
 There is no Makefile, no CI/CD, and no tests. The source code is split across 6 files under the `cellsurvey/` package, with `run.py` as the entry-point shim.
 
@@ -25,7 +26,12 @@ There is no Makefile, no CI/CD, and no tests. The source code is split across 6 
 pixi install
 ```
 
-**Run the pipeline:**
+**Run the pipeline (pixi):**
+```bash
+pixi run python run.py -i <input_tiff> -o <output_zarr_prefix> -p <plot_output_dir>
+```
+
+**Run the pipeline (standalone):**
 ```bash
 python run.py -i <input_tiff> -o <output_zarr_prefix> -p <plot_output_dir>
 ```
@@ -35,16 +41,11 @@ Three required arguments:
 - `-o`: Path prefix for output Zarr file (`.zarr` suffix is appended automatically)
 - `-p`: Directory for output plots
 
-With pixi:
-```bash
-pixi run python run.py -i <input_tiff> -o <output_zarr_prefix> -p <plot_output_dir>
-```
-
 There is no build step, no test command, and no linting configured.
 
 ## Architecture and data flow
 
-The pipeline is split into modules under the `cellsurvey/` package. `run.py` is a shim that guards the libstdc++ preload and delegates to `cellsurvey.cli.main()`. The pipeline runs these stages sequentially:
+The pipeline is split into modules under the `cellsurvey/` package. `run.py` is a shim that sets environment variables (POT_BACKEND, TF_USE_LEGACY_KERAS), preloads libstdc++, and delegates to `cellsurvey.cli.main()`. The pipeline runs these stages sequentially:
 
 1. **Image loading** (`cli.py`): Reads the OME-TIFF via `BioImage` (from `bioio`) to get channel names, and via `sopa.io.ome_tif()` as a SpatialData dataset. Three code paths at this stage:
    - `--resume-from`: Skips image loading entirely — reads channel names from the existing image via `BioImage` but loads the Zarr directly.
@@ -57,17 +58,22 @@ The pipeline is split into modules under the `cellsurvey/` package. `run.py` is 
 
 4. **Stardist segmentation** (`cli.py`): Reads back the Zarr (materialized checkpoint), creates image patches via `sopa.make_image_patches()`, detects GPU availability with `tf.config.list_physical_devices('GPU')` and warns if absent, renames channel coordinates to include `_ch_` suffixes (e.g., `DAPI_ch_0`), and runs `sopa.segmentation.stardist()` with the `2D_versatile_fluo` model. Only the first unique channel is passed to Stardist.
 
-5. **Channel aggregation** (`cli.py`): Runs `sopa.aggregate()` to compute per-cell mean intensities for each channel (genes). If `"spots"` exists in the dataset points, passes `aggregate_genes=True`, `points_key='spots'`, and `gene_column='gene'` to assign spots to cells. Otherwise runs plain aggregation. Writes segmented Zarr with try/except error handling. The segmented Zarr replaces `.zarr` with `_seg.zarr`.
+   **Segmented Zarr reuse**: Before running Stardist, checks if `_seg.zarr` already exists:
+   - Has `tables['table']` → skips both Stardist and aggregation, jumps to clustering
+   - Has `stardist_boundaries` but no table → skips Stardist, re-runs aggregation only
+   - Missing or corrupt → full Stardist + aggregation
+
+5. **Channel aggregation** (`cli.py`): Runs `sopa.aggregate()` to compute per-cell mean intensities for each channel (genes). If `"spots"` exists in the dataset points, passes `aggregate_genes=True`, `points_key='spots'`, and `gene_column='gene'` to assign spots to cells. Otherwise runs plain aggregation. Wraps the aggregation in `pd.option_context('future.infer_string', False)` to prevent ArrowStringArray errors on Zarr write. Writes segmented Zarr with try/except error handling. The segmented Zarr replaces `.zarr` with `_seg.zarr`.
 
 6. **K-means clustering** (`cli.py` → `utils.py`): Extracts the intensity matrix from the AnnData table, standardizes with `StandardScaler`, runs k-means, and attaches cluster labels to `sdata.tables['table'].obs`.
 
-7. **MuSpAn network analysis** (`cli.py` → `muspan_workflow.py`): Converts SpatialData to a MuSpAn domain (shapes as points), builds a Delaunay triangulation network, detects Louvain communities, and generates visualization plots.
+7. **MuSpAn network analysis** (`cli.py` → `muspan_workflow.py`): Converts SpatialData to a MuSpAn domain (shapes as points), builds a Delaunay triangulation network, detects Louvain communities, and generates visualization plots (cells.png, delaunay_network.png, communities_network.png).
 
-8. **Spot-to-cell assignment** (`cli.py` → `utils.py`): Spatial join of spots to cell boundaries using GeoPandas.
+8. **Spot-to-cell assignment** (`cli.py` → `utils.py`): Spatial join of spots to cell boundaries using GeoPandas (`gpd.sjoin` with `predicate='within'`).
 
-9. **QuPath GeoJSON export** (`cli.py` → `export.py`): Exports cell boundaries and spot detections as GeoJSON features with community/cluster assignments and intensity measurements for QuPath visualization.
+9. **QuPath GeoJSON export** (`cli.py` → `export.py`): Exports cell boundaries and spot detections as GeoJSON features with community/cluster assignments and intensity measurements for QuPath visualization. Output is always `./qupath_export.geojson` (hardcoded).
 
-10. **Spatial neighborhood analysis** (`cli.py`): Computes spatial neighbors radius graph, mean hop distance heatmap between clusters, UMAP embedding, and Leiden clustering via Scanpy. UMAP plots are saved to the plot output directory.
+10. **Spatial neighborhood analysis** (`cli.py`): Computes spatial neighbors radius graph, mean hop distance heatmap between clusters (`cell_type_to_cell_type.png`), UMAP embedding with k-means coloring (`umap_kmeans_cluster.png`), and Leiden clustering (`umap_leiden.png`). UMAP plots are saved to the `--plot_dir`.
 
 ### CLI arguments
 
@@ -95,11 +101,19 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 
 - **`POT_BACKEND=numpy` workaround**: `run.py` sets `POT_BACKEND=numpy` before any imports from `cellsurvey`. MuSpAn depends on POT (Python Optimal Transport) which by default tries to import TensorFlow as a backend. Since TF 2.10 is compiled against numpy 1.x, it crashes when numpy 2.x is present. Forcing the numpy backend avoids the TF import entirely — TF is only needed later for Stardist segmentation, where it initializes after numpy is already loaded. This variable MUST be set before importing `cellsurvey.cli`.
 
-- **System-specific shared library**: `run.py` preloads the pixi environment's `libstdc++.so.6` (resolved relative to the script's `.pixi/` directory) to avoid ABI conflicts with the system library. If the file doesn't exist (e.g., on Windows or a non-pixi setup), it silently skips. Note: this preload code is duplicated in `cli.py` (line 3-9) so that `cli.py` can also be run standalone.
+- **`TF_USE_LEGACY_KERAS='1'`**: Also set in `run.py` before imports. TF >=2.16 defaults to Keras 3, which compiles Stardist's model with XLA JIT, triggering a cuDNN autotuner failure on 1x1 convolutions with CUDA 12/cuDNN 9. Legacy Keras 2 uses the non-XLA cuDNN path and retains GPU acceleration. Requires the `tf_keras` pip package.
 
-- **GPU vs CPU**: GPU is detected at runtime via `tf.config.list_physical_devices('GPU')`. If no GPU is found, a warning is printed but execution continues — Stardist will run on CPU and be very slow.
+- **System-specific shared library**: `run.py` preloads the pixi environment's `libstdc++.so.6` (resolved relative to the script's `.pixi/` directory) to avoid ABI conflicts with the system library. If the file doesn't exist (e.g., on Windows or a non-pixi setup), it silently skips. Note: this preload code is duplicated in `cli.py` (lines 3-9) so that `cli.py` can also be run standalone via `python -m cellsurvey.cli`.
+
+- **GPU vs CPU**: GPU is detected at runtime via `tf.config.list_physical_devices('GPU')`. If no GPU is found, a warning is printed but execution continues — Stardist will run on CPU and be very slow. Both cases set `sopa.settings.parallelization_backend = None`.
 
 - **Zarr write-then-read pattern**: The pipeline writes the initial Zarr to disk then immediately reads it back before continuing to segmentation. This is intentional — it materializes the spots-including dataset as a clean checkpoint.
+
+- **Segmented Zarr incremental reuse**: The segmented Zarr (`_seg.zarr`) is checked before Stardist. If it already has a valid table, both Stardist and aggregation are skipped (jump to clustering). If it has boundaries but no table, only aggregation is re-run. If the file exists but can't be read, it's deleted via `shutil.rmtree` and a full re-run proceeds. This enables crash recovery at finer granularity than `--resume-from`.
+
+- **Pandas 2.x + anndata ArrowStringArray compatibility**: Two workarounds in the aggregation stage:
+  1. `pd.option_context('future.infer_string', False)` wraps the `sopa.aggregate()` call to force plain object dtype for strings, avoiding ArrowStringArray which can't be written to Zarr backing stores.
+  2. `obs.index.astype(str)` is called on the AnnData table's obs index after clustering to force plain string dtype (same ArrowStringArray issue).
 
 - **Channel naming**: Channel names with suffixes like `_ch_0`, `_ch_1` are constructed in the Stardist stage. The `remove_channel_suffix()` function strips these for clean column headers in the intensity DataFrame.
 
@@ -115,9 +129,15 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 
 - **Zarr writes have basic error handling**: Both Zarr write points are wrapped in try/except — if a write fails, the error and path are printed to stderr and the script exits with code 1.
 
-- **`--resume-from` enables crash recovery**: If a Zarr already exists at the expected path, you can skip image loading and spot detection and resume from Stardist segmentation. This saves re-running expensive steps after a crash in later stages.
+- **`--resume-from` enables crash recovery**: If a Zarr already exists at the expected path, you can skip image loading and spot detection and resume from Stardist segmentation. When used with the segmented Zarr reuse logic, this provides two levels of checkpoint restart.
 
-- **Channel subset loading**: The full multichannel image is not loaded into memory. Only the channels specified by `--channels` are loaded for blob detection, reducing memory footprint for large images. The full image is still available on disk via the Zarr for Stardist segmentation.
+- **Channel subset loading**: The full multichannel image is not loaded into memory for blob detection. Only the channels specified by `--channels` are loaded via `dask_image.imread`, reducing memory footprint. The full image is available on disk via the Zarr for Stardist segmentation.
+
+- **Hardcoded output paths**: The GeoJSON export always writes to `./qupath_export.geojson` regardless of the `-o` or `-p` flags.
+
+- **Matplotlib rcParams are set twice**: Global `font.size=20` and `axes.linewidth=3` at the start of `main()`, then overridden to `font.size=10` and `axes.linewidth=2` before the heatmap/UMAP plots.
+
+- **`from cellsurvey.muspan_workflow import get_colors_for_communities` in export.py**: The export module imports from muspan_workflow which depends on MuSpAn — the export step can't run without MuSpAn installed.
 
 ## Code patterns and conventions
 
@@ -129,14 +149,16 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 - NumPy, pandas, GeoPandas, and AnnData/Scanpy are the primary data structures
 - `run.py` is the entry-point shim — all logic lives in the `cellsurvey/` package modules. However, `cli.py` can also be run standalone (`python -m cellsurvey.cli`) since it duplicates the libstdc++ preload.
 - `export_to_qupath` takes `sdata`, `intensity_df`, and `spots_with_cells` as explicit parameters (no implicit closure on module globals)
-- The pipeline writes Zarr files at two points: the initial Zarr after image loading (and optionally blob detection), and the segmented Zarr after Stardist + aggregation. Both writes are wrapped in try/except and exit with code 1 on failure. The Zarr write-then-immediate-read pattern between stages 3 and 4 materializes a clean checkpoint.
+- The pipeline writes Zarr files at two points: the initial Zarr after image loading (and optionally blob detection), and the segmented Zarr after Stardist + aggregation. Both writes are wrapped in try/except and exit with code 1 on failure.
+- The Zarr write-then-immediate-read pattern between stages 3 and 4 materializes a clean checkpoint. If segmented Zarr reuse kicks in (stage 4), the read of the initial Zarr is skipped entirely.
 - The `sopa.segmentation.stardist()` call passes only `unique_channels[0]` as the channels argument, not all channel names.
+- Dynamic imports inside except blocks: `import shutil` is imported inside the segmented Zarr corruption handler to avoid pulling it in unnecessarily.
 
 ## File structure
 
 ```
 .
-├── run.py                            # Entry-point shim: libstdc++ guard + delegates to cli.main()
+├── run.py                            # Entry-point shim: env vars + libstdc++ guard + delegates to cli.main()
 ├── cellsurvey/
 │   ├── __init__.py                   # Re-exports all public symbols
 │   ├── cli.py                        # main() with argparse and pipeline orchestration
@@ -149,7 +171,5 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 ├── requirements.txt                  # Minimal pip requirements (sopa, muspan)
 ├── latest.zip                        # MuSpAn distribution (password-protected)
 ├── README.md                         # User-facing installation and usage docs
-├── .gitignore                        # Ignores .pixi/* except config.toml
-├── .gitattributes                    # Marks pixi.lock as binary/YAML-generated
 └── .pixi/                            # Pixi environment directory (gitignored)
 ```
