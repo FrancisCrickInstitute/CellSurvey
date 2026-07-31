@@ -1,6 +1,5 @@
 import os
 import numpy as np
-import spatialdata
 import muspan as ms
 import matplotlib.pyplot as plt
 
@@ -24,25 +23,26 @@ def get_colors_for_communities(n_communities):
     return colors
 
 
-def run_muspan(spatial_data, cell_boundaries='stardist_boundaries', index_name='cell_id', output_dir='.',
+def run_muspan(sdata, cell_boundaries='stardist_boundaries', index_name='cell_id', output_dir='.',
                cell_colour='table: kmeans_cluster', comm_detect_res=0.1, max_edge_distance=1000):
-    spatial_data.shapes[cell_boundaries].index.name = index_name
+    # Extract boundaries and centroids
+    boundaries = sdata.shapes[cell_boundaries]
+    boundaries.index.name = index_name
+    centroids = boundaries.geometry.centroid
+    coords = np.column_stack([centroids.x.values, centroids.y.values])
 
-    # Ensure table obs matches shapes — SOPA may filter cells during aggregation
-    shape_ids = set(spatial_data.shapes[cell_boundaries].index)
-    table = spatial_data.tables['table']
-    keep_mask = table.obs['cell_id'].isin(shape_ids)
-    if not keep_mask.all():
-        print(f"Filtering {keep_mask.sum()} of {len(keep_mask)} cells in table to match shapes")
-        table = table[keep_mask].copy()
-        spatial_data.tables['table'] = table
+    # Build MuSpAn domain from points
+    domain_data = {
+        'positions': coords,
+        'cell_ids': boundaries.index.values,
+    }
 
-    sdata_clean = spatialdata.SpatialData(
-        shapes={cell_boundaries: spatial_data.shapes[cell_boundaries]},
-        tables=spatial_data.tables
-    )
+    # Attach table columns as labels
+    table = sdata.tables['table']
+    for col in table.obs.columns:
+        domain_data[col] = table.obs[col].values
 
-    muspan_domain = ms.io.spatialdata_to_domain(sdata_clean, import_shapes_as_points=True)
+    muspan_domain = ms.domain.Domain(domain_data)
 
     print("\nVisualising cells...")
     ms.visualise.visualise(muspan_domain, color_by=cell_colour, marker_size=3.0, figure_kwargs=fig_kwargs)
