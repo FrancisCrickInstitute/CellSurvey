@@ -11,6 +11,7 @@ version = "0.1.0"
 
 [target.win-64.dependencies]
 python = "<3.11"
+numpy = "<2"
 cudatoolkit = "11.2.*"
 cudnn = "8.1.0.*"
 
