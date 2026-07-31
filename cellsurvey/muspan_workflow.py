@@ -28,16 +28,9 @@ def run_muspan(spatial_data, cell_boundaries='stardist_boundaries', index_name='
                cell_colour='table: kmeans_cluster', comm_detect_res=0.1, max_edge_distance=1000):
     spatial_data.shapes[cell_boundaries].index.name = index_name
 
-    # Filter table to only include cells present in shapes (SOPA may filter some)
-    shape_ids = set(spatial_data.shapes[cell_boundaries].index.astype(str))
+    # MuSpAn expects the table obs index to match the shapes index
     table = spatial_data.tables['table']
-    cell_ids = table.obs['cell_id'].astype(str)
-    keep_mask = cell_ids.isin(shape_ids)
-    if not keep_mask.all():
-        print(f"Filtering {keep_mask.sum()} of {len(keep_mask)} cells in table to match shapes")
-        table = table[keep_mask].copy()
-
-    spatial_data.tables['table'] = table
+    table.obs.index = table.obs['cell_id'].astype(str)
 
     # Create clean version without image_patches
     sdata_clean = spatialdata.SpatialData(
