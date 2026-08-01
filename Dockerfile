@@ -12,7 +12,8 @@ ENV PATH="/root/.pixi/bin:${PATH}"
 
 WORKDIR /app
 
-COPY pixi.toml pixi.lock ./
+# Copy pixi config for dependency resolution
+COPY pixi.toml ./
 
 RUN pixi install
 
