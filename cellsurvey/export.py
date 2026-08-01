@@ -2,21 +2,17 @@ import json
 import numpy as np
 import pandas as pd
 from shapely.geometry import mapping, Point
-from cellsurvey.muspan_workflow import get_colors_for_communities
+from cellsurvey.utils import get_colors_for_communities
 
 
-def export_to_qupath(domain, communities, clusters, output_path, sdata, intensity_df,
-                     cell_id='cell_id', spots_with_cells=None):
+def export_to_qupath(cell_ids, community_labels, cluster_labels, output_path, sdata, intensity_df,
+                     spots_with_cells=None):
     print("Exporting to QuPath GeoJSON format...")
 
-    cell_ids = domain.labels[cell_id]['labels']
-    communities_labels = domain.labels[communities]['labels']
-    cluster_labels_from_domain = domain.labels[clusters]['labels']
+    cell_to_community = dict(zip(cell_ids, community_labels))
+    cell_to_cluster = dict(zip(cell_ids, cluster_labels))
 
-    cell_to_community = dict(zip(cell_ids, communities_labels))
-    cell_to_cluster = dict(zip(cell_ids, cluster_labels_from_domain))
-
-    unique_communities = np.unique(communities_labels)
+    unique_communities = np.unique(community_labels)
     community_colors = get_colors_for_communities(len(unique_communities))
 
     features = []

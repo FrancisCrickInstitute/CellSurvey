@@ -2,7 +2,9 @@
 
 ## Project overview
 
-CellSurvey is a spatial biology/omics analysis pipeline combining [Sopa](https://gustaveroussy.github.io/sopa/) (segmentation, aggregation) and [MuSpAn](https://www.muspan.co.uk/) (network analysis, community detection). It processes multichannel microscopy images (OME-TIFF) into spatial data objects, segments nuclei with Stardist, detects RNA spots via blob detection, clusters cells with k-means, builds Delaunay networks, detects Louvain communities, and exports GeoJSON for QuPath visualization.
+CellSurvey is a spatial biology/omics analysis pipeline built on [Sopa](https://gustaveroussy.github.io/sopa/) (segmentation, aggregation). It processes multichannel microscopy images (OME-TIFF) into spatial data objects, segments nuclei with Stardist, detects RNA spots via blob detection, clusters cells with k-means, builds Delaunay networks, detects Louvain communities, and exports GeoJSON for QuPath visualization.
+
+**MuSpAn removal — Phase 0 (complete):** MuSpAn has been removed as a dependency. The network analysis and community detection stages now use a placeholder module (`network_analysis.py`) that returns dummy labels (community 0 for all cells) and generates placeholder plots. Real Delaunay/Louvain replacement is pending Phase 1.
 
 ## Environment and package management
 
@@ -13,10 +15,10 @@ Key dependency constraints:
 - **TensorFlow**: `>=2.18` on `linux-64` (with `and-cuda` extras for GPU)
 - **CUDA/cuDNN**: TF >=2.18 bundles its own CUDA 12/cuDNN 9 libraries; no separate conda CUDA/cuDNN packages are needed
 - **`tf_keras`** is a required pypi dependency — TF >=2.16 defaults to Keras 3, but Stardist needs legacy Keras 2 API to avoid cuDNN autotuner failures on CUDA 12/cuDNN 9
-- **MuSpAn** is distributed as a password-protected zip from `https://docs.muspan.co.uk/code/latest.zip` and installed from `./latest.zip` via `pixi.toml` as a path dependency. MuSpAn requires `numpy>=2.0`.
+- **No MuSpAn dependency**: The pipeline no longer requires `latest.zip` or the private `muspan` package. Network analysis is a placeholder pending open-source replacement.
 - **Windows and macOS are not supported** via pixi — only `linux-64` is in the platforms list.
 
-A **Dockerfile** is provided: Ubuntu 24.04 base, installs pixi, copies `pixi.toml`, `pixi.lock`, and `latest.zip`, sets `POT_BACKEND=numpy` and `TF_USE_LEGACY_KERAS=1`, entrypoint is `pixi run python run.py`.
+A **Dockerfile** is provided: Ubuntu 24.04 base, installs pixi, copies `pixi.toml` and `pixi.lock`, sets `TF_USE_LEGACY_KERAS=1`, entrypoint is `pixi run python run.py`.
 
 There is no Makefile, no CI/CD, and no tests. The source code is split across 6 files under the `cellsurvey/` package, with `run.py` as the entry-point shim.
 
@@ -54,7 +56,7 @@ There is no build step, no test command, and no linting configured.
 
 ## Architecture and data flow
 
-The pipeline is split into modules under the `cellsurvey/` package. `run.py` is a shim that sets environment variables (POT_BACKEND, TF_USE_LEGACY_KERAS), preloads libstdc++, and delegates to `cellsurvey.cli.main()`. The pipeline runs these stages sequentially:
+The pipeline is split into modules under the `cellsurvey/` package. `run.py` is a shim that sets environment variables (TF_USE_LEGACY_KERAS), preloads libstdc++, and delegates to `cellsurvey.cli.main()`. The pipeline runs these stages sequentially:
 
 1. **Image loading** (`cli.py`): Reads the OME-TIFF via `BioImage` (from `bioio`) to get channel names, and via `sopa.io.ome_tif()` as a SpatialData dataset. Three code paths at this stage:
    - `--resume-from`: Skips image loading entirely — reads channel names from the existing image via `BioImage` but loads the Zarr directly.
@@ -76,11 +78,11 @@ The pipeline is split into modules under the `cellsurvey/` package. `run.py` is 
 
 6. **K-means clustering** (`cli.py` → `utils.py`): Extracts the intensity matrix from the AnnData table, standardizes with `StandardScaler`, runs k-means, and attaches cluster labels to `sdata.tables['table'].obs`.
 
-7. **MuSpAn network analysis** (`cli.py` → `muspan_workflow.py`): Converts cell boundaries to a MuSpAn domain by computing centroids from the GeoDataFrame geometry, building the domain manually with `ms.domain()` and `add_points()`. Attaches k-means cluster labels as a categorical label via a simple dict keyed by point index. Builds a Delaunay triangulation network, detects Louvain communities, and generates visualization plots (cells.png, delaunay_network.png, communities_network.png). Stores a `_cell_id_map` (cell index → MuSpAn point ID) and `_boundaries` reference on the domain object for the export stage.
+7. **Network analysis placeholder** (`cli.py` → `network_analysis.py`): Computes centroids from the cell boundaries GeoDataFrame, extracts k-means cluster labels from the AnnData table, assigns community 0 to all cells, generates three placeholder scatter plots (cells.png, delaunay_network.png, communities_network.png), and returns a dict with `cell_ids`, `community_labels`, and `cluster_labels` arrays. Real Delaunay triangulation + Louvain community detection are pending Phase 1 (see TODO below).
 
 8. **Spot-to-cell assignment** (`cli.py` → `utils.py`): Spatial join of spots to cell boundaries using GeoPandas (`gpd.sjoin` with `predicate='within'`).
 
-9. **QuPath GeoJSON export** (`cli.py` → `export.py`): Exports cell boundaries and spot detections as GeoJSON features with community/cluster assignments and intensity measurements for QuPath visualization. Output is always `./qupath_export.geojson` (hardcoded).
+9. **QuPath GeoJSON export** (`cli.py` → `export.py`): Exports cell boundaries and spot detections as GeoJSON features with community/cluster assignments and intensity measurements for QuPath visualization. Takes `cell_ids`, `community_labels`, and `cluster_labels` as direct arrays (no longer depends on a MuSpAn domain object). Output is always `./qupath_export.geojson` (hardcoded).
 
 10. **Spatial neighborhood analysis** (`cli.py`): Computes spatial neighbors radius graph, mean hop distance heatmap between clusters (`cell_type_to_cell_type.png`), UMAP embedding with k-means coloring (`umap_kmeans_cluster.png`), and Leiden clustering (`umap_leiden.png`). UMAP plots are saved to the `--plot_dir`.
 
@@ -101,17 +103,15 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 | `--overlap` | `50` | Tile overlap for blob detection |
 | `--workers` | `14` | Worker threads for blob detection |
 | `--n-clusters` | `10` | Number of k-means clusters |
-| `--community-resolution` | `0.1` | Louvain community detection resolution |
-| `--max-edge-distance` | `1000` | Max edge distance for Delaunay network |
+| `--community-resolution` | `0.1` | Louvain community detection resolution (placeholder only) |
+| `--max-edge-distance` | `1000` | Max edge distance for Delaunay network (placeholder only) |
 | `--radius-min` | `0` | Min radius for spatial neighbors graph |
 | `--radius-max` | `1000` | Max radius for spatial neighbors graph |
 | `--resume-from` | — | Path to existing Zarr to resume from (skips image loading and spot detection) |
 
 ## Key gotchas
 
-- **`POT_BACKEND=numpy` workaround**: `run.py` sets `POT_BACKEND=numpy` before any imports from `cellsurvey`. MuSpAn depends on POT (Python Optimal Transport) which by default tries to import TensorFlow as a backend. Since TF 2.10 is compiled against numpy 1.x, it crashes when numpy 2.x is present. Forcing the numpy backend avoids the TF import entirely — TF is only needed later for Stardist segmentation, where it initializes after numpy is already loaded. This variable MUST be set before importing `cellsurvey.cli`.
-
-- **`TF_USE_LEGACY_KERAS='1'`**: Also set in `run.py` before imports. TF >=2.16 defaults to Keras 3, which compiles Stardist's model with XLA JIT, triggering a cuDNN autotuner failure on 1x1 convolutions with CUDA 12/cuDNN 9. Legacy Keras 2 uses the non-XLA cuDNN path and retains GPU acceleration. Requires the `tf_keras` pip package.
+- **`TF_USE_LEGACY_KERAS='1'`**: Set in `run.py` before imports. TF >=2.16 defaults to Keras 3, which compiles Stardist's model with XLA JIT, triggering a cuDNN autotuner failure on 1x1 convolutions with CUDA 12/cuDNN 9. Legacy Keras 2 uses the non-XLA cuDNN path and retains GPU acceleration. Requires the `tf_keras` pip package.
 
 - **System-specific shared library**: `run.py` preloads the pixi environment's `libstdc++.so.6` (resolved relative to the script's `.pixi/` directory) to avoid ABI conflicts with the system library. If the file doesn't exist (e.g., on a non-pixi setup), it silently skips. Note: this preload code is duplicated in `cli.py` (lines 3-9) so that `cli.py` can also be run standalone via `python -m cellsurvey.cli`.
 
@@ -133,16 +133,7 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 
 - **Blob detection must be explicitly enabled**: The `--detect-blobs` flag is required to perform RNA spot/blob detection. Without it, the pipeline writes the raw OME-TIFF as a Zarr and proceeds directly to segmentation/aggregation without any spot data. The `sopa.aggregate()` call checks for `"spots" in dataset.points` to decide whether to aggregate genes.
 
-- **MuSpAn dependency is not public**: `muspan` requires a username/password obtained from https://www.muspan.co.uk/get-the-code. The `latest.zip` in the repo root is the MuSpAn distribution file referenced in `pixi.toml` as a path dependency.
-
-**TODO**: Evaluate replacing MuSpAn with an alternative network analysis / community detection library (e.g., Scanpy's native spatial tools, Squidpy, or NetworkX + GeoPandas) to eliminate the private-dependency friction. The pipeline currently uses MuSpAn only for Delaunay triangulation + Louvain community detection + visualization — all of which have equivalents in open, pip-installable libraries.
-
-   **Remove MuSpAn plan:**
-   1. Replace `muspan_workflow.py` `run_muspan()` with direct calls to `scipy.spatial.Delaunay` for triangulation and `scanpy.tl.louvain()` or `networkx.algorithms.community.louvain_communities()` for community detection.
-   2. Replace MuSpAn `visualise()` calls with matplotlib/scatter plots directly on the GeoDataFrame centroids + community labels.
-   3. Remove `muspan` from `pixi.toml` dependencies and delete `latest.zip` from the repo.
-   4. Drop `POT_BACKEND=numpy` from `run.py` (only needed because MuSpAn transitively imports TF via POT).
-   5. Verify `export.py` no longer depends on `muspan_workflow` (`get_colors_for_communities` is a simple colormap — move it to `utils.py`).
+- **Network analysis is a placeholder (Phase 0)**: `run_muspan()` in `network_analysis.py` returns all cells in community 0 with dummy plots. The `--community-resolution` and `--max-edge-distance` flags are accepted but ignored. Real Delaunay/Louvain replacement is pending.
 
 - **Zarr writes have basic error handling**: Both Zarr write points are wrapped in try/except — if a write fails, the error and path are printed to stderr and the script exits with code 1.
 
@@ -156,42 +147,55 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 
 - **Matplotlib rcParams are set twice**: Global `font.size=20` and `axes.linewidth=3` at the start of `main()`, then overridden to `font.size=10` and `axes.linewidth=2` before the heatmap/UMAP plots.
 
-- **`from cellsurvey.muspan_workflow import get_colors_for_communities` in export.py**: The export module imports from muspan_workflow which depends on MuSpAn — the export step can't run without MuSpAn installed.
-
-- **MuSpAn domain is built manually, not via `spatialdata_to_domain`**: `muspan_workflow.py` no longer imports `spatialdata` or calls `ms.io.spatialdata_to_domain()`. Instead it extracts centroids from the GeoDataFrame geometry, creates a domain with `ms.domain('cell_domain')` and `add_points()`, and attaches labels via a dict. Private attributes `_cell_id_map` and `_boundaries` are stored on the domain for the export stage's use. The `export_to_qupath` call at `cli.py:274-277` passes `'Communities'` and `'table: kmeans_cluster'` as label names, which are looked up via `domain.labels[...]` — this works because MuSpAn's `add_labels` populates `domain.labels`.
+- **`export_to_qupath` signature changed (Phase 0)**: Now takes `cell_ids`, `community_labels`, and `cluster_labels` as direct arrays instead of `domain`, `communities`, and `clusters` string label names. The import of `get_colors_for_communities` moved from `muspan_workflow` to `utils`.
 
 ## Code patterns and conventions
 
-- Modular package structure under `cellsurvey/` — functions grouped by concern (blob detection, MuSpAn workflow, export, utilities, CLI orchestration)
+- Modular package structure under `cellsurvey/` — functions grouped by concern (blob detection, network analysis, export, utilities, CLI orchestration)
 - Matplotlib global rcParams are set inside `cli.main()` at startup
 - Random seeds (42) are used at multiple points for reproducibility
 - Print-based logging with no logging framework
 - Dask is used for parallel blob detection but the scheduler is explicitly set to `'threads'` (not the default multiprocessing)
 - NumPy, pandas, GeoPandas, and AnnData/Scanpy are the primary data structures
 - `run.py` is the entry-point shim — all logic lives in the `cellsurvey/` package modules. However, `cli.py` can also be run standalone (`python -m cellsurvey.cli`) since it duplicates the libstdc++ preload.
-- `export_to_qupath` takes `sdata`, `intensity_df`, and `spots_with_cells` as explicit parameters (no implicit closure on module globals)
+- `export_to_qupath` takes `cell_ids`, `community_labels`, `cluster_labels`, `sdata`, `intensity_df`, and `spots_with_cells` as explicit parameters (no implicit closure on module globals)
 - The pipeline writes Zarr files at two points: the initial Zarr after image loading (and optionally blob detection), and the segmented Zarr after Stardist + aggregation. Both writes are wrapped in try/except and exit with code 1 on failure.
 - The Zarr write-then-immediate-read pattern between stages 3 and 4 materializes a clean checkpoint. If segmented Zarr reuse kicks in (stage 4), the read of the initial Zarr is skipped entirely.
 - The `sopa.segmentation.stardist()` call passes only `unique_channels[0]` as the channels argument, not all channel names.
 - Dynamic imports inside except blocks: `import shutil` is imported inside the segmented Zarr corruption handler to avoid pulling it in unnecessarily.
+- `run_muspan()` in `network_analysis.py` returns a plain dict with keys `cell_ids`, `community_labels`, `cluster_labels` — not a MuSpAn domain object.
 
 ## File structure
 
 ```
 .
-├── run.py                            # Entry-point shim: env vars + libstdc++ guard + delegates to cli.main()
+├── run.py                            # Entry-point shim: TF_USE_LEGACY_KERAS + libstdc++ guard + delegates to cli.main()
 ├── cellsurvey/
 │   ├── __init__.py                   # Re-exports all public symbols
 │   ├── cli.py                        # main() with argparse and pipeline orchestration
 │   ├── blob_detection.py             # detect_blobs_in_tile, detect_blobs_tiled
-│   ├── muspan_workflow.py            # run_muspan, get_colors_for_communities, fig_kwargs
+│   ├── network_analysis.py           # run_muspan placeholder (Phase 0), fig_kwargs
 │   ├── export.py                     # export_to_qupath
-│   └── utils.py                      # remove_channel_suffix, cluster_data, assign_spots_to_cells
+│   └── utils.py                      # remove_channel_suffix, cluster_data, assign_spots_to_cells, get_colors_for_communities
 ├── Dockerfile                        # Ubuntu 24.04 + pixi + GPU-ready container
-├── pixi.toml                         # Pixi environment config (linux-64 only)
+├── pixi.toml                         # Pixi environment config (linux-64 only, no MuSpAn)
 ├── pixi.lock                         # Pixi lockfile (generated)
-├── requirements.txt                  # Minimal pip requirements (sopa, muspan)
-├── latest.zip                        # MuSpAn distribution (password-protected)
+├── requirements.txt                  # Minimal pip requirements (sopa)
 ├── README.md                         # User-facing installation and usage docs
 └── .pixi/                            # Pixi environment directory (gitignored)
 ```
+
+## MuSpAn removal plan (remaining phases)
+
+**Phase 0 — Skeleton (DONE):** MuSpAn dependency removed. Placeholder `network_analysis.py` returns all cells in community 0 with basic scatter plots. `export_to_qupath` takes direct arrays. `POT_BACKEND` removed from `run.py` and `Dockerfile`. `latest.zip` and `muspan_workflow.py` deleted. `get_colors_for_communities` moved to `utils.py`.
+
+**Phase 1 — Real replacement (pending):**
+   - **Delaunay triangulation**: Replace placeholder with `scipy.spatial.Delaunay` on centroid coordinates. Filter edges beyond `max_edge_distance`.
+   - **Louvain community detection**: Build a `networkx.Graph` from Delaunay edges, run `networkx.algorithms.community.louvain_communities()` with the resolution parameter.
+   - **Visualisation**: Replace placeholder scatter plots with real network visualisation — color cells by cluster and community, overlay Delaunay edges.
+   - Add `scipy` and `networkx` as explicit pypi dependencies in `pixi.toml`.
+
+**Phase 2 — Cleanup (after Phase 1):**
+   - Verify output plots match previous MuSpAn output
+   - Update `README.md` to remove all MuSpAn installation instructions
+   - Remove `muspan` from `requirements.txt` (already done in Phase 0)

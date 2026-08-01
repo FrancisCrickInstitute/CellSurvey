@@ -26,7 +26,7 @@ from spatialdata.transformations import Identity
 
 from cellsurvey.utils import remove_channel_suffix, cluster_data, assign_spots_to_cells
 from cellsurvey.blob_detection import detect_blobs_tiled
-from cellsurvey.muspan_workflow import run_muspan
+from cellsurvey.network_analysis import run_muspan
 from cellsurvey.export import export_to_qupath
 
 
@@ -266,12 +266,12 @@ def main():
 
     print(f"\nUpdated obs columns: {list(sdata.tables['table'].obs.columns)}")
 
-    example_domain = run_muspan(sdata, comm_detect_res=args.community_resolution,
+    result = run_muspan(sdata, comm_detect_res=args.community_resolution,
                                 max_edge_distance=args.max_edge_distance)
 
     spots_with_cells = assign_spots_to_cells(sdata)
 
-    export_to_qupath(example_domain, 'Communities', 'table: kmeans_cluster',
+    export_to_qupath(result['cell_ids'], result['community_labels'], result['cluster_labels'],
                      output_path='./qupath_export.geojson',
                      sdata=sdata, intensity_df=intensity_df,
                      spots_with_cells=spots_with_cells)

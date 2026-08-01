@@ -12,11 +12,10 @@ ENV PATH="/root/.pixi/bin:${PATH}"
 
 WORKDIR /app
 
-COPY pixi.toml pixi.lock latest.zip ./
+COPY pixi.toml pixi.lock ./
 
 RUN pixi install
 
-ENV POT_BACKEND=numpy
 ENV TF_USE_LEGACY_KERAS=1
 
 ENTRYPOINT ["pixi", "run", "python", "run.py"]

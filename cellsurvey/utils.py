@@ -2,6 +2,7 @@ import re
 import numpy as np
 import pandas as pd
 import geopandas as gpd
+import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
 
@@ -55,3 +56,20 @@ def assign_spots_to_cells(spatial_data, spots_key='spots', cell_boundaries='star
     print(f"Unassigned spots: {total - assigned} ({100 * (total - assigned) / total:.1f}%)")
 
     return spots_with_cells
+
+
+def get_colors_for_communities(n_communities):
+    if n_communities <= 10:
+        cmap = plt.cm.get_cmap('tab10')
+    elif n_communities <= 20:
+        cmap = plt.cm.get_cmap('tab20')
+    else:
+        cmap = plt.cm.get_cmap('hsv')
+
+    colors = []
+    for i in range(n_communities):
+        rgba = cmap(i / max(n_communities - 1, 1))
+        rgb = [int(rgba[0] * 255), int(rgba[1] * 255), int(rgba[2] * 255)]
+        colors.append(rgb)
+
+    return colors

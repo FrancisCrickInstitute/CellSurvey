@@ -9,11 +9,6 @@ _libstdcpp = _pixi_env_lib / "libstdc++.so.6"
 if _libstdcpp.exists():
     ctypes.CDLL(str(_libstdcpp))
 
-# Force POT (Optimal Transport library used by MuSpAn) to skip TensorFlow
-# backend import. TF 2.10 is compiled against numpy 1.x and crashes on
-# numpy 2.x import, but we only need TF for Stardist segmentation later.
-_os.environ["POT_BACKEND"] = "numpy"
-
 # Force TF to use legacy Keras 2 via the standalone tf_keras package.
 # TF >=2.16 defaults to Keras 3 which compiles Stardist's model with
 # XLA JIT, triggering a cuDNN autotuner failure on 1x1 convolutions
