@@ -134,44 +134,32 @@ def main():
 
         print("Done")
     else:
+        # No blob detection — skip intermediate Zarr write, go straight to segmentation
         channel_names = BioImage(imagepath).channel_names
-        dataset = sopa.io.ome_tif(imagepath, as_image=False)
         orig_zarr_path = zarr_path
 
-        print(f'Saving Zarr to {orig_zarr_path}')
-
-        try:
-            dataset.write(orig_zarr_path, overwrite=True)
-        except Exception as e:
-            print(f"ERROR: Failed to write Zarr to {orig_zarr_path}: {e}", file=sys.stderr)
-            sys.exit(1)
-
-        print("Done")
-
-    seg_zarr_path = zarr_path.replace('.zarr', '_seg.zarr')
     needs_stardist = True
     needs_aggregation = True
 
-    if os.path.exists(seg_zarr_path):
+    if os.path.exists(zarr_path):
         try:
-            dataset = spatialdata.read_zarr(seg_zarr_path)
+            dataset = spatialdata.read_zarr(zarr_path)
             if 'table' in dataset.tables and dataset.tables['table'] is not None:
-                print(f"Segmented Zarr with table found, skipping to clustering: {seg_zarr_path}")
+                print(f"Zarr with table found, skipping to clustering: {zarr_path}")
                 needs_stardist = False
                 needs_aggregation = False
                 sdata = dataset
             elif 'stardist_boundaries' in dataset.shapes:
-                print(f"Segmented Zarr has boundaries but no table, re-running aggregation only")
+                print(f"Zarr has boundaries but no table, re-running aggregation only")
                 needs_stardist = False
-                # dataset is loaded, proceed to aggregation
         except Exception:
             import shutil
-            shutil.rmtree(seg_zarr_path, ignore_errors=True)
+            shutil.rmtree(zarr_path, ignore_errors=True)
 
     if needs_stardist:
         print("Loading Zarr...")
 
-        dataset = spatialdata.read_zarr(orig_zarr_path)
+        dataset = spatialdata.read_zarr(zarr_path)
 
         image_name = list(dataset.images.keys())[0]
 
@@ -212,6 +200,10 @@ def main():
     if needs_aggregation:
         print("Aggregating...")
 
+        # Close the read handle on the Zarr store before overwriting
+        if hasattr(dataset, 'close'):
+            dataset.close()
+
         # Force pandas to use plain object dtype for strings, not ArrowStringArray,
         # which can't be written to Zarr backing stores by anndata
         with pd.option_context('future.infer_string', False):
@@ -220,22 +212,19 @@ def main():
             else:
                 sopa.aggregate(dataset)
 
-        seg_zarr_path = zarr_path.replace('.zarr', '_seg.zarr')
-
-        print(f'Saving Zarr to {seg_zarr_path}')
+        print(f'Saving Zarr to {zarr_path}')
 
         try:
-            dataset.write(seg_zarr_path, overwrite=True)
+            dataset.write(zarr_path, overwrite=True)
         except Exception as e:
-            print(f"ERROR: Failed to write segmented Zarr to {seg_zarr_path}: {e}", file=sys.stderr)
+            print(f"ERROR: Failed to write Zarr to {zarr_path}: {e}", file=sys.stderr)
             sys.exit(1)
 
         print("Done")
 
         np.random.seed(42)
 
-        path_to_spatialData_file = seg_zarr_path
-        sdata = spatialdata.read_zarr(path_to_spatialData_file)
+        sdata = spatialdata.read_zarr(zarr_path)
 
     measurements = sdata.tables['table']
 
