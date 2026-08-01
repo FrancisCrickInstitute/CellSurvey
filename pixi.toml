@@ -23,6 +23,8 @@ bioio-ome-tiff = ">=1.4.0, <2"
 setuptools = ">=72.1.0,<82"
 python-igraph = "*"
 tf_keras = "*"
+scipy = ">=1.14, <2"
+networkx = ">=3.4, <4"
 
 [target.linux-64.pypi-dependencies]
 tensorflow = { version = ">=2.18", extras = ["and-cuda"] }
