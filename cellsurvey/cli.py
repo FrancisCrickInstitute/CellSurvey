@@ -293,7 +293,7 @@ def main():
     sc.pp.log1p(adata)
     sc.pp.neighbors(adata)
     sc.tl.umap(adata)
-    sc.tl.leiden(adata)
+    sc.tl.leiden(adata, flavor='leidenalg', n_iterations=2, directed=False)
     sc.pl.umap(adata, color="kmeans_cluster")
     plt.savefig(os.path.join(args.plot_dir, 'umap_kmeans_cluster.png'))
     plt.close()
