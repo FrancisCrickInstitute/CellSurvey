@@ -76,12 +76,12 @@ def main():
         zarr_path += '.zarr'
 
     if args.resume_from:
-        orig_zarr_path = args.resume_from
-        if not orig_zarr_path.endswith('.zarr'):
-            orig_zarr_path += '.zarr'
-        if not os.path.exists(orig_zarr_path):
-            parser.error(f"Resume Zarr not found: {orig_zarr_path}")
-        print(f"Resuming from existing Zarr: {orig_zarr_path}")
+        zarr_path = args.resume_from
+        if not zarr_path.endswith('.zarr'):
+            zarr_path += '.zarr'
+        if not os.path.exists(zarr_path):
+            parser.error(f"Resume Zarr not found: {zarr_path}")
+        print(f"Resuming from existing Zarr: {zarr_path}")
 
         channel_names = BioImage(imagepath).channel_names
     elif args.detect_blobs:
@@ -122,21 +122,27 @@ def main():
 
         dataset["spots"] = points
 
-        orig_zarr_path = zarr_path
-
-        print(f'Saving Zarr to {orig_zarr_path}')
+        print(f'Saving Zarr to {zarr_path}')
 
         try:
-            dataset.write(orig_zarr_path, overwrite=True)
+            dataset.write(zarr_path, overwrite=True)
         except Exception as e:
-            print(f"ERROR: Failed to write Zarr to {orig_zarr_path}: {e}", file=sys.stderr)
+            print(f"ERROR: Failed to write Zarr to {zarr_path}: {e}", file=sys.stderr)
             sys.exit(1)
 
         print("Done")
     else:
-        # No blob detection — skip intermediate Zarr write, go straight to segmentation
         channel_names = BioImage(imagepath).channel_names
-        orig_zarr_path = zarr_path
+        dataset = sopa.io.ome_tif(imagepath, as_image=False)
+        print(f'Saving Zarr to {zarr_path}')
+
+        try:
+            dataset.write(zarr_path, overwrite=True)
+        except Exception as e:
+            print(f"ERROR: Failed to write Zarr to {zarr_path}: {e}", file=sys.stderr)
+            sys.exit(1)
+
+        print("Done")
 
     needs_stardist = True
     needs_aggregation = True
