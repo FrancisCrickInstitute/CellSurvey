@@ -2,13 +2,15 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.spatial import Delaunay
+from scipy.spatial.distance import pdist, squareform
 import networkx as nx
 
 fig_kwargs = dict(figsize=(20, 20))
 
 
-def run_muspan(sdata, cell_boundaries='stardist_boundaries', index_name='cell_id', output_dir='.',
-               cell_colour='table: kmeans_cluster', comm_detect_res=0.1, max_edge_distance=1000):
+def run_muspan(sdata, intensity_matrix=None, cell_boundaries='stardist_boundaries', index_name='cell_id',
+               output_dir='.', cell_colour='table: kmeans_cluster', comm_detect_res=0.1,
+               max_edge_distance=1000):
     boundaries = sdata.shapes[cell_boundaries]
     boundaries.index.name = index_name
 
@@ -39,8 +41,23 @@ def run_muspan(sdata, cell_boundaries='stardist_boundaries', index_name='cell_id
     print("\nDetecting Louvain communities...")
     G = nx.Graph()
     G.add_nodes_from(range(n_cells))
-    G.add_edges_from(edges)
-    communities = nx.community.louvain_communities(G, resolution=comm_detect_res, seed=42)
+
+    if intensity_matrix is not None:
+        cell_ids = boundaries.index.values
+        imat = np.zeros((n_cells, intensity_matrix.shape[1]))
+        for pos_idx, cell_id in enumerate(cell_ids):
+            if cell_id in intensity_matrix.index:
+                imat[pos_idx] = intensity_matrix.loc[cell_id].values
+        print("Computing edge weights from expression similarity...")
+        for a, b in edges:
+            corr = np.corrcoef(imat[a], imat[b])[0, 1]
+            weight = 1 + corr
+            G.add_edge(a, b, weight=weight)
+    else:
+        G.add_edges_from(edges)
+
+    communities = nx.community.louvain_communities(G, weight='weight' if intensity_matrix is not None else None,
+                                                  resolution=comm_detect_res, seed=42)
 
     community_labels = np.full(n_cells, -1, dtype=int)
     for comm_idx, comm in enumerate(communities):

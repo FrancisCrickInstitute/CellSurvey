@@ -270,7 +270,8 @@ def main():
 
     print(f"\nUpdated obs columns: {list(sdata.tables['table'].obs.columns)}")
 
-    result = run_muspan(sdata, comm_detect_res=args.community_resolution,
+    result = run_muspan(sdata, intensity_matrix=intensity_df,
+                                comm_detect_res=args.community_resolution,
                                 max_edge_distance=args.max_edge_distance,
                                 output_dir=args.plot_dir)
 
