@@ -2,38 +2,31 @@
 
 # Overview
 
-CellSurvey is a Python pipeline for image-based spatial biology/omics analysis. It combines [Sopa](https://gustaveroussy.github.io/sopa/) (segmentation, aggregation) and [MuSpAn](https://www.muspan.co.uk/) (network analysis, community detection) into a single workflow: multichannel microscopy images → segmented cells → RNA spot detection → spatial networks → community maps → QuPath-ready GeoJSON.
+CellSurvey is a Python pipeline for image-based spatial biology/omics analysis. It combines [Sopa](https://gustaveroussy.github.io/sopa/) (segmentation, aggregation) with spatial network analysis and community detection into a single workflow: multichannel microscopy images → segmented cells → RNA spot detection → spatial networks → community maps → QuPath-ready GeoJSON.
+
 * Blampey, Q., Mulder, K., Gardet, M. et al. Sopa: a technology-invariant pipeline for analyses of image-based spatial omics. _Nat Commun_ 15, 4981 (2024).
-* Bull, J. A., Moore, J. W., Corry S. M., el al. MuSpAn: A Toolbox for Multiscale Spatial Analysis. _bioRxiv_ 2024.12.06.627195
 
 <img width="350" height="350" alt="cell_type_to_cell_type" src="https://github.com/user-attachments/assets/9807689f-f471-49a5-b1ef-d701cb2db1c8" />
 <img width="466" height="350" alt="umap_leiden" src="https://github.com/user-attachments/assets/ae31a25c-889b-41e6-ac7d-4af4df775a6b" />
 
 # Installation
 
-CellSurvey can be installed using either pixi (recommended) or conda.
-
-> [!IMPORTANT]
-> **MuSpAn requires a separate download.** MuSpAn is not publicly available on PyPI. Before installing, you must request access at [muspan.co.uk/get-the-code](https://www.muspan.co.uk/get-the-code). You'll receive credentials by email. Once you have the MuSpAn zip file (`latest.zip`), place it in the repository root alongside `pixi.toml`. Both pixi and conda will install it from there.
+CellSurvey uses **pixi** for environment management targeting Linux (64-bit) with GPU support.
 
 > [!NOTE]
-> CellSurvey depends on Tensorflow and while Tensorflow will run on all operating systems, support for GPU processing is generally only supported on Linux - see [here](https://www.tensorflow.org/install) for more information.
+> CellSurvey depends on TensorFlow and while TensorFlow will run on all operating systems, support for GPU processing is generally only supported on Linux — see [here](https://www.tensorflow.org/install) for more information. Windows and macOS are not supported via pixi.
 
-## Option A: Pixi (recommended)
+## Pixi (recommended)
 
 [Pixi](https://pixi.sh/latest/) manages the full environment including Python, CUDA, cuDNN, and all Python packages in a single command.
 
 First, [install pixi](https://pixi.sh/latest/#installation) if you haven't already:
 
 ```bash
-# Linux / macOS
 curl -fsSL https://pixi.sh/install.sh | bash
-
-# Windows (PowerShell)
-iwr -useb https://pixi.sh/install.ps1 | iex
 ```
 
-Then, **place the MuSpAn `latest.zip` file in the repository root** (see the note above about requesting access). From the repository root:
+From the repository root:
 
 ```bash
 pixi install
@@ -45,107 +38,19 @@ That's it — pixi reads `pixi.toml` and sets up everything. To run:
 pixi run python run.py -i <input_tiff> -o <output_zarr> -p <plot_dir>
 ```
 
-## Option B: Conda + pip
-
-### Step 1: Install a Python Distribution
-
-We recommend using conda as it's relatively straightforward and makes the management of different Python environments simple. You can install conda from [here](https://conda.io/projects/conda/en/latest/user-guide/install/index.html#regular-installation) (miniconda will suffice).
-
-### Step 2: Create Environment and Install Pip Dependencies
-
-#### 2.1: Create an environment
-
-Once conda is installed, open a terminal (Mac) or Anaconda Prompt (Windows) and run the following series of commands:
+## Docker
 
 ```bash
-conda create --name spatial-bio python=3.10
-conda activate spatial-bio
-```
-
-You will be presented with a list of packages to be downloaded and installed. The following prompt will appear:
-```bash
-Proceed ([y]/n)?
-```
-Hit Enter and all necessary packages will be downloaded and installed - this may take some time.
-
-> **Note:** The pixi environment uses Python <3.11 on Windows and >=3.11,<3.12 on Linux/macOS. For conda, Python 3.10 or 3.11 is recommended.
-
-#### 2.2: Install Tensorflow
-
-CellSurvey depends on [Stardist](https://github.com/stardist/stardist) to segment cell nuclei, which in turn depends on Tensorflow.
-
->[!NOTE]
->Tensorflow can be run on CPUs, but this can be quite slow. To speed things up, a GPU-compatible installation is recommended. TF 2.18 bundles its own CUDA/cuDNN libraries — no separate CUDA installation or module loading is needed.
-
-Then, install tensorflow as follows:
-
-**On Linux (GPU):**
-```bash
-python -m pip install "tensorflow[and-cuda]>=2.18" tf_keras
-```
-
-> **Note:** `tf_keras` is required on Linux with TF >=2.18 to use legacy Keras 2 API, which avoids a cuDNN 9 autotuner incompatibility in Stardist's GPU convolution path.
-
-**On Windows:** Windows is not supported via pixi due to a TF/numpy version conflict. Use WSL2 with the Linux pixi setup instead.
-
-**On any other operating system, or for a CPU-only installation:**
-```bash
-python -m pip install tensorflow
-```
-
-See `pixi.toml` for the exact version constraints per platform.
-
-#### 2.3: Install Sopa and bioio
-
-Install [Sopa](https://gustaveroussy.github.io/sopa/) with support for stardist and wsi (whole slide imaging), plus [bioio](https://github.com/bioio-devs/bioio) for image metadata:
-
-```bash
-python -m pip install 'sopa[stardist,wsi]' bioio bioio-ome-tiff
-```
-
-#### 2.4: Install MuSpAn
-
-Unfortunately, at this time, MuSpAn requires a username and password to install. You can obtain these by completing the form [here](https://www.muspan.co.uk/get-the-code). Once you receive a response by email, MuSpAn can be installed as follows:
-
-```bash
-python -m pip install https://docs.muspan.co.uk/code/latest.zip
-```
-
-You will then be prompted to enter the login credentials you received by email and the installation should proceed.
-
-### Step 3: Get the code for this repository
-
-To get the code, the recommended approach is to [clone this repository using Git](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository). Alternatively, you can download a Zip file of the repo by clicking on the green code button above and then clicking "Download Zip":
-
-<img width="472" height="369" alt="image" src="https://github.com/user-attachments/assets/ee52fdf5-1574-4342-aa85-77f623d60709" />
-
-Unzip the contents of the zip file once downloaded - the contents should contain a file called `run.py` and a `cellsurvey/` directory of supporting modules.
-
-## Installation Complete
-
-That's it — your setup is complete.
-
-If using conda, you can deactivate the environment with:
-
-```bash
-conda deactivate
+docker build -t cellsurvey .
+docker run --gpus all -v /path/to/data:/data cellsurvey -i /data/input.tiff -o /data/output -p /data/plots
 ```
 
 # Usage
 
 ## Basic Usage
 
-**With pixi:**
-
 ```bash
 pixi run python run.py -i <path_to_input_file> -o <path_to_output_zarr> -p <path_to_output_plots_directory>
-```
-
-**With conda:**
-
-```bash
-conda activate spatial-bio
-python run.py -i <path_to_input_file> -o <path_to_output_zarr> -p <path_to_output_plots_directory>
 ```
 
 ## Parameters
@@ -181,5 +86,5 @@ python run.py -i <path_to_input_file> -o <path_to_output_zarr> -p <path_to_outpu
 ## Full Example
 
 ```bash
-python run.py -i ~/data/sample.tiff -o ~/results/output -p ~/results/plots/
+pixi run python run.py -i ~/data/sample.tiff -o ~/results/output -p ~/results/plots/
 ```

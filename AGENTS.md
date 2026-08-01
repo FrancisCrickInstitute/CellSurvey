@@ -145,14 +145,20 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 
 - **Hardcoded output paths**: The GeoJSON export always writes to `./qupath_export.geojson` regardless of the `-o` or `-p` flags.
 
-- **Matplotlib rcParams are set twice**: Global `font.size=20` and `axes.linewidth=3` at the start of `main()`, then overridden to `font.size=10` and `axes.linewidth=2` before the heatmap/UMAP plots.
+- **Matplotlib rcParams are set twice**: Global `font.size=20` and `axes.linewidth=3` at the start of `main()`, then overridden to `font.size=10` and `axes.linewidth=2` before the heatmap/UMAP plots. The `Agg` non-interactive backend is set at import time (`matplotlib.use('Agg')` before `import matplotlib.pyplot as plt`) to prevent plot windows from appearing on headless systems.
 
 - **`export_to_qupath` signature changed (Phase 0)**: Now takes `cell_ids`, `community_labels`, and `cluster_labels` as direct arrays instead of `domain`, `communities`, and `clusters` string label names. The import of `get_colors_for_communities` moved from `muspan_workflow` to `utils`.
+
+- **Plot directory auto-created**: `os.makedirs(args.plot_dir, exist_ok=True)` is called at the start of `main()` to ensure the output directory exists before any plots are saved.
+
+- **`assign_spots_to_cells` returns `None` when no spots exist**: If `spots_key` is not in `spatial_data.points` (no `--detect-blobs` used, or no spots detected), the function returns `None` and `export_to_qupath` skips spot export.
+
+- **Leiden clustering uses `igraph` backend**: `sc.tl.leiden(adata, flavor='igraph', n_iterations=2, directed=False)` — orders of magnitude faster than `leidenalg` for large datasets. Requires `python-igraph` in `pixi.toml` pypi dependencies. `show=False` passed to `sc.pl.umap()` to prevent `plt.show()` calls on the `Agg` backend.
 
 ## Code patterns and conventions
 
 - Modular package structure under `cellsurvey/` — functions grouped by concern (blob detection, network analysis, export, utilities, CLI orchestration)
-- Matplotlib global rcParams are set inside `cli.main()` at startup
+- Matplotlib global rcParams are set inside `cli.main()` at startup; the `Agg` non-interactive backend is forced at import time to prevent display on headless systems
 - Random seeds (42) are used at multiple points for reproducibility
 - Print-based logging with no logging framework
 - Dask is used for parallel blob detection but the scheduler is explicitly set to `'threads'` (not the default multiprocessing)
