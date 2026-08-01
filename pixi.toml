@@ -21,7 +21,7 @@ sopa = ">=2.1.11, <3"
 bioio = ">=3.4.0, <4"
 bioio-ome-tiff = ">=1.4.0, <2"
 setuptools = ">=72.1.0,<82"
-leidenalg = "*"
+python-igraph = "*"
 tf_keras = "*"
 
 [target.linux-64.pypi-dependencies]
