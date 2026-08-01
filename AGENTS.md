@@ -4,7 +4,7 @@
 
 CellSurvey is a spatial biology/omics analysis pipeline built on [Sopa](https://gustaveroussy.github.io/sopa/) (segmentation, aggregation). It processes multichannel microscopy images (OME-TIFF) into spatial data objects, segments nuclei with Stardist, detects RNA spots via blob detection, clusters cells with k-means, builds Delaunay networks, detects Louvain communities, and exports GeoJSON for QuPath visualization.
 
-**MuSpAn removed (Phase 1 complete):** MuSpAn has been fully replaced with open-source libraries. Delaunay triangulation uses `scipy.spatial.Delaunay`, Louvain community detection uses `networkx`, and visualisation uses matplotlib. No private dependencies remain.
+**MuSpAn removed (complete):** MuSpAn has been fully replaced with open-source libraries. Delaunay triangulation uses `scipy.spatial.Delaunay`, Louvain community detection uses `networkx`, and visualisation uses matplotlib. No private dependencies remain.
 
 ## Environment and package management
 
