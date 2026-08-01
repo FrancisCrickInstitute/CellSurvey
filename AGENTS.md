@@ -6,15 +6,17 @@ CellSurvey is a spatial biology/omics analysis pipeline combining [Sopa](https:/
 
 ## Environment and package management
 
-This project uses **pixi** (via `pixi.toml`) for environment management targeting `linux-64` and `osx-64`. The lockfile is `pixi.lock`.
+This project uses **pixi** (via `pixi.toml`) for environment management targeting `linux-64` only. The lockfile is `pixi.lock`.
 
 Key dependency constraints:
-- **Python**: `>=3.11,<3.12` on both `linux-64` and `osx-64`
-- **TensorFlow**: `>=2.18` on `linux-64` (with `and-cuda` extras for GPU), `>=2.11` on `osx-64`
+- **Python**: `>=3.12, <3.13` on `linux-64`
+- **TensorFlow**: `>=2.18` on `linux-64` (with `and-cuda` extras for GPU)
 - **CUDA/cuDNN**: TF >=2.18 bundles its own CUDA 12/cuDNN 9 libraries; no separate conda CUDA/cuDNN packages are needed
 - **`tf_keras`** is a required pypi dependency — TF >=2.16 defaults to Keras 3, but Stardist needs legacy Keras 2 API to avoid cuDNN autotuner failures on CUDA 12/cuDNN 9
 - **MuSpAn** is distributed as a password-protected zip from `https://docs.muspan.co.uk/code/latest.zip` and installed from `./latest.zip` via `pixi.toml` as a path dependency. MuSpAn requires `numpy>=2.0`.
-- **Windows is not supported** via pixi — TF 2.10 (the last version that works with CUDA 11.2/cuDNN 8.1) requires `numpy<2`, but MuSpAn requires `numpy>=2`, creating an unresolvable conflict.
+- **Windows and macOS are not supported** via pixi — only `linux-64` is in the platforms list.
+
+A **Dockerfile** is provided: Ubuntu 24.04 base, installs pixi, copies `pixi.toml`, `pixi.lock`, and `latest.zip`, sets `POT_BACKEND=numpy` and `TF_USE_LEGACY_KERAS=1`, entrypoint is `pixi run python run.py`.
 
 There is no Makefile, no CI/CD, and no tests. The source code is split across 6 files under the `cellsurvey/` package, with `run.py` as the entry-point shim.
 
@@ -42,6 +44,12 @@ Three required arguments:
 - `-o`: Path prefix for output Zarr file (`.zarr` suffix is appended automatically)
 - `-p`: Directory for output plots
 
+**Docker build and run:**
+```bash
+docker build -t cellsurvey .
+docker run --gpus all -v /path/to/data:/data cellsurvey -i /data/input.tiff -o /data/output -p /data/plots
+```
+
 There is no build step, no test command, and no linting configured.
 
 ## Architecture and data flow
@@ -68,7 +76,7 @@ The pipeline is split into modules under the `cellsurvey/` package. `run.py` is 
 
 6. **K-means clustering** (`cli.py` → `utils.py`): Extracts the intensity matrix from the AnnData table, standardizes with `StandardScaler`, runs k-means, and attaches cluster labels to `sdata.tables['table'].obs`.
 
-7. **MuSpAn network analysis** (`cli.py` → `muspan_workflow.py`): Converts SpatialData to a MuSpAn domain (shapes as points), builds a Delaunay triangulation network, detects Louvain communities, and generates visualization plots (cells.png, delaunay_network.png, communities_network.png).
+7. **MuSpAn network analysis** (`cli.py` → `muspan_workflow.py`): Converts cell boundaries to a MuSpAn domain by computing centroids from the GeoDataFrame geometry, building the domain manually with `ms.domain()` and `add_points()`. Attaches k-means cluster labels as a categorical label via a simple dict keyed by point index. Builds a Delaunay triangulation network, detects Louvain communities, and generates visualization plots (cells.png, delaunay_network.png, communities_network.png). Stores a `_cell_id_map` (cell index → MuSpAn point ID) and `_boundaries` reference on the domain object for the export stage.
 
 8. **Spot-to-cell assignment** (`cli.py` → `utils.py`): Spatial join of spots to cell boundaries using GeoPandas (`gpd.sjoin` with `predicate='within'`).
 
@@ -86,6 +94,7 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 | `-o`, `--output_file` | *(required)* | Path to output Zarr (`.zarr` appended if missing) |
 | `-p`, `--plot_dir` | `.` | Output directory for plots |
 | `--detect-blobs` | — | Enable RNA spot blob detection on specified channels (default: off) |
+| `--use-gpu` | — | Force GPU usage for Stardist (auto-detected by default) |
 | `--channels` | `9,10,11,12` | Comma-separated channel indices for blob detection |
 | `--thresholds` | `0.01,0.1,0.1,0.1` | Comma-separated blob detection thresholds (one per channel) |
 | `--tile-size` | `2048` | Tile size for blob detection |
@@ -104,9 +113,9 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 
 - **`TF_USE_LEGACY_KERAS='1'`**: Also set in `run.py` before imports. TF >=2.16 defaults to Keras 3, which compiles Stardist's model with XLA JIT, triggering a cuDNN autotuner failure on 1x1 convolutions with CUDA 12/cuDNN 9. Legacy Keras 2 uses the non-XLA cuDNN path and retains GPU acceleration. Requires the `tf_keras` pip package.
 
-- **System-specific shared library**: `run.py` preloads the pixi environment's `libstdc++.so.6` (resolved relative to the script's `.pixi/` directory) to avoid ABI conflicts with the system library. If the file doesn't exist (e.g., on Windows or a non-pixi setup), it silently skips. Note: this preload code is duplicated in `cli.py` (lines 3-9) so that `cli.py` can also be run standalone via `python -m cellsurvey.cli`.
+- **System-specific shared library**: `run.py` preloads the pixi environment's `libstdc++.so.6` (resolved relative to the script's `.pixi/` directory) to avoid ABI conflicts with the system library. If the file doesn't exist (e.g., on a non-pixi setup), it silently skips. Note: this preload code is duplicated in `cli.py` (lines 3-9) so that `cli.py` can also be run standalone via `python -m cellsurvey.cli`.
 
-- **GPU vs CPU**: GPU is detected at runtime via `tf.config.list_physical_devices('GPU')`. If no GPU is found, a warning is printed but execution continues — Stardist will run on CPU and be very slow. Both cases set `sopa.settings.parallelization_backend = None`.
+- **GPU detection and `--use-gpu` flag**: GPU is detected at runtime via `tf.config.list_physical_devices('GPU')`. If no GPU is found and `--use-gpu` is not set, a warning is printed but execution continues — Stardist will run on CPU and be very slow. The `--use-gpu` flag forces GPU backend even without auto-detection. Both paths set `sopa.settings.parallelization_backend = None`.
 
 - **Zarr write-then-read pattern**: The pipeline writes the initial Zarr to disk then immediately reads it back before continuing to segmentation. This is intentional — it materializes the spots-including dataset as a clean checkpoint.
 
@@ -141,13 +150,15 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 
 - **Channel subset loading**: The full multichannel image is not loaded into memory for blob detection. Only the channels specified by `--channels` are loaded via `dask_image.imread`, reducing memory footprint. The full image is available on disk via the Zarr for Stardist segmentation.
 
-- **AnnData `.X` can be sparse or dense**: `sopa.aggregate()` may produce either a scipy sparse matrix or a dense numpy array depending on the input data size and sopa version. The intensity extraction at `cli.py:233` handles both with `hasattr(measurements.X, 'toarray')`. Never assume `.X` is sparse.
+- **AnnData `.X` can be sparse or dense**: `sopa.aggregate()` may produce either a scipy sparse matrix or a dense numpy array depending on the input data size and sopa version. The intensity extraction at `cli.py:238` handles both with `hasattr(measurements.X, 'toarray')`. Never assume `.X` is sparse.
 
 - **Hardcoded output paths**: The GeoJSON export always writes to `./qupath_export.geojson` regardless of the `-o` or `-p` flags.
 
 - **Matplotlib rcParams are set twice**: Global `font.size=20` and `axes.linewidth=3` at the start of `main()`, then overridden to `font.size=10` and `axes.linewidth=2` before the heatmap/UMAP plots.
 
 - **`from cellsurvey.muspan_workflow import get_colors_for_communities` in export.py**: The export module imports from muspan_workflow which depends on MuSpAn — the export step can't run without MuSpAn installed.
+
+- **MuSpAn domain is built manually, not via `spatialdata_to_domain`**: `muspan_workflow.py` no longer imports `spatialdata` or calls `ms.io.spatialdata_to_domain()`. Instead it extracts centroids from the GeoDataFrame geometry, creates a domain with `ms.domain('cell_domain')` and `add_points()`, and attaches labels via a dict. Private attributes `_cell_id_map` and `_boundaries` are stored on the domain for the export stage's use. The `export_to_qupath` call at `cli.py:274-277` passes `'Communities'` and `'table: kmeans_cluster'` as label names, which are looked up via `domain.labels[...]` — this works because MuSpAn's `add_labels` populates `domain.labels`.
 
 ## Code patterns and conventions
 
@@ -176,7 +187,8 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 │   ├── muspan_workflow.py            # run_muspan, get_colors_for_communities, fig_kwargs
 │   ├── export.py                     # export_to_qupath
 │   └── utils.py                      # remove_channel_suffix, cluster_data, assign_spots_to_cells
-├── pixi.toml                         # Pixi environment config (primary)
+├── Dockerfile                        # Ubuntu 24.04 + pixi + GPU-ready container
+├── pixi.toml                         # Pixi environment config (linux-64 only)
 ├── pixi.lock                         # Pixi lockfile (generated)
 ├── requirements.txt                  # Minimal pip requirements (sopa, muspan)
 ├── latest.zip                        # MuSpAn distribution (password-protected)
