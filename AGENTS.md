@@ -4,7 +4,7 @@
 
 CellSurvey is a spatial biology/omics analysis pipeline built on [Sopa](https://gustaveroussy.github.io/sopa/) (segmentation, aggregation). It processes multichannel microscopy images (OME-TIFF) into spatial data objects, segments nuclei with Stardist, detects RNA spots via blob detection, clusters cells with k-means, builds Delaunay networks, detects Louvain communities, and exports GeoJSON for QuPath visualization.
 
-**MuSpAn removal — Phase 0 (complete):** MuSpAn has been removed as a dependency. The network analysis and community detection stages now use a placeholder module (`network_analysis.py`) that returns dummy labels (community 0 for all cells) and generates placeholder plots. Real Delaunay/Louvain replacement is pending Phase 1.
+**MuSpAn removed (Phase 1 complete):** MuSpAn has been fully replaced with open-source libraries. Delaunay triangulation uses `scipy.spatial.Delaunay`, Louvain community detection uses `networkx`, and visualisation uses matplotlib. No private dependencies remain.
 
 ## Environment and package management
 
@@ -15,10 +15,11 @@ Key dependency constraints:
 - **TensorFlow**: `>=2.18` on `linux-64` (with `and-cuda` extras for GPU)
 - **CUDA/cuDNN**: TF >=2.18 bundles its own CUDA 12/cuDNN 9 libraries; no separate conda CUDA/cuDNN packages are needed
 - **`tf_keras`** is a required pypi dependency — TF >=2.16 defaults to Keras 3, but Stardist needs legacy Keras 2 API to avoid cuDNN autotuner failures on CUDA 12/cuDNN 9
-- **No MuSpAn dependency**: The pipeline no longer requires `latest.zip` or the private `muspan` package. Network analysis is a placeholder pending open-source replacement.
+- **`scipy` (`>=1.14, <2`)** and **`networkx` (`>=3.4, <4`)** for Delaunay triangulation and Louvain community detection (replacing MuSpAn)
+- **`python-igraph`** for fast Leiden clustering in Scanpy's spatial neighborhood analysis
 - **Windows and macOS are not supported** via pixi — only `linux-64` is in the platforms list.
 
-A **Dockerfile** is provided: Ubuntu 24.04 base, installs pixi, copies `pixi.toml` and `pixi.lock`, sets `TF_USE_LEGACY_KERAS=1`, entrypoint is `pixi run python run.py`.
+A **Dockerfile** is provided: Ubuntu 24.04 base, installs pixi, copies `pixi.toml`, sets `TF_USE_LEGACY_KERAS=1`, entrypoint is `pixi run python run.py`.
 
 There is no Makefile, no CI/CD, and no tests. The source code is split across 6 files under the `cellsurvey/` package, with `run.py` as the entry-point shim.
 
@@ -78,13 +79,13 @@ The pipeline is split into modules under the `cellsurvey/` package. `run.py` is 
 
 6. **K-means clustering** (`cli.py` → `utils.py`): Extracts the intensity matrix from the AnnData table, standardizes with `StandardScaler`, runs k-means, and attaches cluster labels to `sdata.tables['table'].obs`.
 
-7. **Network analysis placeholder** (`cli.py` → `network_analysis.py`): Computes centroids from the cell boundaries GeoDataFrame, extracts k-means cluster labels from the AnnData table, assigns community 0 to all cells, generates three placeholder scatter plots (cells.png, delaunay_network.png, communities_network.png), and returns a dict with `cell_ids`, `community_labels`, and `cluster_labels` arrays. Real Delaunay triangulation + Louvain community detection are pending Phase 1 (see TODO below).
+7. **Network analysis** (`cli.py` → `network_analysis.py`): Extracts centroids from the cell boundaries GeoDataFrame. Builds a `scipy.spatial.Delaunay` triangulation, filters edges by `max_edge_distance`. Constructs a `networkx.Graph` from the filtered edges and runs `nx.community.louvain_communities()` with the `community_resolution` parameter and fixed seed 42. Generates three plots: cells colored by k-means cluster, the Delaunay network (with a 10% edge sample rendered for performance), and cells colored by Louvain community. Returns a dict with `cell_ids`, `community_labels`, and `cluster_labels` arrays. Plots are saved to `output_dir` (passed as `args.plot_dir` from `cli.py`).
 
-8. **Spot-to-cell assignment** (`cli.py` → `utils.py`): Spatial join of spots to cell boundaries using GeoPandas (`gpd.sjoin` with `predicate='within'`).
+8. **Spot-to-cell assignment** (`cli.py` → `utils.py`): Spatial join of spots to cell boundaries using GeoPandas (`gpd.sjoin` with `predicate='within'`). Returns `None` if no spots are present in the dataset (no guard needed in `cli.py` — `export_to_qupath` handles `None`).
 
-9. **QuPath GeoJSON export** (`cli.py` → `export.py`): Exports cell boundaries and spot detections as GeoJSON features with community/cluster assignments and intensity measurements for QuPath visualization. Takes `cell_ids`, `community_labels`, and `cluster_labels` as direct arrays (no longer depends on a MuSpAn domain object). Output is always `./qupath_export.geojson` (hardcoded).
+9. **QuPath GeoJSON export** (`cli.py` → `export.py`): Exports cell boundaries and spot detections as GeoJSON features with community/cluster assignments and intensity measurements for QuPath visualization. Takes `cell_ids`, `community_labels`, and `cluster_labels` as direct arrays. Output is always `./qupath_export.geojson` (hardcoded).
 
-10. **Spatial neighborhood analysis** (`cli.py`): Computes spatial neighbors radius graph, mean hop distance heatmap between clusters (`cell_type_to_cell_type.png`), UMAP embedding with k-means coloring (`umap_kmeans_cluster.png`), and Leiden clustering (`umap_leiden.png`). UMAP plots are saved to the `--plot_dir`.
+10. **Spatial neighborhood analysis** (`cli.py`): Computes spatial neighbors radius graph, mean hop distance heatmap between clusters (`cell_type_to_cell_type.png`), UMAP embedding with k-means coloring (`umap_kmeans_cluster.png`), and Leiden clustering with `igraph` backend (`umap_leiden.png`). UMAP plots are saved to `--plot_dir`.
 
 ### CLI arguments
 
@@ -103,8 +104,8 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 | `--overlap` | `50` | Tile overlap for blob detection |
 | `--workers` | `14` | Worker threads for blob detection |
 | `--n-clusters` | `10` | Number of k-means clusters |
-| `--community-resolution` | `0.1` | Louvain community detection resolution (placeholder only) |
-| `--max-edge-distance` | `1000` | Max edge distance for Delaunay network (placeholder only) |
+| `--community-resolution` | `0.1` | Louvain community detection resolution |
+| `--max-edge-distance` | `1000` | Max edge distance for Delaunay network |
 | `--radius-min` | `0` | Min radius for spatial neighbors graph |
 | `--radius-max` | `1000` | Max radius for spatial neighbors graph |
 | `--resume-from` | — | Path to existing Zarr to resume from (skips image loading and spot detection) |
@@ -133,7 +134,9 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 
 - **Blob detection must be explicitly enabled**: The `--detect-blobs` flag is required to perform RNA spot/blob detection. Without it, the pipeline writes the raw OME-TIFF as a Zarr and proceeds directly to segmentation/aggregation without any spot data. The `sopa.aggregate()` call checks for `"spots" in dataset.points` to decide whether to aggregate genes.
 
-- **Network analysis is a placeholder (Phase 0)**: `run_muspan()` in `network_analysis.py` returns all cells in community 0 with dummy plots. The `--community-resolution` and `--max-edge-distance` flags are accepted but ignored. Real Delaunay/Louvain replacement is pending.
+- **Louvain community detection uses `networkx`**: `nx.community.louvain_communities()` with fixed seed 42 (for reproducibility). Requires `networkx>=3.4` in `pixi.toml`. The resolution parameter from `--community-resolution` is passed directly.
+
+- **Delaunay edge rendering samples 10% of edges**: For large datasets, the `delaunay_network.png` plot renders only `len(edges) // 10` edges (minimum 1) to keep the plot readable. Edge filtering by `max_edge_distance` happens upstream — only edges within the distance threshold are included.
 
 - **Zarr writes have basic error handling**: Both Zarr write points are wrapped in try/except — if a write fails, the error and path are printed to stderr and the script exits with code 1.
 
@@ -147,8 +150,6 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 
 - **Matplotlib rcParams are set twice**: Global `font.size=20` and `axes.linewidth=3` at the start of `main()`, then overridden to `font.size=10` and `axes.linewidth=2` before the heatmap/UMAP plots. The `Agg` non-interactive backend is set at import time (`matplotlib.use('Agg')` before `import matplotlib.pyplot as plt`) to prevent plot windows from appearing on headless systems.
 
-- **`export_to_qupath` signature changed (Phase 0)**: Now takes `cell_ids`, `community_labels`, and `cluster_labels` as direct arrays instead of `domain`, `communities`, and `clusters` string label names. The import of `get_colors_for_communities` moved from `muspan_workflow` to `utils`.
-
 - **Plot directory auto-created**: `os.makedirs(args.plot_dir, exist_ok=True)` is called at the start of `main()` to ensure the output directory exists before any plots are saved.
 
 - **`assign_spots_to_cells` returns `None` when no spots exist**: If `spots_key` is not in `spatial_data.points` (no `--detect-blobs` used, or no spots detected), the function returns `None` and `export_to_qupath` skips spot export.
@@ -159,7 +160,7 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 
 - Modular package structure under `cellsurvey/` — functions grouped by concern (blob detection, network analysis, export, utilities, CLI orchestration)
 - Matplotlib global rcParams are set inside `cli.main()` at startup; the `Agg` non-interactive backend is forced at import time to prevent display on headless systems
-- Random seeds (42) are used at multiple points for reproducibility
+- Random seeds (42) are used at multiple points for reproducibility (k-means clustering, Louvain communities)
 - Print-based logging with no logging framework
 - Dask is used for parallel blob detection but the scheduler is explicitly set to `'threads'` (not the default multiprocessing)
 - NumPy, pandas, GeoPandas, and AnnData/Scanpy are the primary data structures
@@ -169,7 +170,8 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 - The Zarr write-then-immediate-read pattern between stages 3 and 4 materializes a clean checkpoint. If segmented Zarr reuse kicks in (stage 4), the read of the initial Zarr is skipped entirely.
 - The `sopa.segmentation.stardist()` call passes only `unique_channels[0]` as the channels argument, not all channel names.
 - Dynamic imports inside except blocks: `import shutil` is imported inside the segmented Zarr corruption handler to avoid pulling it in unnecessarily.
-- `run_muspan()` in `network_analysis.py` returns a plain dict with keys `cell_ids`, `community_labels`, `cluster_labels` — not a MuSpAn domain object.
+- `run_muspan()` in `network_analysis.py` returns a plain dict with keys `cell_ids`, `community_labels`, `cluster_labels`.
+- `run_muspan()` accepts `output_dir` parameter for plot output (set to `args.plot_dir` from `cli.py`).
 
 ## File structure
 
@@ -180,28 +182,13 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 │   ├── __init__.py                   # Re-exports all public symbols
 │   ├── cli.py                        # main() with argparse and pipeline orchestration
 │   ├── blob_detection.py             # detect_blobs_in_tile, detect_blobs_tiled
-│   ├── network_analysis.py           # run_muspan placeholder (Phase 0), fig_kwargs
+│   ├── network_analysis.py           # run_muspan (scipy Delaunay + networkx Louvain), fig_kwargs
 │   ├── export.py                     # export_to_qupath
 │   └── utils.py                      # remove_channel_suffix, cluster_data, assign_spots_to_cells, get_colors_for_communities
 ├── Dockerfile                        # Ubuntu 24.04 + pixi + GPU-ready container
-├── pixi.toml                         # Pixi environment config (linux-64 only, no MuSpAn)
+├── pixi.toml                         # Pixi environment config (linux-64 only)
 ├── pixi.lock                         # Pixi lockfile (generated)
 ├── requirements.txt                  # Minimal pip requirements (sopa)
 ├── README.md                         # User-facing installation and usage docs
 └── .pixi/                            # Pixi environment directory (gitignored)
 ```
-
-## MuSpAn removal plan (remaining phases)
-
-**Phase 0 — Skeleton (DONE):** MuSpAn dependency removed. Placeholder `network_analysis.py` returns all cells in community 0 with basic scatter plots. `export_to_qupath` takes direct arrays. `POT_BACKEND` removed from `run.py` and `Dockerfile`. `latest.zip` and `muspan_workflow.py` deleted. `get_colors_for_communities` moved to `utils.py`.
-
-**Phase 1 — Real replacement (pending):**
-   - **Delaunay triangulation**: Replace placeholder with `scipy.spatial.Delaunay` on centroid coordinates. Filter edges beyond `max_edge_distance`.
-   - **Louvain community detection**: Build a `networkx.Graph` from Delaunay edges, run `networkx.algorithms.community.louvain_communities()` with the resolution parameter.
-   - **Visualisation**: Replace placeholder scatter plots with real network visualisation — color cells by cluster and community, overlay Delaunay edges.
-   - Add `scipy` and `networkx` as explicit pypi dependencies in `pixi.toml`.
-
-**Phase 2 — Cleanup (after Phase 1):**
-   - Verify output plots match previous MuSpAn output
-   - Update `README.md` to remove all MuSpAn installation instructions
-   - Remove `muspan` from `requirements.txt` (already done in Phase 0)
