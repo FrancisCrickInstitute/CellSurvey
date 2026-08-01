@@ -66,6 +66,8 @@ def main():
                         help='Path to existing Zarr to resume from (skips image loading and spot detection)')
     args = parser.parse_args()
 
+    os.makedirs(args.plot_dir, exist_ok=True)
+
     imagepath = args.input_file
     zarr_path = args.output_file
     if not zarr_path.endswith('.zarr'):
