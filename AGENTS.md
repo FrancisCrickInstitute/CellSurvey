@@ -136,8 +136,6 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 
 - **Louvain community detection uses `networkx`**: `nx.community.louvain_communities()` with fixed seed 42 (for reproducibility). Requires `networkx>=3.4` in `pixi.toml`. The resolution parameter from `--community-resolution` is passed directly.
 
-- **Delaunay edge rendering samples 10% of edges**: For large datasets, the `delaunay_network.png` plot renders only `len(edges) // 10` edges (minimum 1) to keep the plot readable. Edge filtering by `max_edge_distance` happens upstream — only edges within the distance threshold are included.
-
 - **Zarr writes have basic error handling**: Both Zarr write points are wrapped in try/except — if a write fails, the error and path are printed to stderr and the script exits with code 1.
 
 - **`--resume-from` enables crash recovery**: If a Zarr already exists at the expected path, you can skip image loading and spot detection and resume from Stardist segmentation. When used with the segmented Zarr reuse logic, this provides two levels of checkpoint restart.

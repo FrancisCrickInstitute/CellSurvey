@@ -61,8 +61,7 @@ def run_muspan(sdata, cell_boundaries='stardist_boundaries', index_name='cell_id
     print("\nGenerating Delaunay network plot...")
     fig, ax = plt.subplots(**fig_kwargs)
     ax.scatter(coords[:, 0], coords[:, 1], c=cluster_labels, s=1.0, cmap='tab10')
-    sampled_edges = list(edges)[:max(1, len(edges) // 10)]
-    edge_coords = np.array([[coords[a], coords[b]] for a, b in sampled_edges])
+    edge_coords = np.array([[coords[a], coords[b]] for a, b in edges])
     for a, b in edge_coords:
         ax.plot([a[0], b[0]], [a[1], b[1]], 'k-', linewidth=0.25, alpha=0.3)
     ax.set_title(f"Delaunay network ({len(edges)} edges)")
