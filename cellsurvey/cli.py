@@ -144,23 +144,24 @@ def main():
 
         print("Done")
 
+    seg_zarr_path = zarr_path.replace('.zarr', '_seg.zarr')
     needs_stardist = True
     needs_aggregation = True
 
-    if os.path.exists(zarr_path):
+    if os.path.exists(seg_zarr_path):
         try:
-            dataset = spatialdata.read_zarr(zarr_path)
+            dataset = spatialdata.read_zarr(seg_zarr_path)
             if 'table' in dataset.tables and dataset.tables['table'] is not None:
-                print(f"Zarr with table found, skipping to clustering: {zarr_path}")
+                print(f"Segmented Zarr with table found, skipping to clustering: {seg_zarr_path}")
                 needs_stardist = False
                 needs_aggregation = False
                 sdata = dataset
             elif 'stardist_boundaries' in dataset.shapes:
-                print(f"Zarr has boundaries but no table, re-running aggregation only")
+                print(f"Segmented Zarr has boundaries but no table, re-running aggregation only")
                 needs_stardist = False
         except Exception:
             import shutil
-            shutil.rmtree(zarr_path, ignore_errors=True)
+            shutil.rmtree(seg_zarr_path, ignore_errors=True)
 
     if needs_stardist:
         print("Loading Zarr...")
@@ -218,19 +219,19 @@ def main():
             else:
                 sopa.aggregate(dataset)
 
-        print(f'Saving Zarr to {zarr_path}')
+        print(f'Saving Zarr to {seg_zarr_path}')
 
         try:
-            dataset.write(zarr_path, overwrite=True)
+            dataset.write(seg_zarr_path, overwrite=True)
         except Exception as e:
-            print(f"ERROR: Failed to write Zarr to {zarr_path}: {e}", file=sys.stderr)
+            print(f"ERROR: Failed to write segmented Zarr to {seg_zarr_path}: {e}", file=sys.stderr)
             sys.exit(1)
 
         print("Done")
 
         np.random.seed(42)
 
-        sdata = spatialdata.read_zarr(zarr_path)
+        sdata = spatialdata.read_zarr(seg_zarr_path)
 
     measurements = sdata.tables['table']
 
