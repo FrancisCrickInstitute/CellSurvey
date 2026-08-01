@@ -64,11 +64,11 @@ def assign_spots_to_cells(spatial_data, spots_key='spots', cell_boundaries='star
 
 def get_colors_for_communities(n_communities):
     if n_communities <= 10:
-        cmap = plt.cm.get_cmap('tab10')
+        cmap = plt.get_cmap('tab10')
     elif n_communities <= 20:
-        cmap = plt.cm.get_cmap('tab20')
+        cmap = plt.get_cmap('tab20')
     else:
-        cmap = plt.cm.get_cmap('hsv')
+        cmap = plt.get_cmap('hsv')
 
     colors = []
     for i in range(n_communities):
