@@ -132,7 +132,6 @@ def main():
 
         print("Done")
     else:
-        channel_names = BioImage(imagepath).channel_names
         dataset = sopa.io.ome_tif(imagepath, as_image=False)
         print(f'Saving Zarr to {zarr_path}')
 
@@ -206,10 +205,6 @@ def main():
 
     if needs_aggregation:
         print("Aggregating...")
-
-        # Close the read handle on the Zarr store before overwriting
-        if hasattr(dataset, 'close'):
-            dataset.close()
 
         # Force pandas to use plain object dtype for strings, not ArrowStringArray,
         # which can't be written to Zarr backing stores by anndata
