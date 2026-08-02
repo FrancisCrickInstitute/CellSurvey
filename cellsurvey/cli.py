@@ -229,19 +229,9 @@ def main():
             else:
                 sopa.aggregate(dataset)
 
-        print(f'Saving Zarr to {seg_zarr_path}')
-
-        try:
-            dataset.write(seg_zarr_path, overwrite=True)
-        except Exception as e:
-            print(f"ERROR: Failed to write segmented Zarr to {seg_zarr_path}: {e}", file=sys.stderr)
-            sys.exit(1)
-
-        print("Done")
-
         np.random.seed(42)
 
-        sdata = spatialdata.read_zarr(seg_zarr_path)
+        sdata = dataset
 
     measurements = sdata.tables['table']
 
@@ -289,14 +279,17 @@ def main():
                      sdata=sdata, intensity_df=intensity_df,
                      spots_with_cells=spots_with_cells)
 
-    # Persist cluster/community labels into the Zarr shapes
+    # Persist everything to Zarr
     sdata.shapes['stardist_boundaries']['kmeans_cluster'] = result['cluster_labels']
     sdata.shapes['stardist_boundaries']['community'] = result['community_labels']
     sdata.tables['table'].obs['community'] = pd.Categorical(result['community_labels'])
+    print(f'Saving Zarr to {seg_zarr_path}')
     try:
-        sdata.write(zarr_path.replace('.zarr', '_seg.zarr'), overwrite=True)
+        sdata.write(seg_zarr_path, overwrite=True)
     except Exception as e:
-        print(f"WARNING: Failed to write labels to Zarr: {e}", file=sys.stderr)
+        print(f"ERROR: Failed to write segmented Zarr to {seg_zarr_path}: {e}", file=sys.stderr)
+        sys.exit(1)
+    print("Done")
 
     adata = sdata.tables['table']
     sopa.spatial.spatial_neighbors(adata, radius=(args.radius_min, args.radius_max))
