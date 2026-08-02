@@ -79,7 +79,7 @@ The pipeline is split into modules under the `cellsurvey/` package. `run.py` is 
 
 6. **K-means clustering** (`cli.py` → `utils.py`): Extracts the intensity matrix from the AnnData table, standardizes with `StandardScaler`, runs k-means, and attaches cluster labels to `sdata.tables['table'].obs`.
 
-7. **Network analysis** (`cli.py` → `network_analysis.py`): Extracts centroids from the cell boundaries GeoDataFrame. Builds a `scipy.spatial.Delaunay` triangulation, filters edges by `max_edge_distance`. Constructs a `networkx.Graph` from the filtered edges and runs `nx.community.louvain_communities()` with the `community_resolution` parameter and fixed seed 42. Generates three plots: cells colored by k-means cluster, the Delaunay network (with a 10% edge sample rendered for performance), and cells colored by Louvain community. Returns a dict with `cell_ids`, `community_labels`, and `cluster_labels` arrays. Plots are saved to `output_dir` (passed as `args.plot_dir` from `cli.py`).
+7. **Network analysis** (`cli.py` → `network_analysis.py`): Extracts centroids from the cell boundaries GeoDataFrame. Builds a `scipy.spatial.Delaunay` triangulation, filters edges by `max_edge_distance`. Constructs a `networkx.Graph` from the filtered edges and runs `nx.community.louvain_communities()` with the `community_resolution` parameter and fixed seed 42. Returns a dict with `cell_ids`, `community_labels`, and `cluster_labels` arrays. Embeds `kmeans_cluster` and `community` labels into both the `stardist_boundaries` GeoDataFrame and the AnnData table obs. The segmented Zarr is written at this stage (single write after all labels are computed).
 
 8. **Spot-to-cell assignment** (`cli.py` → `utils.py`): Spatial join of spots to cell boundaries using GeoPandas (`gpd.sjoin` with `predicate='within'`). Returns `None` if no spots are present in the dataset (no guard needed in `cli.py` — `export_to_qupath` handles `None`).
 
@@ -103,12 +103,19 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 | `--tile-size` | `2048` | Tile size for blob detection |
 | `--overlap` | `50` | Tile overlap for blob detection |
 | `--workers` | `14` | Worker threads for blob detection |
+| `--min-sigma` | `2` | Minimum blob radius for spot detection |
+| `--max-sigma` | `5` | Maximum blob radius for spot detection |
+| `--num-sigma` | `5` | Number of sigma steps for blob detection |
 | `--n-clusters` | `10` | Number of k-means clusters |
 | `--community-resolution` | `0.1` | Louvain community detection resolution |
 | `--max-edge-distance` | `1000` | Max edge distance for Delaunay network |
 | `--radius-min` | `0` | Min radius for spatial neighbors graph |
 | `--radius-max` | `1000` | Max radius for spatial neighbors graph |
 | `--resume-from` | — | Path to existing Zarr to resume from (skips image loading and spot detection) |
+| `--geojson-path` | `./qupath_export.geojson` | Output path for QuPath GeoJSON |
+| `--fig-size` | `20` | Figure size for plots |
+| `--font-size` | `20` | Font size for plots |
+| `--axes-linewidth` | `3` | Axes line width for plots |
 
 ## Key gotchas
 
@@ -168,8 +175,8 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 - The Zarr write-then-immediate-read pattern between stages 3 and 4 materializes a clean checkpoint. If segmented Zarr reuse kicks in (stage 4), the read of the initial Zarr is skipped entirely.
 - The `sopa.segmentation.stardist()` call passes only `unique_channels[0]` as the channels argument, not all channel names.
 - Dynamic imports inside except blocks: `import shutil` is imported inside the segmented Zarr corruption handler to avoid pulling it in unnecessarily.
-- `run_muspan()` in `network_analysis.py` returns a plain dict with keys `cell_ids`, `community_labels`, `cluster_labels`.
-- `run_muspan()` accepts `output_dir` parameter for plot output (set to `args.plot_dir` from `cli.py`).
+- `run_network_analysis()` in `network_analysis.py` returns a plain dict with keys `cell_ids`, `community_labels`, `cluster_labels`.
+- `run_network_analysis()` accepts `output_dir` parameter for plot output (set to `args.plot_dir` from `cli.py`).
 
 ## File structure
 
@@ -180,7 +187,7 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 │   ├── __init__.py                   # Re-exports all public symbols
 │   ├── cli.py                        # main() with argparse and pipeline orchestration
 │   ├── blob_detection.py             # detect_blobs_in_tile, detect_blobs_tiled
-│   ├── network_analysis.py           # run_muspan (scipy Delaunay + networkx Louvain), fig_kwargs
+│   ├── network_analysis.py           # run_network_analysis (scipy Delaunay + networkx Louvain)
 │   ├── export.py                     # export_to_qupath
 │   └── utils.py                      # remove_channel_suffix, cluster_data, assign_spots_to_cells, get_colors_for_communities
 ├── Dockerfile                        # Ubuntu 24.04 + pixi + GPU-ready container

@@ -67,6 +67,9 @@ pixi run python run.py -i <path_to_input_file> -o <path_to_output_zarr> -p <path
 * `--tile-size`: Tile size in pixels for tiled processing (default: `2048`)
 * `--overlap`: Overlap between tiles in pixels (default: `50`)
 * `--workers`: Number of worker threads for parallel detection (default: `14`)
+* `--min-sigma`: Minimum blob radius for spot detection (default: `2`)
+* `--max-sigma`: Maximum blob radius for spot detection (default: `5`)
+* `--num-sigma`: Number of sigma steps for blob detection (default: `5`)
 
 ### Clustering and network analysis
 * `--n-clusters`: Number of k-means clusters (default: `10`)
@@ -80,8 +83,14 @@ pixi run python run.py -i <path_to_input_file> -o <path_to_output_zarr> -p <path
 ### GPU and Stardist segmentation
 * `--use-gpu`: Force GPU usage for Stardist segmentation. Without this flag, GPU is auto-detected and used if available. Useful when auto-detection fails (default: off).
 
-### Crash recovery
-* `--resume-from`: Path to an existing Zarr file to resume from. Skips image loading and spot detection, resuming directly at Stardist segmentation.
+### Output and visualization
+* `--geojson-path`: Output path for QuPath GeoJSON (default: `./qupath_export.geojson`)
+* `--fig-size`: Figure size for plots (default: `20`)
+* `--font-size`: Font size for plots (default: `20`)
+* `--axes-linewidth`: Axes line width for plots (default: `3`)
+
+### GPU and Stardist segmentation
+* `--use-gpu`: Force GPU usage for Stardist segmentation. Without this flag, GPU is auto-detected and used if available. Useful when auto-detection fails (default: off).
 
 ## Full Example
 
