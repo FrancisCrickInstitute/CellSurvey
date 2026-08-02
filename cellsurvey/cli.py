@@ -162,7 +162,7 @@ def main():
     needs_stardist = True
     needs_aggregation = True
 
-    if os.path.exists(seg_zarr_path):
+    if args.resume_from and os.path.exists(seg_zarr_path):
         try:
             dataset = spatialdata.read_zarr(seg_zarr_path)
             if 'table' in dataset.tables and dataset.tables['table'] is not None:
@@ -279,13 +279,23 @@ def main():
                      sdata=sdata, intensity_df=intensity_df,
                      spots_with_cells=spots_with_cells)
 
-    # Persist everything to Zarr
+    # Persist everything to Zarr.
+    # Write to a temporary path first, then replace the target path atomically
+    # to avoid "path in use" errors when the segmented Zarr was loaded for resumption.
+    import tempfile
+    import shutil as _shutil
     sdata.shapes['stardist_boundaries']['kmeans_cluster'] = result['cluster_labels']
     sdata.shapes['stardist_boundaries']['community'] = result['community_labels']
     sdata.tables['table'].obs['community'] = pd.Categorical(result['community_labels'])
     print(f'Saving Zarr to {seg_zarr_path}')
     try:
-        sdata.write(seg_zarr_path, overwrite=True)
+        tmpdir = tempfile.mkdtemp(dir=os.path.dirname(seg_zarr_path) or '.')
+        tmp_zarr = os.path.join(tmpdir, os.path.basename(seg_zarr_path))
+        sdata.write(tmp_zarr)
+        if os.path.exists(seg_zarr_path):
+            _shutil.rmtree(seg_zarr_path)
+        os.rename(tmp_zarr, seg_zarr_path)
+        os.rmdir(tmpdir)
     except Exception as e:
         print(f"ERROR: Failed to write segmented Zarr to {seg_zarr_path}: {e}", file=sys.stderr)
         sys.exit(1)
