@@ -28,7 +28,7 @@ from spatialdata.transformations import Identity
 
 from cellsurvey.utils import remove_channel_suffix, cluster_data, assign_spots_to_cells
 from cellsurvey.blob_detection import detect_blobs_tiled
-from cellsurvey.network_analysis import run_muspan
+from cellsurvey.network_analysis import run_network_analysis
 from cellsurvey.export import export_to_qupath
 
 
@@ -276,7 +276,7 @@ def main():
 
     print(f"\nUpdated obs columns: {list(sdata.tables['table'].obs.columns)}")
 
-    result = run_muspan(sdata, intensity_matrix=intensity_df,
+    result = run_network_analysis(sdata, intensity_matrix=intensity_df,
                                 comm_detect_res=args.community_resolution,
                                 max_edge_distance=args.max_edge_distance,
                                 output_dir=args.plot_dir,
