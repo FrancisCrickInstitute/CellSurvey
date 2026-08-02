@@ -289,6 +289,15 @@ def main():
                      sdata=sdata, intensity_df=intensity_df,
                      spots_with_cells=spots_with_cells)
 
+    # Persist cluster/community labels into the Zarr shapes
+    sdata.shapes['stardist_boundaries']['kmeans_cluster'] = result['cluster_labels']
+    sdata.shapes['stardist_boundaries']['community'] = result['community_labels']
+    sdata.tables['table'].obs['community'] = pd.Categorical(result['community_labels'])
+    try:
+        sdata.write(zarr_path.replace('.zarr', '_seg.zarr'), overwrite=True)
+    except Exception as e:
+        print(f"WARNING: Failed to write labels to Zarr: {e}", file=sys.stderr)
+
     adata = sdata.tables['table']
     sopa.spatial.spatial_neighbors(adata, radius=(args.radius_min, args.radius_max))
     cell_type_to_cell_type = sopa.spatial.mean_distance(adata, "kmeans_cluster", "kmeans_cluster")
