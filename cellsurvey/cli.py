@@ -312,6 +312,48 @@ def main():
     plt.savefig(os.path.join(args.plot_dir, 'umap_leiden.png'))
     plt.close()
 
+    # Cell density heatmap
+    centroids = sdata.shapes['stardist_boundaries'].geometry.centroid
+    x, y = centroids.x.values, centroids.y.values
+    bins = min(200, int(np.sqrt(len(x))))
+    density, xedges, yedges = np.histogram2d(x, y, bins=bins)
+    plt.figure(figsize=(10, 8))
+    plt.imshow(np.log1p(density.T), origin='lower', aspect='auto', cmap='inferno',
+               extent=[xedges[0], xedges[-1], yedges[0], yedges[-1]])
+    plt.colorbar(label='log(cell count + 1)')
+    plt.title('Cell density')
+    plt.tight_layout()
+    plt.savefig(os.path.join(args.plot_dir, 'cell_density.png'))
+    plt.close()
+
+    # Channel intensity heatmap per k-means cluster
+    cluster_means = intensity_df.groupby(sdata.tables['table'].obs['kmeans_cluster']).mean()
+    plt.figure(figsize=(max(8, cluster_means.shape[1] * 0.4), max(6, cluster_means.shape[0] * 0.5)))
+    sns.heatmap(cluster_means, cmap='RdBu_r', center=0, xticklabels=True, yticklabels=True,
+                cbar_kws={'label': 'Mean intensity (z-score)'})
+    plt.title('Mean channel intensity per k-means cluster')
+    plt.xlabel('Channel')
+    plt.ylabel('Cluster')
+    plt.tight_layout()
+    plt.savefig(os.path.join(args.plot_dir, 'cluster_intensity_heatmap.png'))
+    plt.close()
+
+    # Morphological features per cluster — cell area
+    obs_df = sdata.tables['table'].obs
+    morph_cols = [c for c in obs_df.columns if c in ('area',)]
+    if morph_cols:
+        import matplotlib.gridspec as gridspec
+        n_morph = len(morph_cols)
+        fig = plt.figure(figsize=(max(8, n_morph * 4), 6))
+        for i, col in enumerate(morph_cols):
+            ax = fig.add_subplot(1, n_morph, i + 1)
+            sns.swarmplot(data=obs_df, x='kmeans_cluster', y=col, ax=ax, size=1)
+            ax.set_title(f'{col} by cluster')
+            ax.set_xlabel('Cluster')
+        plt.tight_layout()
+        plt.savefig(os.path.join(args.plot_dir, 'morphology_by_cluster.png'))
+        plt.close()
+
 
 if __name__ == '__main__':
     main()
