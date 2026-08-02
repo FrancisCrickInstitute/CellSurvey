@@ -249,7 +249,7 @@ def main():
     print(f"Columns after removing duplicates: {list(intensity_df.columns)}")
     print(f"Number of cells: {len(intensity_df)}")
 
-    cluster_labels = cluster_data(intensity_df, n_clusters=args.n_clusters)
+    cluster_labels, cluster_distances = cluster_data(intensity_df, n_clusters=args.n_clusters)
 
     sdata.tables['table'].obs['kmeans_cluster'] = pd.Categorical(cluster_labels)
 
@@ -324,16 +324,48 @@ def main():
     plt.savefig(os.path.join(args.plot_dir, 'umap_leiden.png'))
     plt.close()
 
-    # Cell density heatmap
+    # Per-cluster cell density maps with distance-based soft weighting.
+    # Closer to cluster center → higher weight in that cluster's density.
+    obs = sdata.tables['table'].obs
     centroids = sdata.shapes['stardist_boundaries'].geometry.centroid
     x, y = centroids.x.values, centroids.y.values
     bins = min(200, int(np.sqrt(len(x))))
-    density, xedges, yedges = np.histogram2d(x, y, bins=bins)
-    plt.figure(figsize=(10, 8))
-    plt.imshow(np.log1p(density.T), origin='lower', aspect='auto', cmap='inferno',
-               extent=[xedges[0], xedges[-1], yedges[0], yedges[-1]])
-    plt.colorbar(label='log(cell count + 1)')
-    plt.title('Cell density')
+
+    cluster_labels_arr = obs['kmeans_cluster'].values
+    community_labels_arr = result['community_labels']
+
+    n_clusters = args.n_clusters
+    n_communities = len(set(community_labels_arr)) - (1 if -1 in community_labels_arr else 0)
+
+    exp_weights = np.exp(-cluster_distances)
+    exp_weights /= exp_weights.sum(axis=1, keepdims=True)
+
+    n_rows = n_clusters + n_communities
+    n_cols = 1
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(10, 6 * n_rows), squeeze=False)
+
+    for c in range(n_clusters):
+        weights = exp_weights[:, c]
+        density, xedges, yedges = np.histogram2d(x, y, bins=bins, weights=weights)
+        ax = axes[c, 0]
+        im = ax.imshow(np.log1p(density.T * 1000), origin='lower', aspect='auto', cmap='inferno',
+                       extent=[xedges[0], xedges[-1], yedges[0], yedges[-1]])
+        plt.colorbar(im, ax=ax, label='log(weighted density + 1)')
+        count = np.sum(cluster_labels_arr == c)
+        ax.set_title(f'Cluster {c} density ({count} cells)')
+
+    for comm in range(n_communities):
+        mask = community_labels_arr == comm
+        if not mask.any():
+            continue
+        density, xedges, yedges = np.histogram2d(x[mask], y[mask], bins=bins)
+        ax = axes[n_clusters + comm, 0]
+        im = ax.imshow(np.log1p(density.T), origin='lower', aspect='auto', cmap='inferno',
+                       extent=[xedges[0], xedges[-1], yedges[0], yedges[-1]])
+        plt.colorbar(im, ax=ax, label='log(cell count + 1)')
+        count = mask.sum()
+        ax.set_title(f'Community {comm} density ({count} cells)')
+
     plt.tight_layout()
     plt.savefig(os.path.join(args.plot_dir, 'cell_density.png'))
     plt.close()

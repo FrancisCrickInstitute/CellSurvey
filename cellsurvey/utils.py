@@ -20,13 +20,15 @@ def cluster_data(data, n_clusters=10, random_seed=42):
     kmeans = KMeans(n_clusters=n_clusters, random_state=random_seed)
     cluster_labels = kmeans.fit_predict(scaled_data)
 
+    distances = kmeans.transform(scaled_data)
+
     print(f"Clustering complete. Found {n_clusters} clusters.")
     print("Cluster distribution:")
     for i in range(n_clusters):
         count = np.sum(cluster_labels == i)
         print(f"  Cluster {i}: {count} cells ({100 * count / len(cluster_labels):.1f}%)")
 
-    return cluster_labels
+    return cluster_labels, distances
 
 
 def assign_spots_to_cells(spatial_data, spots_key='spots', cell_boundaries='stardist_boundaries'):
