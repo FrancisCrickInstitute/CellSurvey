@@ -1,15 +1,13 @@
 import os
+import json
 import numpy as np
-import matplotlib.pyplot as plt
 from scipy.spatial import Delaunay
-from scipy.spatial.distance import pdist, squareform
 import networkx as nx
 
 
 def run_muspan(sdata, intensity_matrix=None, cell_boundaries='stardist_boundaries', index_name='cell_id',
                output_dir='.', cell_colour='table: kmeans_cluster', comm_detect_res=0.1,
                max_edge_distance=1000, fig_size=20):
-    fig_kwargs = dict(figsize=(fig_size, fig_size))
     boundaries = sdata.shapes[cell_boundaries]
     boundaries.index.name = index_name
 
@@ -66,32 +64,24 @@ def run_muspan(sdata, intensity_matrix=None, cell_boundaries='stardist_boundarie
     n_communities = len(set(community_labels)) - (1 if -1 in community_labels else 0)
     print(f"Found {n_communities} communities")
 
-    print("\nGenerating cells plot...")
-    fig, ax = plt.subplots(**fig_kwargs)
-    scatter = ax.scatter(coords[:, 0], coords[:, 1], c=cluster_labels, s=3.0, cmap='tab10')
-    ax.set_title("Cells by k-means cluster")
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'cells.png'))
-    plt.close()
+    # Embed community and cluster labels into the shapes GeoDataFrame
+    boundaries['kmeans_cluster'] = cluster_labels
+    boundaries['community'] = community_labels
 
-    print("\nGenerating Delaunay network plot...")
-    fig, ax = plt.subplots(**fig_kwargs)
-    ax.scatter(coords[:, 0], coords[:, 1], c=cluster_labels, s=1.0, cmap='tab10')
-    edge_coords = np.array([[coords[a], coords[b]] for a, b in edges])
-    for a, b in edge_coords:
-        ax.plot([a[0], b[0]], [a[1], b[1]], 'k-', linewidth=0.25, alpha=0.3)
-    ax.set_title(f"Delaunay network ({len(edges)} edges)")
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'delaunay_network.png'))
-    plt.close()
-
-    print("\nGenerating communities plot...")
-    fig, ax = plt.subplots(**fig_kwargs)
-    ax.scatter(coords[:, 0], coords[:, 1], c=community_labels, s=5.0, cmap='tab20')
-    ax.set_title(f"Louvain communities ({n_communities} communities)")
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'communities_network.png'))
-    plt.close()
+    # Write summary statistics
+    stats = {
+        'n_cells': int(n_cells),
+        'n_clusters': int(len(set(cluster_labels)) - (1 if -1 in cluster_labels else 0)),
+        'n_communities': int(n_communities),
+        'n_edges': len(edges),
+        'max_edge_distance': max_edge_distance,
+        'community_resolution': comm_detect_res,
+        'cluster_sizes': {int(k): int(v) for k, v in zip(*np.unique(cluster_labels[cluster_labels >= 0], return_counts=True))},
+        'community_sizes': {int(k): int(v) for k, v in zip(*np.unique(community_labels[community_labels >= 0], return_counts=True))},
+    }
+    with open(os.path.join(output_dir, 'summary.json'), 'w') as f:
+        json.dump(stats, f, indent=2)
+    print(f"\nSummary statistics written to {os.path.join(output_dir, 'summary.json')}")
 
     return {
         'cell_ids': boundaries.index.values,
