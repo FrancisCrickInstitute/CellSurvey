@@ -33,9 +33,6 @@ from cellsurvey.export import export_to_qupath
 
 
 def main():
-    plt.rcParams['font.size'] = 20
-    plt.rcParams['axes.linewidth'] = 3
-
     parser = argparse.ArgumentParser()
     parser.add_argument('-i', '--input_file', help='Path to input image', required=True)
     parser.add_argument('-o', '--output_file', help='Path to output Zarr', required=True)
@@ -54,6 +51,12 @@ def main():
                         help='Tile overlap for blob detection (default: 50)')
     parser.add_argument('--workers', type=int, default=14,
                         help='Number of worker threads for blob detection (default: 14)')
+    parser.add_argument('--min-sigma', type=float, default=2,
+                        help='Minimum blob radius for spot detection (default: 2)')
+    parser.add_argument('--max-sigma', type=float, default=5,
+                        help='Maximum blob radius for spot detection (default: 5)')
+    parser.add_argument('--num-sigma', type=int, default=5,
+                        help='Number of sigma steps for blob detection (default: 5)')
     parser.add_argument('--n-clusters', type=int, default=10,
                         help='Number of clusters for k-means (default: 10)')
     parser.add_argument('--community-resolution', type=float, default=0.1,
@@ -66,7 +69,18 @@ def main():
                         help='Max radius for spatial neighbors graph (default: 1000)')
     parser.add_argument('--resume-from',
                         help='Path to existing Zarr to resume from (skips image loading and spot detection)')
+    parser.add_argument('--geojson-path', default='./qupath_export.geojson',
+                        help='Output path for QuPath GeoJSON (default: ./qupath_export.geojson)')
+    parser.add_argument('--fig-size', type=int, default=20,
+                        help='Figure size for network analysis plots (default: 20)')
+    parser.add_argument('--font-size', type=int, default=20,
+                        help='Font size for plots (default: 20)')
+    parser.add_argument('--axes-linewidth', type=int, default=3,
+                        help='Axes line width for plots (default: 3)')
     args = parser.parse_args()
+
+    plt.rcParams['font.size'] = args.font_size
+    plt.rcParams['axes.linewidth'] = args.axes_linewidth
 
     os.makedirs(args.plot_dir, exist_ok=True)
 
@@ -103,7 +117,8 @@ def main():
             ch_name = channel_names[ci]
             print(f'Finding blobs in channel {ch_name} (index {ci})...')
             blobs = detect_blobs_tiled(image[i], tile_size=args.tile_size, overlap=args.overlap, threshold=t,
-                                       n_workers=args.workers)
+                                       min_sigma=args.min_sigma, max_sigma=args.max_sigma,
+                                       num_sigma=args.num_sigma, n_workers=args.workers)
 
             frames.append(pd.DataFrame({
                 "x": blobs[:, 1],
@@ -264,12 +279,13 @@ def main():
     result = run_muspan(sdata, intensity_matrix=intensity_df,
                                 comm_detect_res=args.community_resolution,
                                 max_edge_distance=args.max_edge_distance,
-                                output_dir=args.plot_dir)
+                                output_dir=args.plot_dir,
+                                fig_size=args.fig_size)
 
     spots_with_cells = assign_spots_to_cells(sdata)
 
     export_to_qupath(result['cell_ids'], result['community_labels'], result['cluster_labels'],
-                     output_path='./qupath_export.geojson',
+                     output_path=args.geojson_path,
                      sdata=sdata, intensity_df=intensity_df,
                      spots_with_cells=spots_with_cells)
 
