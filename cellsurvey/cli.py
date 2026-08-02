@@ -324,6 +324,14 @@ def main():
     plt.savefig(os.path.join(args.plot_dir, 'umap_leiden.png'))
     plt.close()
 
+    # Clean up Dask workers that may keep the process alive
+    import dask.distributed as dd
+    try:
+        client = dd.get_client()
+        client.close()
+    except ValueError:
+        pass
+
     # Per-cluster cell density maps with distance-based soft weighting.
     # Closer to cluster center → higher weight in that cluster's density.
     obs = sdata.tables['table'].obs
