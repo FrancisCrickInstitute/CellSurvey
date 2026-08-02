@@ -70,7 +70,7 @@ The pipeline is split into modules under the `cellsurvey/` package. `run.py` is 
 
 4. **Stardist segmentation** (`cli.py`): Reads back the Zarr (materialized checkpoint), creates image patches via `sopa.make_image_patches()`, detects GPU availability with `tf.config.list_physical_devices('GPU')` and warns if absent, renames channel coordinates to include `_ch_` suffixes (e.g., `DAPI_ch_0`), and runs `sopa.segmentation.stardist()` with the `2D_versatile_fluo` model. Only the first unique channel is passed to Stardist.
 
-   **Segmented Zarr reuse**: Before running Stardist, checks if `_seg.zarr` already exists:
+   **Segmented Zarr reuse**: Only when `--resume-from` is specified, checks if `_seg.zarr` already exists before running Stardist:
    - Has `tables['table']` → skips both Stardist and aggregation, jumps to clustering
    - Has `stardist_boundaries` but no table → skips Stardist, re-runs aggregation only
    - Missing or corrupt → full Stardist + aggregation
@@ -143,7 +143,7 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 
 - **Louvain community detection uses `networkx`**: `nx.community.louvain_communities()` with fixed seed 42 (for reproducibility). Requires `networkx>=3.4` in `pixi.toml`. The resolution parameter from `--community-resolution` is passed directly.
 
-- **Zarr writes have basic error handling**: Both Zarr write points are wrapped in try/except — if a write fails, the error and path are printed to stderr and the script exits with code 1.
+- **Segmented Zarr write uses tempfile + atomic rename**: The segmented Zarr is written to a temporary directory and then atomically renamed into place. This prevents "path in use" errors that occur when `spatialdata.read_zarr()` has the backing store open (during `--resume-from` with a pre-existing `_seg.zarr`). After the rename, the temporary directory is cleaned up.
 
 - **`--resume-from` enables crash recovery**: If a Zarr already exists at the expected path, you can skip image loading and spot detection and resume from Stardist segmentation. When used with the segmented Zarr reuse logic, this provides two levels of checkpoint restart.
 
