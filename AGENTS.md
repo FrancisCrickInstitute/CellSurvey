@@ -178,6 +178,42 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 - `run_network_analysis()` in `network_analysis.py` returns a plain dict with keys `cell_ids`, `community_labels`, `cluster_labels`.
 - `run_network_analysis()` accepts `output_dir` parameter for plot output (set to `args.plot_dir` from `cli.py`).
 
+## Planned: Parameter Stability Sweep
+
+**Goal**: Quantify how robust community assignments are under parameter variation, producing per-cell confidence scores and consensus niches.
+
+### Parameters to explore
+| Parameter | Range | Rationale |
+|---|---|---|
+| `n_clusters` (k-means) | 5–20 | Different cluster resolutions change the expression-feature space fed into Louvain |
+| `community_resolution` (Louvain) | 0.05–1.0 | Directly controls community granularity |
+| `max_edge_distance` | 500–2000 | Changes which cells are neighbors in the Delaunay graph |
+
+(Re-running Stardist or blob detection with varied parameters is not in scope — too expensive. The sweep operates on an existing `_seg.zarr`.)
+
+### Phases
+
+**Phase 1 — Sweep**: For each combination (or random sample, e.g. 50–100 draws), re-run k-means → Delaunay → Louvain using the existing segmented Zarr. Stack results into an `(n_cells, n_sweeps)` assignment matrix.
+
+**Phase 2 — Stability metrics**:
+- **Co-occurrence matrix**: `(n_cells, n_cells)` — fraction of sweeps where cells A and B share a community
+- **Per-cell entropy**: how uniformly is a cell assigned across different community labels (low entropy = stable, high entropy = boundary/transitional)
+- **Switching probability**: for each pair, how often they switch community together vs. independently
+
+**Phase 3 — Consensus communities**: Hierarchical clustering on the co-occurrence matrix → final high-confidence niches. Export alongside per-cell confidence scores to GeoJSON.
+
+### Implementation sketch
+New module `cellsurvey/stability.py` with `run_stability_sweep(sdata, intensity_df, param_grid)` returning a dict of assignment matrix, co-occurrence, entropy, consensus labels, and confidence scores. CLI flag: `--stability-sweep` with optional `--sweep-iterations` (default 50).
+
+### Outputs
+- `stability_map.png` — spatial heatmap of per-cell entropy (uncertainty)
+- `co_occurrence_heatmap.png` — clustered co-occurrence matrix
+- `stability_scores` and `consensus_community` columns in GeoJSON export
+
+### Risks
+- Full grid search is `O(n_clusters × n_resolutions × n_distances)` — random sampling is more practical
+- Co-occurrence matrix is `O(n_cells²)` memory — sparse storage or chunking needed for large datasets
+
 ## File structure
 
 ```
