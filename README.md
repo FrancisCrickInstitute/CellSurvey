@@ -14,7 +14,7 @@ CellSurvey is a Python pipeline for image-based spatial biology/omics analysis b
 CellSurvey uses **pixi** for environment management targeting Linux (64-bit) with GPU support.
 
 > [!NOTE]
-> CellSurvey depends on TensorFlow and while TensorFlow will run on all operating systems, support for GPU processing is generally only supported on Linux — see [here](https://www.tensorflow.org/install) for more information. Windows and macOS are not supported via pixi.
+> CellSurvey depends on TensorFlow and while TensorFlow will run on all operating systems, support for GPU processing is generally only supported on Linux ,  see [here](https://www.tensorflow.org/install) for more information. Windows and macOS are not supported via pixi.
 
 ## Pixi (recommended)
 
@@ -32,7 +32,7 @@ From the repository root:
 pixi install
 ```
 
-That's it — pixi reads `pixi.toml` and sets up everything. To run:
+That's it ,  pixi reads `pixi.toml` and sets up everything. To run:
 
 ```bash
 pixi run python run.py -i <input_tiff> -o <output_zarr> -p <plot_dir>
@@ -100,7 +100,7 @@ pixi run python run.py -i ~/data/sample.tiff -o ~/results/output -p ~/results/pl
 
 # Visualising Results
 
-## Odon (recommended)
+## 1. Odon (recommended)
 
 [Odon](https://github.com/alexcoulton/odon) is a lightweight, GPU-accelerated viewer for SpatialData Zarr files. It supports multiscale image viewing with shape overlays colored by metadata columns.
 
@@ -112,13 +112,42 @@ To visualise CellSurvey output in Odon:
 
 **Note:** Only categorical columns with ≤24 distinct values appear in the dropdown. `kmeans_cluster` (10 values) and `community` (up to 24) will be visible. Channel intensity columns are available as continuous properties but are not shown as color-by options.
 
-## QuPath
+## 2. QuPath
 
-For traditional pathology workflows, CellSurvey exports a GeoJSON file compatible with [QuPath](https://qupath.github.io/):
+For traditional pathology workflows, CellSurvey exports a GeoJSON file compatible with [QuPath](https://qupath.github.io/). Open `qupath_export.geojson` via File → Import → GeoJSON. Cell boundaries appear as annotations colored by community, and RNA spot detections (when `--detect-blobs` is enabled) appear as detection objects.
+
+## 3. TissUUmaps
+
+[TissUUmaps](https://github.com/TissUUmaps/TissUUmaps4) is a GPU-accelerated browser-based viewer for spatial biology data. It runs entirely in-browser ,  no installation required ,  and supports SpatialData Zarr files natively via the OME-Zarr + SpatialData plugin.
+
+1. Open [TissUUmaps live](https://tissuumaps.github.io/TissUUmaps4/live/) or download the [latest release](https://github.com/TissUUmaps/TissUUmaps4/releases)
+2. Load the segmented Zarr file (`*_seg.zarr`)
+3. Cell boundaries appear as a shapes layer; link to metadata columns for color-by-cluster or color-by-community
+
+**Note:** TissUUmaps 4 is under active development. The stable release (v3) may not include SpatialData Zarr support ,  use the v4 development builds. Shapes require matching coordinate systems and an ID column for metadata linkage. A modern browser with WebGL 2 and File System API is required.
+
+## 4. napari + napari-spatialdata
+
+[napari](https://napari.org/) is a multi-dimensional image viewer for Python, and [napari-spatialdata](https://github.com/scverse/napari-spatialdata) adds native SpatialData Zarr support.
 
 ```bash
-# Open qupath_export.geojson in QuPath
-# File → Import → GeoJSON
+pip install "napari-spatialdata[all]"
 ```
 
-Cell boundaries appear as annotations colored by community, and RNA spot detections (when `--detect-blobs` is enabled) appear as detection objects.
+Open the segmented Zarr in napari:
+
+```python
+from napari_spatialdata import Interactive
+from spatialdata import SpatialData
+
+sdata = SpatialData.read("path/to/output_seg.zarr")
+Interactive(sdata).run()
+```
+
+Select a coordinate system, click `stardist_boundaries` to load cell shapes, then use the **View** widget (Plugins → napari-spatialdata → View) to color cells by cluster, community, or any channel intensity column. Double-click any `obs` column to apply it as the face color.
+
+**Performance notes for large datasets:**
+- Shape loading is slow above ~50K polygons due to triangulation. Use the `bermuda` backend for faster loading: `pip install "napari-spatialdata[all,bermuda]"`
+- Polygons are simplified when the shape count exceeds 100 (configurable via `napari_spatialdata.constants.config.POLYGON_THRESHOLD`)
+- If boundaries appear too simplified at high zoom, increase the threshold:<br/>
+  `from napari_spatialdata.constants import config; config.POLYGON_THRESHOLD = 50000`
