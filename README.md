@@ -89,11 +89,36 @@ pixi run python run.py -i <path_to_input_file> -o <path_to_output_zarr> -p <path
 * `--font-size`: Font size for plots (default: `20`)
 * `--axes-linewidth`: Axes line width for plots (default: `3`)
 
-### GPU and Stardist segmentation
-* `--use-gpu`: Force GPU usage for Stardist segmentation. Without this flag, GPU is auto-detected and used if available. Useful when auto-detection fails (default: off).
+### Crash recovery
+* `--resume-from`: Path to an existing Zarr file to resume from. Skips image loading and spot detection, resuming directly at Stardist segmentation.
 
 ## Full Example
 
 ```bash
 pixi run python run.py -i ~/data/sample.tiff -o ~/results/output -p ~/results/plots/
 ```
+
+# Visualising Results
+
+## Odon (recommended)
+
+[Odon](https://github.com/alexcoulton/odon) is a lightweight, GPU-accelerated viewer for SpatialData Zarr files. It supports multiscale image viewing with shape overlays colored by metadata columns.
+
+To visualise CellSurvey output in Odon:
+
+1. [Install Odon](https://github.com/alexcoulton/odon#installation)
+2. Open the segmented Zarr file (`*_seg.zarr`)
+3. The `stardist_boundaries` shape layer can be colored by cluster or community using the **"Color by"** dropdown
+
+**Note:** Only categorical columns with ≤24 distinct values appear in the dropdown. `kmeans_cluster` (10 values) and `community` (up to 24) will be visible. Channel intensity columns are available as continuous properties but are not shown as color-by options.
+
+## QuPath
+
+For traditional pathology workflows, CellSurvey exports a GeoJSON file compatible with [QuPath](https://qupath.github.io/):
+
+```bash
+# Open qupath_export.geojson in QuPath
+# File → Import → GeoJSON
+```
+
+Cell boundaries appear as annotations colored by community, and RNA spot detections (when `--detect-blobs` is enabled) appear as detection objects.
