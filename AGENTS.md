@@ -276,6 +276,96 @@ Segmented imaging (XY + markers)
 - **Portable but heavier than the other two tools**: GMM (`sklearn.mixture.GaussianMixture`), k-NN (`scipy.spatial.cKDTree`), and the EM mean-field loop are all reproducible in Python, but the CELESTA R code is a single large file (`CELESTA_functions.R`, ~25-slot S4 object) with non-trivial logic.
 - **Caveats**: requires a user-defined marker-signature/lineage matrix (domain input); R-only (`Rmixmod`, `spdep`, `ggplot2`, `zeallot`); heuristic thresholds (`max_iteration`, `cell_change_threshold`, anchor high/low) need tuning.
 
+## Reference: WassersteinWormhole (dpeerlab)
+
+**Note (for future consideration):** [WassersteinWormhole](https://github.com/dpeerlab/WassersteinWormhole) (Haviv & Pe'er lab et al., ICML 2024; arXiv:2404.09411) learns a **Transformer autoencoder embedding of point-clouds** such that Euclidean distance in latent space approximates **optimal-transport / Wasserstein distance** between the original point-clouds. Not integrated into CellSurvey — concepts retained for potential reuse.
+
+### What it does
+- Python 3 library (JAX/Flax + OTT-JAX); two classes:
+  - `Wormhole` — embeds general weighted point-clouds (per-point features), with an encoder (embedding) and decoder (reconstruct point-clouds for barycenter/interpolation).
+  - `SpatialWormhole` — operates on `AnnData` with spatial coords in `.obsm['spatial']`; treats each cell's **k-NN spatial "niche"** as a point-cloud of expression profiles and embeds niches so Euclidean distance ≈ OT distance between their expression distributions.
+- Supports OT variants: W1/S1 (Sinkhorn), W2/S2, Gromov-Wasserstein (GW/GS), plus Riemannian (`_R`) variants; automatic Sinkhorn iteration count and distance scaling for numerical stability.
+- Enables **O(n) Wasserstein-distance approximation** via embedding, plus learned **Wasserstein barycenters / OT interpolation** through the decoder.
+
+### Relevance to CellSurvey
+- **Same input convention as CellSurvey**: `SpatialWormhole` natively consumes AnnData + `.obsm['spatial']`, exactly what `sopa.aggregate()` produces (`sdata.tables['table']`). Low-friction integration point.
+- **Niches ≈ CellSurvey's communities**: embedding each cell's spatial k-NN neighborhood is conceptually parallel to our Delaunay/Louvain network analysis — Wormhole gives a **continuous, OT-principled niche distance** instead of discrete Louvain labels. Could complement or validate the deterministic community assignments.
+- **Potential uses**: (1) niche/domain annotation as an alternative to k-means + Louvain; (2) a principled distance metric for the Planned Stability Sweep's co-occurrence/consensus clustering; (3) cross-sample comparison (OT distance between tissue niches) that parallels PANORAMIC's cross-sample intent.
+- **Trade-offs**: brings a heavy JAX/Flax/OTT-JAX stack (GPU-recommended) on top of TensorFlow already present in CellSurvey — a second DL framework in one environment. Requires model training per dataset (not a drop-in analytical step).
+- **Caveats**: research code (early API); needs a tuned `k` for niche size; `SpatialWormhole` save/load re-supplies AnnData at load; not a trajectory-inference tool itself (OT distance supports ordering/interpolation but no pseudotime module).
+
+## Reference: PhenoGraph (dpeerlab)
+
+**Note (for future consideration):** [PhenoGraph](https://github.com/dpeerlab/PhenoGraph) (Levine et al., Cell 2015) is a **graph-based clustering method for high-dimensional single-cell data** — a k-NN similarity graph (Jaccard or Gaussian kernel) followed by **Louvain/Leiden community detection**. Not integrated into CellSurvey — concepts retained for potential reuse.
+
+### What it does
+- `phenograph.cluster(data)` takes an `(n_cells × d_markers)` array (or a precomputed sparse kNN graph) and returns `(communities, graph, Q)` where `communities` is a per-cell integer label array (`-1` = outlier) and `Q` is the graph modularity.
+- Pipeline: kNN search (k=30) → Jaccard/Gaussian affinity graph → symmetrize → **Louvain** (bundled C++ binaries) or optional **Leiden** (`leidenalg`) modularity optimization → small clusters (`min_cluster_size`=10) relabeled as outliers.
+- Also ships `classify()` — semi-supervised label propagation (random-walk/Laplacian) for assigning unlabeled cells.
+- Lightweight Python stack: `numpy`, `scipy`, `scikit-learn`, `python-igraph`/`leidenalg`, `psutil`.
+
+### Relevance to CellSurvey
+- **Direct overlap with our clustering stage**: CellSurvey's k-means (stage 6) and networkx Louvain (stage 7) are two separate steps; PhenoGraph does a unified **graph-based phenotype clustering** that returns both communities *and* a modularity score `Q` we currently don't compute.
+- **Extremely low-friction integration**: pure Python, and it already depends on `python-igraph`/`leidenalg` — same family as CellSurvey's existing `python-igraph` (Leiden backend) and `networkx` (Louvain). No new DL framework.
+- **Potential role**: a drop-in alternative to k-means for cell-type assignment (marker-intensity-based, no `n_clusters` to guess — communities emerge from the graph), and a way to quantify clustering quality via modularity.
+- **Caveats**: operates on marker/expression space only — **ignores spatial coordinates** (unlike our Delaunay spatial graph). For spatial-aware clustering you'd feed coordinates as features or chain it with our neighbor graph. Uses its own bundled C++ Louvain binaries (vs. our `networkx` Louvain) unless the Leiden backend is chosen.
+- **Overlap note re: CELESTA**: PhenoGraph (graph clustering, marker-only) and CELESTA (GMM + spatial propagation) are alternative cell-typing approaches — PhenoGraph is simpler and coordinate-agnostic; CELESTA is spatial-aware and lineage-guided.
+
+## Reference: segger (dpeerlab)
+
+**Note (for future consideration):** [segger](https://github.com/dpeerlab/segger) (Heidari et al., bioRxiv 2025.03.14.643160; Pe'er & Gerstung labs) is a **GNN-based cell segmentation tool for imaging-based spatial transcriptomics (IST)** — Xenium/CosMx/MERSCOPE. Not integrated into CellSurvey — concepts retained for potential reuse.
+
+### What it does
+- **Transcript-centric, non-image** segmentation: treats each transcript as a graph node and segmentation as **transcript→cell link prediction** on a heterogeneous graph (`tx` transcript nodes, `bd` cell/boundary nodes, GATv2 attention layers). Assigns transcripts to their cell of origin, then aggregates into cells.
+- Needs only **transcript coordinates + nucleus masks** — no pixel-level imaging.
+- Trains per-dataset (optionally leveraging scRNA-seq gene-correlation references); metric-learning (L2-normalized embeddings = cosine) with triplet + segmentation losses.
+- GPU-native (PyTorch Geometric / PyTorch Lightning + RAPIDS cuDF/cuML/cuGraph/cuSpatial/CuPy); atlas-scale speed via tiling.
+- **Exports to SOPA / SpatialData conventions** (`export` subcommand → `anndata.h5ad`, `transcripts.parquet` with `segger_cell_id`, `cell_boundaries.parquet`).
+
+### Relevance to CellSurvey
+- **High interoperability**: both use SOPA/SpatialData + pixi; segger's output (cell-by-gene AnnData + boundary polygons) is the natural input to CellSurvey's aggregation/clustering/network stages. Could slot in as an alternative segmentation front-end.
+- **Different segmentation paradigm**: CellSurvey uses **Stardist** (image-based, star-convex nuclei on a DAPI channel). Segger is for **probe/target-based IST** where transcripts (not just nuclei) define cells — irrelevant to CellSurvey's microscopy/OME-TIFF DAPI workflow but directly relevant if the project ever ingests Xenium/CosMx data.
+- **Key conceptual asset — "transcript-to-cell assignment"**: segger explicitly solves the assignment-accuracy problem that CellSurvey handles heuristically via `gpd.sjoin(predicate='within')` spot-to-cell assignment (stage 8 / `assign_spots_to_cells`). Segger's GNN/link-prediction approach is a more principled alternative when spots lie near cell boundaries.
+- **Heavy stack trade-off**: requires PyTorch + PyG + full RAPIDS/CuPy GPU toolchain — a *third* ML framework on top of CellSurvey's TensorFlow, and a second segmenter. High integration cost; only justified if IST data becomes a target.
+- **Caveats**: per-dataset training (not a pretrained drop-in); very thin README (algorithm lives in the preprint + external docs site); v0.2.0 research code.
+
+## Reference: cellina (PMBio)
+
+**Note (for future consideration):** [cellina](https://github.com/PMBio/cellina) is a **dual-encoder VAE for spatial transcriptomics** built on scvi-tools. It models how a cell's transcription changes when its local neighborhood is altered — "tissue graph counterfactuals." Not integrated into CellSurvey — concepts retained for potential reuse.
+
+### What it does
+- Splits each cell into an **intrinsic latent `z`** (cell identity) and a **spatial-context latent `s`** (neighborhood/microenvironment), then reconstructs counts from `[z; s]` under a Negative Binomial likelihood.
+- Two variants: `Cellina` (MLP spatial encoder over degree-normalized neighbor pseudobulk) and `CellinaGCN` (GATv2/GCN message-passing over the spatial connectivity graph).
+- **Supervised disentanglement**: cell-type classifier anchors `z`; an adversarial discriminator predicts spatial *domain* from `z` to force microenvironment signal into `s`; optional graph-contrastive loss on `s`.
+- **Counterfactual inference** (the key feature): `get_counterfactual_expression` (edge perturbation — rewire a cell's neighbors) and `get_perturbed_expression` (node perturbation — modify neighbor gene expression in silico, e.g. ligand knockout/overexpression), to read out downstream effects on the focal cell.
+- Input: `AnnData` counts + spatial connectivity (`obsp`) / neighbor features (`obsm`); `spatial_neighbors()` builds squidpy/mistyR-style kNN graphs. Output: latent arrays + counterfactual count matrices.
+
+### Relevance to CellSurvey
+- **Complementary, sits after CellSurvey's core**: CellSurvey produces an aggregated AnnData (cell-by-gene + centroids + community labels). Cellina consumes exactly that shape and answers a **different question** — "what would this cell's expression be under a different neighborhood?" (mechanistic signaling/perturbation screen), which CellSurvey doesn't attempt.
+- **No overlap with segmentation/blobs**: cellina is transcriptomics-only (no image/stain deconvolution, no segmentation). It is a *downstream* consumer of the same kind of AnnData CellSurvey emits.
+- **Potential use**: turning CellSurvey's community/niche labels and spot-to-cell assignments into perturbation experiments — e.g. knock out a ligand in one community and predict transcriptional response in neighboring cells (biomarker/signaling discovery).
+- **Trade-offs**: brings scvi-tools + PyTorch Geometric + torch-scatter/sparse — another DL stack alongside TensorFlow. Requires per-dataset training. Spatial context is graph/coordinate based (not image).
+- **Caveats**: research code (v0.7.1/v1.1.0 paths); needs cell-type + domain labels for the disentanglement objectives to work well; CPU version available but GPU expected for scale.
+
+## Reference: GBM_analysis (PMBio)
+
+**Note (for future consideration):** [GBM_analysis](https://github.com/PMBio/GBM_analysis) is the **analysis-code companion to the GBM-Space atlas** (single-cell snRNA+snATAC multi-omics of 12 IDH-wildtype glioblastomas). It is the interpretation layer on top of **scDoRI** (bioFAM/scDoRI), which infers enhancer-mediated gene regulatory networks (eGRNs) as "topics." Mostly *not* aligned with CellSurvey — retained mainly for methodological reference.
+
+### What it does
+- `python_scripts/topic_regulation.py` computes **Topic Activation Potential (TAP)** and **Topic Repression Score (TRS)** between scDoRI topics — a "regulation potential" of TF→target-topic links, weighted by epigenetic priming (ATAC accessibility) and significance-tested against precomputed permutation nulls (1000 per topic pair).
+- `plasticity_analysis.ipynb` measures **epigenetic plasticity** as the entropy of an ATAC state-classifier's predicted probabilities.
+- `tf_screen/` is a **55-TF gain-of-function screening pipeline** (Harmony batch correction, LogisticRegression state/topic classifiers, fold-change/percentile consensus differential testing, dose-response metacells, Wilcoxon DE).
+- Stack: `numpy`, `pandas`, `scikit-learn`, `scipy`, `statsmodels`, `scanpy`/`harmonypy`; deterministic with seed 42.
+
+### Relevance to CellSurvey
+- **Low direct overlap**: this is RNA/ATAC regulatory-network analysis for a cancer atlas — no imaging, no segmentation, no cell-boundary/spatial-community logic matching CellSurvey's pipeline.
+- **Borrowable methodology** (most valuable for our Planned Stability Sweep):
+  - **Permutation-null significance with precomputed nulls**: cell-by-cell "is this association real?" — the exact pattern CellSurvey's stability sweep could adopt (precompute shuffled nulls once, then threshold cheaply). Same family as PANORAMIC's bootstrap and Spatial_Permutation's label shuffle.
+  - **Entropy-of-classifier-probabilities as a "plasticity/uncertainty" score** — conceptually identical to the sweep's per-cell entropy confidence metric.
+  - **Epigenetic-priming-weighted regulation (TAP/TRS)** — a principled way to combine a signal with a per-regulator confidence weight, analogous to weighting CLQ/Delaunay edges.
+- **Not worth integrating**: domain-specific (GBM topics from scDoRI), requires scDoRI output as input, and no path through CellSurvey's data flow.
+- **Caveats**: pandas <3 required (chained-assignment reliance); `scale_topic_regulation_target_topic` mutates in place (over-normalizes if called twice); large precomputed null files.
+
 ## File structure
 
 ```
