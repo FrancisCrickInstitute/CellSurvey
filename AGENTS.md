@@ -214,6 +214,68 @@ New module `cellsurvey/stability.py` with `run_stability_sweep(sdata, intensity_
 - Full grid search is `O(n_clusters × n_resolutions × n_distances)` — random sampling is more practical
 - Co-occurrence matrix is `O(n_cells²)` memory — sparse storage or chunking needed for large datasets
 
+## Reference: PANORAMIC (plevritis-lab)
+
+**Note (for future consideration):** [PANORAMIC](https://github.com/plevritis-lab/panoramic) is an R/Bioconductor package for **multi-sample meta-analysis of spatial colocalization**. It is NOT integrated into CellSurvey yet — this section records the concepts worth borrowing or adopting downstream.
+
+### What it does
+- Takes pre-segmented single-cell spatial data (`SpatialExperiment` objects with a `cell_type` label).
+- Computes within-sample, cell-type-pair spatial statistics: default `local_comp_enrichment` (edge-corrected, bootstrapped percentage-point enrichment within radius `r`), plus L/K-function alternatives (`Lcross`, `Kcross`, etc.).
+- Pools sample-level effects with **multilevel random-effects meta-analysis** (`metafor::rma.mv`) to test **group-level differential colocalization** (case vs. control), producing `beta_diff`, `p_diff`, `fdr_diff`.
+- `create_spatial_network()` builds an igraph network of cell-type pairs (edge weight `|z_diff|`, FDR-filtered) with **Leiden** community detection and centrality metrics.
+
+### Relevance to CellSurvey
+- **Complementary, not overlapping**: CellSurvey is single-sample and ends at per-cell community/cluster labeling. PANORAMIC adds the **cross-sample statistical hypothesis testing** layer that CellSurvey lacks. It would run *after* CellSurvey.
+- **Integration path**: CellSurvey's GeoJSON/AnnData output would need conversion to `SpatialExperiment` (cell coordinates + `cell_type` label in `colData`). Modest adapter only.
+- **Methodology worth borrowing** (already conceptually aligned with our Planned Stability Sweep):
+  - Bootstrap + uncertainty pooling mirrors the sweep's co-occurrence/entropy/consensus goals.
+  - Cell-type-granular Leiden network clustering (PANORAMIC) vs. our per-cell Louvain (`network_analysis.py`).
+  - K/L-function edge-corrected enrichment as a principled alternative to our Delaunay `max_edge_distance` filtering.
+- **Caveats**: R-only (R ≥ 4.6; `spatstat`, `metafor`, `igraph`) — would require an R sidecar/`rpy2`, or a Python port (scipy/numpy for K/L functions + `statsmodels` for meta-analysis). Not a segmentation tool (assumes cells already segmented). Early-stage (v0.99.3, API may shift).
+
+## Reference: Spatial Permutation & Normalization (plevritis-lab)
+
+**Note (for future consideration):** [Spatial_Permutation_and_Normalization](https://github.com/plevritis-lab/Spatial_Permutation_and_Normalization) is an R script for **significance-testing and normalizing cell-cell colocalization** (colocation quotient, CLQ) on multiplexed immunofluorescence data. Not integrated into CellSurvey — concepts retained for potential reuse.
+
+### What it does
+- Computes the **colocation quotient (CLQ)** for each cell-type pair over a fixed k-nearest-neighbor set (k=20, via `spdep::knearneigh`): `CLQ_{b→a} = (C_{b→a}/N_a) / (N_b/(N−1))`.
+- **Permutation testing**: spatial coordinates stay fixed; cell-type labels are permuted (500 iterations, preserving proportions) to build a null CLQ distribution per pair. Observed CLQs outside the 5th/95th percentile tails are deemed significant positive/negative colocalizations.
+- **Normalization**: tail-clipped Z-score (default right 0.05 / left 0) to make CLQs comparable across samples/conditions, especially for rare cell types whose null distributions are naturally wider.
+- Batch-oriented: globs all `*_cell_type_assignment.csv` files and processes each sample.
+
+### Relevance to CellSurvey
+- **Different spatial statistic family**: CLQ (k-NN co-occurrence quotient) vs. our Delaunay `max_edge_distance` graph + Louvain. CLQ + permutation gives a **p-value per cell-type pair**, which CellSurvey's deterministic Louvain labeling does not provide.
+- **Directly complementary to our Planned Stability Sweep**: Panoramic's bootstrap and this tool's permutation null both answer "is this spatial association significant?" — the same uncertainty question the sweep targets per-cell.
+- **Portable to Python**: the core logic is small — k-NN via `scipy.spatial.cKDTree`, CLQ matrix via numpy, permutation null via numpy label shuffling (`numpy.random.default_rng`), and normalization via tail-clipped Z-scoring. No heavy dependencies.
+- **Inputs**: requires per-cell cell-type assignments + X/Y coordinates (exactly what CellSurvey outputs via GeoJSON/AnnData obs), though it assumes CELESTA's CSV format upstream.
+- **Caveats**: R-only (needs `spdep`, `ggplot2`, `dplyr`), single-script architecture with a duplicated function definition quirk, and rare-population handling (cells with ≤5 of a type get CLQ=0) is heuristic. Not a segmentation tool.
+
+## Reference: CELESTA (plevritis-lab)
+
+**Note (for future consideration):** [CELESTA](https://github.com/plevritis-lab/CELESTA) (CELl typE identification with SpaTiAl information; Zhang & Li et al., Nature Methods 2022) is an R package for **unsupervised, spatial-aware cell-type identification** in multiplexed in situ imaging (CODEX, MIBI/IMC). Not integrated into CellSurvey — concepts retained for potential reuse.
+
+### What it does
+- Consumes **already-segmented cells** (X/Y coordinates + per-marker expression columns); does NOT segment.
+- Assigns cell types with **no training labels**: fits a per-marker Gaussian Mixture Model (`Rmixmod`) → activation probability, then combines expression-based scoring with **spatial neighborhood context** via EM-style mean-field propagation.
+- Works in **hierarchical rounds** (coarse lineage → fine subtype), with "anchor" vs. "index" cell assignment, iterative prior-matrix updates, and a distance-decaying `beta` spatial term.
+- Optional `FilterCells()` QC removes doublets/artifacts (all markers uniformly high/low).
+- Output: per-cell `*_cell_type_assignment.csv` with per-round and final labels; needs a user-defined marker-signature matrix (1/0/NA per marker per type).
+
+### Relationship across the plevritis-lab toolkit (sequential pipeline)
+```
+Segmented imaging (XY + markers)
+   → CELESTA           : cell-type assignment (*_cell_type_assignment.csv)
+   → Spatial_Perm...   : per-sample CLQ colocalization + permutation testing
+   → PANORAMIC         : cross-sample/group meta-analysis of colocalization
+```
+
+### Relevance to CellSurvey
+- **Overlaps CellSurvey's cell-typing intent, different method**: CellSurvey types cells implicitly via k-means on aggregated intensities + Louvain communities. CELESTA type-calls *with a spatial prior* and explicit marker signatures — more interpretable, unsupervised, and lineage-aware.
+- **Spatial propagation is thematically aligned** with our Delaunay/Louvain network analysis and the Planned Stability Sweep (both use neighbors to refine assignments; CELESTA's `beta` distance-decay is a cleaner alternative to `max_edge_distance`).
+- **Potential role**: a post-Stardist cell-type annotation step between aggregation (stage 5) and clustering/network (stages 6-7), replacing the generic k-means label with marker-informed, spatially propagated types.
+- **Portable but heavier than the other two tools**: GMM (`sklearn.mixture.GaussianMixture`), k-NN (`scipy.spatial.cKDTree`), and the EM mean-field loop are all reproducible in Python, but the CELESTA R code is a single large file (`CELESTA_functions.R`, ~25-slot S4 object) with non-trivial logic.
+- **Caveats**: requires a user-defined marker-signature/lineage matrix (domain input); R-only (`Rmixmod`, `spdep`, `ggplot2`, `zeallot`); heuristic thresholds (`max_iteration`, `cell_change_threshold`, anchor high/low) need tuning.
+
 ## File structure
 
 ```
