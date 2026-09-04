@@ -366,6 +366,22 @@ Segmented imaging (XY + markers)
 - **Not worth integrating**: domain-specific (GBM topics from scDoRI), requires scDoRI output as input, and no path through CellSurvey's data flow.
 - **Caveats**: pandas <3 required (chained-assignment reliance); `scale_topic_regulation_target_topic` mutates in place (over-normalizes if called twice); large precomputed null files.
 
+## Reference: IMAXT (Cancer Grand Challenge)
+
+**Note (for future consideration):** [IMAXT](https://github.com/IMAXT) ("Imaging and Molecular Annotation of Xenografts and Tumours") is the code org for a **Cancer Research UK Cancer Grand Challenge** (Hannon lab, CRUK Cambridge) that built 3D single-cell molecular tumour maps combining imaging mass cytometry (IMC), MERFISH, and serial two-photon tomography. Not integrated into CellSurvey — one repo is worth noting, the rest are off-topic.
+
+### Relevant repos
+- **`imc-nuclear-segmentation`** — full **IMC analysis pipeline**: reads IMC images → watershed segmentation → per-cell channel-intensity catalog (positions, shapes, per-antibody intensities). Same goal as CellSurvey's StarDist → aggregation stage, but via **watershed** instead of StarDist. A useful *reference* for watershed-based segmentation and intensity cataloging, not something to adopt wholesale.
+- **`mcdlib` / `imdlib`** — C++ parsers for raw IMC **`.mcd` / `.imd`** file formats (Fluidigm Hyperion output). Only relevant if CellSurvey ever ingests raw Hyperion IMC files directly instead of pre-converted OME-TIFF.
+- **`stardist`** (fork) — IMAXT's copy of StarDist; already used by CellSurvey, nothing new.
+
+### Not relevant (off-topic for CellSurvey)
+- `MERlin` (MERFISH decoding), `stpt-mosaic-pipeline` (serial two-photon tomography), `Bressan_etal_2021_code` (3D VR tumour models), `owl-pipeline-client/server` (Kubernetes job scheduler), `imaxt-image` (generic image utilities).
+
+### Relevance to CellSurvey
+- **Low adoption value, some reference value**: CellSurvey already does StarDist + `sopa.aggregate()`. The only genuinely useful concepts are (1) watershed segmentation as an alternative to StarDist (a lighter-weight option for non-nuclear cell structures), and (2) raw `.mcd`/`.imd` ingestion via `mcdlib`/`imdlib` if direct Hyperion IMC input is ever needed.
+- **Caveats**: original IMAXT code is largely astronomy-institute-owned and not actively maintained as a general-purpose library; most repos are forks or publication-specific.
+
 ## File structure
 
 ```
