@@ -382,6 +382,25 @@ Segmented imaging (XY + markers)
 - **Low adoption value, some reference value**: CellSurvey already does StarDist + `sopa.aggregate()`. The only genuinely useful concepts are (1) watershed segmentation as an alternative to StarDist (a lighter-weight option for non-nuclear cell structures), and (2) raw `.mcd`/`.imd` ingestion via `mcdlib`/`imdlib` if direct Hyperion IMC input is ever needed.
 - **Caveats**: original IMAXT code is largely astronomy-institute-owned and not actively maintained as a general-purpose library; most repos are forks or publication-specific.
 
+## Reference: novae (prism-oncology)
+
+**Note (for future consideration):** [novae](https://github.com/prism-oncology/novae) is a **graph-based foundation model for spatial domain / niche assignment** on spatial transcriptomics data (Nature Methods 2025). It is the **highest-priority integration candidate** reviewed so far — same lab and ecosystem as Sopa, and it overlaps (rather than merely complements) CellSurvey's clustering/network stages. Not integrated yet.
+
+### What it does
+- Self-supervised deep clustering on graphs (SwAV / Sinkhorn-Knopp prototyping): a GAT-style `GraphEncoder` learns per-cell representations **within their local spatial neighborhood**, then assigns cells to hierarchical **spatial domains** (niches), not cell types.
+- **Zero-shot**: pretrained models on Hugging Face (`novae-human-0`, `-mouse-0`, `-brain-0`); inference on a new slide needs no training (`compute_representations(adata, zero_shot=True)`); optional short `fine_tune`.
+- **Native batch-effect correction** across slides/panels/technologies (`batch_effect_correction`).
+- Built-in downstream utilities: spatially variable genes, pathway scores, PAGA domain architecture/trajectory, domain proportions, and **LLM-based niche labeling** (`label_domains`).
+- Multimodal extension: fuses H&E histology embeddings (CONCH) with transcriptomics (`compute_histo_embeddings`).
+
+### Relevance to CellSurvey
+- **Same stack and input convention**: Novae consumes `AnnData` + `.obsm['spatial']`, i.e. exactly what CellSurvey's `sopa.aggregate()` produces (stage 5). It is part of the same scverse/Sopa/SpatialData ecosystem CellSurvey already builds on.
+- **Direct overlap with stages 6–7**: Novae's spatial-domain assignment replaces/upgrades CellSurvey's ad-hoc k-means (`cluster_data`) + Delaunay/Louvain community detection (`run_network_analysis`) with a pretrained, hierarchical, biologically meaningful niche labeling that needs no `n_clusters` guess.
+- **Enables cross-sample coherence**: Novae's native batch correction + consistent cross-slide labels directly supports a future multi-sample mode, aligning with the PANORAMIC / cross-sample goals already noted.
+- **Synergy with the Planned Stability Sweep**: the sweep's co-occurrence/entropy machinery could quantify Novae's domain stability, giving confidence scores on top of a black-box foundation model.
+- **Trade-offs**: heavy PyTorch + PyTorch Geometric + Lightning stack (a second DL framework alongside TensorFlow/Stardist), though it is the most natural addition since Sopa shares the scverse ecosystem. Foundation model is less transparent than deterministic k-means/Louvain. Primary target modality is transcriptomics (Xenium/MERSCOPE/CosMx); antibody/OME-TIFF + blob-detected transcripts is not the canonical use case and should be validated.
+- **Caveats**: research/foundation model (v1.1.1); may trail dataset-specific methods (GraphST/STAGATE) on tightly-tuned single-sample benchmarks, but wins on generality, cross-slide transfer, and integrated downstream analysis.
+
 ## File structure
 
 ```
