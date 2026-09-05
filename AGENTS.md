@@ -401,6 +401,31 @@ Segmented imaging (XY + markers)
 - **Trade-offs**: heavy PyTorch + PyTorch Geometric + Lightning stack (a second DL framework alongside TensorFlow/Stardist), though it is the most natural addition since Sopa shares the scverse ecosystem. Foundation model is less transparent than deterministic k-means/Louvain. Primary target modality is transcriptomics (Xenium/MERSCOPE/CosMx); antibody/OME-TIFF + blob-detected transcripts is not the canonical use case and should be validated.
 - **Caveats**: research/foundation model (v1.1.1); may trail dataset-specific methods (GraphST/STAGATE) on tightly-tuned single-sample benchmarks, but wins on generality, cross-slide transfer, and integrated downstream analysis.
 
+## Reference: SACCELERATOR (SpatialHackathon)
+
+**Note (for future consideration):** [SACCELERATOR](https://github.com/SpatialHackathon/SACCELERATOR) ("SA" = spatially-aware, *not* a GPU/rasterization accelerator) is a **Snakemake benchmarking + consensus framework for spatially aware clustering (SAC) methods** (Sun et al., Nature Methods 2026). Not integrated into CellSurvey — most thematically aligned with our Planned Stability Sweep.
+
+### What it does
+- Wraps **~24 SAC methods** (BANKSY, STAGATE, GraphST, SpaceFlow, CellCharter, BayesSpace, etc.) over ~28 datasets, scores with ~17 metrics, then produces a **consensus labeling**.
+- Signature **consensus module** (3 steps): aggregate per-method labels → **base-clustering (BC) selection** (automatic via cross-method ARI / smoothness-entropy, or **expert-in-the-loop** manual) → combine via three algorithms: **k-modes** (`dicer`), **LCA** (Latent Class Analysis, `poLCA`), and **weighted** (`igraph` + `future.apply`).
+- GPU use is **delegated to the individual method modules** (some PyTorch/TF); the orchestration + consensus layers are CPU R/Python. No segmentation, no rasterization kernels.
+
+### Relevance to CellSurvey
+- **Directly parallels the Planned Stability Sweep**: the sweep's *consensus communities* phase is a single-method consensus (vary k-means/Louvain params); SACCELERATOR generalizes this to **cross-method** consensus. Its LCA/k-modes/weighted aggregation and **base-clustering selection** logic are directly borrowable.
+- **Metric catalog is a goldmine**: includes `cross-method entropy` and `smoothness-entropy` — the exact "per-cell stability/uncertainty" metric the sweep targets, plus spatial metrics (CHAOS, LISI, PAS) we don't currently compute.
+- **Not a library to integrate**: it's a benchmarking harness (Snakemake, R+Python, 24 per-method conda envs). Extract *algorithms and ideas*, not the framework.
+- **Caveats**: R/Python mix; MIT-0; consensus quality depends on good base-clustering selection (the expert step), which is hard to automate well.
+
+## Reference: TF/Torch co-existence (integration note)
+
+**Note:** Multiple surveyed tools (Novae, segger, cellina) require PyTorch/PyG while CellSurvey currently uses TensorFlow (for StarDist). Co-installing TF + Torch in one environment is *usually fine* (both dlopen their own CUDA/cuDNN pieces at runtime), but the costs are real and worth avoiding unless a stage is genuinely in-pipeline:
+
+- **Footprint/build time**: TF (~2 GB) + Torch (~2–3 GB) + PyG/RAPIDS-class extras → very large, slow-to-solve pixi env. CellSurvey's `pixi.lock` is already TF-heavy.
+- **CUDA/cuDNN coupling**: CellSurvey pins TF ≥2.18 (bundled CUDA 12/cuDNN 9); any Torch dep must resolve a matching cu12 build. Pixi makes this *more* tractable than pip/conda, not less.
+- **Environment-variable surface**: CellSurvey already fights TF/Keras ABI issues via `TF_USE_LEGACY_KERAS=1` (process-wide, harmless to Torch) — a second DL stack doubles this class of risk.
+
+**Recommendation**: prefer a **separate pixi environment per DL framework** — run CellSurvey (TF) → write `AnnData`/`SpatialData` (`_seg.zarr`) → run the downstream tool (Torch) in its own env. This mirrors the Sopa→Novae modularity the authors themselves chose, and is especially cheap for zero-shot consumers like Novae. Only co-install if the tool becomes a first-class in-pipeline stage.
+
 ## File structure
 
 ```
