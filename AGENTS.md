@@ -426,6 +426,28 @@ Segmented imaging (XY + markers)
 
 **Recommendation**: prefer a **separate pixi environment per DL framework** — run CellSurvey (TF) → write `AnnData`/`SpatialData` (`_seg.zarr`) → run the downstream tool (Torch) in its own env. This mirrors the Sopa→Novae modularity the authors themselves chose, and is especially cheap for zero-shot consumers like Novae. Only co-install if the tool becomes a first-class in-pipeline stage.
 
+## Shortlist: additional candidates (not yet deep-dived)
+
+**Note:** flagged as future candidates from a library scan; full deep-dive analyses deferred.
+
+### Spatial statistics / community robustness (plugs into the Planned Stability Sweep)
+- **Bruhns et al., "Effects of segmentation errors on downstream analysis in highly-multiplexed tissue imaging"** (*PLoS Comput Biol*, 2025) — perturbs segmentation via affine transforms and measures degradation in k-means/Leiden clustering and GMM phenotyping. Closest empirical validation of our stability-sweep concern: downstream robustness to *upstream* error.
+- **SpatialMNN** (Zhou, Hicks; *Bioinformatics*, 2025) — mutual-nearest-neighbor graph + Louvain for cross-sample spatial-domain integration/batch correction.
+- **SPF** (Vu, Ghosh; *PLoS Comput Biol*, 2022) — K-function variants + functional Cox regression linking cell-interaction patterns to survival. Principled alternative to `max_edge_distance`.
+- **cytoNet** (Mahadevan, Qutub; *PLoS Comput Biol*, 2022) — network-science features of cell communities + cell-cell interaction effects.
+- **spicyR** (Canete, Patrick; *Bioinformatics*, 2022) — cross-group colocalization-change inference (R analogue of PANORAMIC's statistical question).
+
+### Cell-type phenotyping (alternatives to k-means)
+- **RIBCA — Robust Image-Based Cell Annotator** (Sun, Murphy; *Cell Systems*, 2025) — training-free, reference-based cell-type annotation for multiplexed images (>3M cells, >40 tissues).
+- **CellSighter** (Amitay, Keren; *Nat Commun*, 2023) — deep-learning cell classification on multiplexed images with per-cell **prediction confidence**.
+
+### Spot detection (replaces LoG blob detection)
+- **Spotiflow** (Mantes, Weigert; *Nat Methods*, 2025) — subpixel-accurate, deep-learning spot detection for spatial transcriptomics; generalizes across chemistries; drop-in upgrade candidate for `blob_log`.
+
+### Statistical rigor for confidence-score reporting
+- **Morgan, "Alternative to the statistical mass confusion of testing for 'no effect'"** (*J Cell Biol*, 2025) — replace p-values with effect sizes/confidence intervals.
+- **Kitanovski et al., "Uncertainty-aware quantitative analysis"** (*PLoS Comput Biol*, 2026) — Bayesian hierarchical uncertainty quantification, same philosophy as the sweep (quantify uncertainty, avoid NHST pitfalls).
+
 ## File structure
 
 ```
