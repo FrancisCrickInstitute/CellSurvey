@@ -276,6 +276,22 @@ Segmented imaging (XY + markers)
 - **Portable but heavier than the other two tools**: GMM (`sklearn.mixture.GaussianMixture`), k-NN (`scipy.spatial.cKDTree`), and the EM mean-field loop are all reproducible in Python, but the CELESTA R code is a single large file (`CELESTA_functions.R`, ~25-slot S4 object) with non-trivial logic.
 - **Caveats**: requires a user-defined marker-signature/lineage matrix (domain input); R-only (`Rmixmod`, `spdep`, `ggplot2`, `zeallot`); heuristic thresholds (`max_iteration`, `cell_change_threshold`, anchor high/low) need tuning.
 
+## Reference: CellVoyager (zou-lab)
+
+**Note (for future consideration):** [CellVoyager](https://github.com/zou-group/CellVoyager) (Salber, Chen, Sun, Isakova, Wilk, Zou; *Nature Methods* 23, 749–759, 2026; bioRxiv 2025.06.03.657517) is an **LLM-agent for autonomous single-cell RNA-seq analysis** from the Zou Lab (Stanford). It is NOT a segmentation or spatial-omics tool — integrated here because it consumes the same AnnData seam CellSurvey emits. Not integrated into CellSurvey.
+
+### What it does
+- Ingests a `.h5ad` AnnData file plus a text summary (paper abstract / dataset summary / biological context / "past analyses tried" / focus directions) and API keys.
+- An LLM agent (LiteLLM/OpenAI/Anthropic/Claude Agent SDK) **writes and runs its own scanpy analyses incrementally** inside a live Jupyter notebook, self-critiques the results, and iterates to generate/test new biological hypotheses.
+- Output: a live notebook in `outputs/` with plots, statistics, findings, and a research narrative. Two execution modes: `claude` (default; interactive notebook) and `legacy` (programmatic idea executor).
+- Stack: LLM orchestration via LiteLLM + scanpy/AnnData computing (env files: numpy, scipy, pandas, matplotlib, seaborn, anndata, scanpy, python-igraph/leidenalg, h5py, litellm, streamlit GUI, celltypist, claude-agent-sdk). Documentation injection is limited to `sc.*`/`scanpy.*` namespaces.
+
+### Relevance to CellSurvey
+- **Orthogonal, not overlapping**: CellVoyager operates purely in transcriptomic space (UMAP/tsNE/PCA, neighbor graphs, Leiden/Louvain, DE/markers, pseudotime). It has **zero** references to spatial coordinates, images, segmentation, or SOPA/SpatialData — so it does not replace any CellSurvey stage.
+- **Natural integration seam = AnnData**: CellSurvey's `sopa.aggregate()` output is an AnnData table (`sdata.tables['table']`) with `kmeans_cluster` and `community` labels already in `.obs`. Exporting that to `.h5ad` and feeding it (plus a written summary of the completed spatial analysis) into CellVoyager lets the agent autonomously explore hypotheses *on top of* CellSurvey's finished segmentation/clustering/network results.
+- **Complementary role**: CellSurvey produces deterministic spatial structure (segmentation → k-means → Delaunay/Louvain); CellVoyager would add open-ended, LLM-driven downstream interrogation on the same cells.
+- **Caveats**: MIT but research-grade (no tagged releases); requires paid LLM API keys; expensive/agentic (nondeterministic, needs a sensible "past analyses" prelude to be useful); its environment does not install sopa/spatialdata/stardist, so the hand-off must be through an exported `.h5ad`, not a live SpatialData object.
+
 ## Reference: WassersteinWormhole (dpeerlab)
 
 **Note (for future consideration):** [WassersteinWormhole](https://github.com/dpeerlab/WassersteinWormhole) (Haviv & Pe'er lab et al., ICML 2024; arXiv:2404.09411) learns a **Transformer autoencoder embedding of point-clouds** such that Euclidean distance in latent space approximates **optimal-transport / Wasserstein distance** between the original point-clouds. Not integrated into CellSurvey — concepts retained for potential reuse.
