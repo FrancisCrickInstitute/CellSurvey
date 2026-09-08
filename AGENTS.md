@@ -276,6 +276,22 @@ Segmented imaging (XY + markers)
 - **Portable but heavier than the other two tools**: GMM (`sklearn.mixture.GaussianMixture`), k-NN (`scipy.spatial.cKDTree`), and the EM mean-field loop are all reproducible in Python, but the CELESTA R code is a single large file (`CELESTA_functions.R`, ~25-slot S4 object) with non-trivial logic.
 - **Caveats**: requires a user-defined marker-signature/lineage matrix (domain input); R-only (`Rmixmod`, `spdep`, `ggplot2`, `zeallot`); heuristic thresholds (`max_iteration`, `cell_change_threshold`, anchor high/low) need tuning.
 
+## Reference: VALIS (MathOnco)
+
+**Note (for future consideration):** [VALIS](https://github.com/MathOnco/VALIS) (Gatenbee & Anderson, Moffitt; *Nature Communications* 14, 4502, 2023) is a **CPU-only whole-slide image registration** pipeline ("Virtual Alignment of pathoLogy Image Series"). Not integrated into CellSurvey — but the highest-traction *upstream* candidate for multi-round/cyclic imaging. Not integrated yet.
+
+### What it does
+- Fully automatic **registration (rigid + non-rigid)** of serial sections and repeated-cycling IF/IHC slides into a common coordinate frame, with no reference image required (auto-selected from the stack center; auto slide ordering by feature similarity).
+- Reads 322+ formats via Bio-Formats/OpenSlide; writes warped full-resolution slides as **OME-TIFF pyramids**; merges non-RGB channels into a single **highly-multiplexed OME-TIFF** (`warp_and_merge_slides` + `channel_name_dict` — e.g. 32-channel CyCIF from 11 cycles).
+- Key hook: can **warp point-coordinate data** (cell centroids, ROI/polygon vertices) into the registered frame. Also cross-modal registration (H&E ↔ IF/DAPI) for transferring annotations.
+- Stack: PyTorch 2.7 + kornia/torchvision (feature detectors/matchers: LightGlue, SuperPoint, BRISK, KAZE, DISK, DeDoDe), pyvips/SimpleITK for warping, Java/Bio-Formats via scyjava/jpype. **CPU-only** (no GPU for registration).
+
+### Relevance to CellSurvey
+- **Does not segment** — no overlap with Stardist. Its role is *upstream alignment*, exactly the assumption CellSurvey currently takes for granted (input OME-TIFF is already in one frame).
+- **Direct seam**: VALIS's merged output is a **multiplexed OME-TIFF** — precisely CellSurvey's `-i` input. For repeated-cycling data (CyCIF/cyclic IHC), VALIS would pre-align rounds/cycles before CellSurvey's segmentation → aggregation → clustering → network stages.
+- **Alternative usage**: run Stardist per-frame first, then use VALIS's **point-warping API** to map cell centroids into the common frame for downstream k-means/Delaunay/Louvain — avoiding a full re-segmentation on the merged image.
+- **Caveats**: PyTorch stack (see TF/Torch co-existence note — but registration is CPU-only, so a separate light env is feasible); large-image memory/time during optional micro-registration is a known cost; `error_df` per-pair registration error is useful QC to gate downstream spatial analyses.
+
 ## Reference: LazySlide (rendeirolab)
 
 **Note (for future consideration):** [LazySlide](https://github.com/rendeirolab/LazySlide) (Zheng, Abila, Rendeiro et al., CeMM; *Nature Methods* 2026; bioRxiv 2025.05.28.656548) is a **PyTorch whole-slide image (WSI) analysis framework** for histopathology, interoperable with scverse via SpatialData. Not integrated into CellSurvey — concepts retained for potential reuse.
