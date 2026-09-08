@@ -276,6 +276,22 @@ Segmented imaging (XY + markers)
 - **Portable but heavier than the other two tools**: GMM (`sklearn.mixture.GaussianMixture`), k-NN (`scipy.spatial.cKDTree`), and the EM mean-field loop are all reproducible in Python, but the CELESTA R code is a single large file (`CELESTA_functions.R`, ~25-slot S4 object) with non-trivial logic.
 - **Caveats**: requires a user-defined marker-signature/lineage matrix (domain input); R-only (`Rmixmod`, `spdep`, `ggplot2`, `zeallot`); heuristic thresholds (`max_iteration`, `cell_change_threshold`, anchor high/low) need tuning.
 
+## Reference: LazySlide (rendeirolab)
+
+**Note (for future consideration):** [LazySlide](https://github.com/rendeirolab/LazySlide) (Zheng, Abila, Rendeiro et al., CeMM; *Nature Methods* 2026; bioRxiv 2025.05.28.656548) is a **PyTorch whole-slide image (WSI) analysis framework** for histopathology, interoperable with scverse via SpatialData. Not integrated into CellSurvey — concepts retained for potential reuse.
+
+### What it does
+- Tile-centric WSI pipeline (`zs.pp` → `zs.seg` → `zs.tl` → `zs.pl`) for H&E/histopathology slides: tissue detection, tiling at a chosen MPP, per-tile model inference, slide-level summaries.
+- Container is **`WSIData`**, backed by **SpatialData (Zarr)** — results slot into `wsi.shapes` (tiles/cells/annotations), `wsi.tables` (feature embeddings as AnnData), `wsi.images`, `wsi.attrs`.
+- Large model zoo: pathology foundation models (UNI, CONCH, GigaPath, Virchow, H-Optimus, CHIEF, phikon), cell segmentation (**InstanSeg** default, Cellpose, NuLite, HistoPLUS — *no Stardist*), tissue/artifact segmentation (GrandQC), `tl.spatial_domain` (unsupervised domain segmentation from tile embeddings), `tl.virtual_stain`.
+- PyTorch/timm + wsidata + SpatialData; CLI entry-point `lazyslide`/`zs`; Python 3.11–3.13; pip + conda-forge.
+
+### Relevance to CellSurvey
+- **Shared format, different assay**: both use SOPA-adjacent SpatialData (Zarr) storage, but LazySlide targets **H&E whole-slide histopathology** (tile-first, `.svs`-centric) while CellSurvey targets **multiplexed fluorescent OME-TIFF** (StarDist nuclear segmentation → per-cell marker aggregation → k-means → Delaunay/Louvain).
+- **Complementary, not overlapping**: LazySlide has no native k-means/Delaunay/Louvain on cells (graph/community analysis is delegated to Squidpy/Scanpy), no StarDist backend, and OME-TIFF is not an advertised first-class input. Conversely CellSurvey has no foundation-model feature extraction or tile-level pathology models.
+- **Potential role**: a *front-end* for extracting pathology-foundation-model or tile-prediction features, written back to a SpatialData Zarr that CellSurvey (or a shared downstream) could open — while CellSurvey keeps ownership of OME-TIFF segmentation/aggregation/clustering/network stages.
+- **Caveats**: PyTorch + timm + transformers stack (a second DL framework alongside TensorFlow — see the TF/Torch co-existence note); models are gated and live in the separate `lazyslide-models` package (UNI/Virchow etc. require access); v0.12.0 alpha, API in flux.
+
 ## Reference: CellVoyager (zou-lab)
 
 **Note (for future consideration):** [CellVoyager](https://github.com/zou-group/CellVoyager) (Salber, Chen, Sun, Isakova, Wilk, Zou; *Nature Methods* 23, 749–759, 2026; bioRxiv 2025.06.03.657517) is an **LLM-agent for autonomous single-cell RNA-seq analysis** from the Zou Lab (Stanford). It is NOT a segmentation or spatial-omics tool — integrated here because it consumes the same AnnData seam CellSurvey emits. Not integrated into CellSurvey.
