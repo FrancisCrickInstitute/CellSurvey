@@ -474,6 +474,28 @@ Segmented imaging (XY + markers)
 
 **Recommendation**: prefer a **separate pixi environment per DL framework** — run CellSurvey (TF) → write `AnnData`/`SpatialData` (`_seg.zarr`) → run the downstream tool (Torch) in its own env. This mirrors the Sopa→Novae modularity the authors themselves chose, and is especially cheap for zero-shot consumers like Novae. Only co-install if the tool becomes a first-class in-pipeline stage.
 
+## Reference: SmartHisto (Vijendran et al.)
+
+**Note (for future consideration):** [SmartHisto: Bayesian active learning for histology images](https://journals.plos.org/ploscompbiol/article?id=10.1371/journal.pcbi.1013611) (Vijendran, Arruda, Anderson, Eulenstein; *PLoS Comput Biol* 22(9):e1013611, 2026; code [github.com/flu-crew/histology_segmentation](https://github.com/flu-crew/histology_segmentation), pulmonary dataset doi:10.5281/zenodo.18421739, CC0) is a **Bayesian-active-learning framework for training semantic segmentation models with far less expert annotation**. Not integrated into CellSurvey — relevant only if CellSurvey ever adopts a trainable tissue-region segmenter (it currently uses Stardist, which is pretrained drop-in). Retained chiefly for its **uncertainty-decomposition methodology**, which is conceptually aligned with our Planned Stability Sweep.
+
+### What it does
+- Trains a **Bayesian U-Net** (smaller UNet, all weights as independent Gaussians via **Bayes by Backprop**, loss = **DiceBCE + scaled KL**) so per-pixel predictive variance measures uncertainty — an *ensemble-like* effect without multiple models.
+- **Active-learning sampling** that selects *informative regions* rather than whole images: pixels are grouped by **SLIC superpixels** (default 1000 segs, compactness 28) and ranked by the **average per-pixel divergence** within each superpixel, so experts label only the highlighted uncertain regions (add 5% per "active epoch").
+- Explicitly decomposes predictive variance into **epistemic** (reducible, from lack of data) vs **aleatoric** (irreducible, intrinsic noise) uncertainty, fractionally down-weighting aleatoric to prioritize learning what reduces epistemic uncertainty — a distinction point-estimate models cannot make.
+- Validated on **GlaS** (colorectal glands), a custom **pulmonary** (pig lung) dataset, and **TIGER ROI** (breast cancer, 6 tissue classes). Mean IoU 0.75 vs. ~0.60 for baselines; on the hardest (TIGER) benchmark, reached peak mIoU with ~44% of the annotation pool, and no baseline matched SmartHisto's peak at *any* annotation level.
+
+### Relevance to CellSurvey
+- **Limited direct applicability to the current pipeline**: CellSurvey's segmentation is Stardist (pretrained, no training data needed); SmartHisto addresses the *training-data-scarce* *custom segmenter* problem, which is a different (though plausible future) use case — e.g. if we ever segment tissue regions or non-nuclear structures that Stardist can't handle.
+- **The uncertainty methodology is the durable lesson** and directly parallels the Planned Stability Sweep:
+  - **Aleatoric vs. epistemic separation** — the sweep's per-cell entropy/confidence score could adopt this framing: distinguish "this cell's community is inherently ambiguous" (aleatoric) from "we simply haven't sampled enough parameters" (epistemic, reducible by more sweep draws).
+  - **Bayesian predictive variance as a confidence signal** — the same idea as SACCELERATOR's entropy metrics and PANORAMIC's bootstrapped uncertainty; reinforces the sweep's core design of *quantifying* uncertainty rather than reporting a single deterministic label.
+- **Region-aware sampling** (superpixel divergence) is a mining heuristic for *where to spend annotation budget* — relevant if CellSurvey ever builds a supervised cell-type classifier (cf. CellSighter, RIBCA in the shortlist) and needs to label training data efficiently.
+
+### Caveats
+- H&E-only, fixed/consistent magnification, mutually-exclusive classes — the authors explicitly flag these as untested generalizations (varying magnification, alternative stains, and overlapping classes need study).
+- Uncorrected proof at time of reading.
+- Heavy(r) per-dataset training is required; not a drop-in (contrast Stardist).
+
 ## Reference: ST "Ten Quick Tips" (Kurogi et al.)
 
 **Note (for future consideration):** [Ten quick tips for spatial transcriptomics analysis](https://journals.plos.org/ploscompbiol/article?id=10.1371/journal.pcbi.1014757) (Kurogi, Shimbara, Koreeda, Tsuyuzaki; *PLoS Comput Biol* 22(9):e1014757, 2026) is a practical, platform-neutral review of the entire spatial transcriptomics (ST) workflow. It is not a tool to integrate — it is methodological guidance. Relevant to CellSurvey because it names several tools and practices that overlap or replace CellSurvey's pipeline stages, and because its statistical cautions (pseudoreplication, spatial autocorrelation) bear directly on our Planned Stability Sweep.
