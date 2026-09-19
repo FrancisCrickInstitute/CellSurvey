@@ -474,6 +474,31 @@ Segmented imaging (XY + markers)
 
 **Recommendation**: prefer a **separate pixi environment per DL framework** — run CellSurvey (TF) → write `AnnData`/`SpatialData` (`_seg.zarr`) → run the downstream tool (Torch) in its own env. This mirrors the Sopa→Novae modularity the authors themselves chose, and is especially cheap for zero-shot consumers like Novae. Only co-install if the tool becomes a first-class in-pipeline stage.
 
+## Reference: ST "Ten Quick Tips" (Kurogi et al.)
+
+**Note (for future consideration):** [Ten quick tips for spatial transcriptomics analysis](https://journals.plos.org/ploscompbiol/article?id=10.1371/journal.pcbi.1014757) (Kurogi, Shimbara, Koreeda, Tsuyuzaki; *PLoS Comput Biol* 22(9):e1014757, 2026) is a practical, platform-neutral review of the entire spatial transcriptomics (ST) workflow. It is not a tool to integrate — it is methodological guidance. Relevant to CellSurvey because it names several tools and practices that overlap or replace CellSurvey's pipeline stages, and because its statistical cautions (pseudoreplication, spatial autocorrelation) bear directly on our Planned Stability Sweep.
+
+### What it does
+Ten tips spanning experimental design → platform selection → data structure → analysis → visualization → interpretation → multi-omics integration → open science → limitations. Two platform families (sequencing-based capture vs. imaging-based ISH) are contrasted (resolution vs. genome coverage; FFPE vs. fresh-frozen), with walkthroughs of data layout (e.g. Visium `filtered_feature_bc_matrix.h5` + `Spatial/` subdir) and recommended standard formats (**AnnData/H5AD**, **Seurat objects**).
+
+### Relevance to CellSurvey (stage-by-stage)
+- **Visualization/segmentation (Tips 4–5)**: cites **QuPath** (CellSurvey's export target), **napari**, and **Cellpose** for shifting sequencing-based ST toward single-cell resolution. Notably, CellSurvey already uses QuPath for GeoJSON export and Stardist (rather than Cellpose) for segmentation — same ecosystem, different segmenter.
+- **Spatial analysis tooling (Tip 6)**: **Scanpy + Squidpy** (spatial graphs, neighborhood enrichment, ligand–receptor) and **BayesSpace** (Bayesian subspot upsampling). CellSurvey already uses Scanpy; Squidpy's neighborhood/enrichment machinery and BayesSpace's subspot upsampling are directly relevant alternatives to our Delaunay/Louvain approach. Workflow managers (**Nextflow/Snakemake**) recommended for reproducibility — CellSurvey currently has none.
+- **Interpretation discipline (Tip 7)**: co-localization / ligand–receptor co-expression is *consistent with* but *does not demonstrate* interaction — inferred cell–cell communication must be treated as **hypothesis generation**. Directly applicable to how CellSurvey's community/niche labels should be reported.
+- **Multi-omics integration (Tip 8)**: **cell2location** and **Tangram** for scRNA-seq-atlas mapping; spatial proteomics (**CODEX**, **IMC**) as complementary readouts.
+- **3D reconstruction (Tip 10)**: **PASTE** (optimal-transport alignment) and image-registration tools (**Fiji/ImageJ, ANTs, Elastix**); a 12-method benchmark found *no single multi-slice integration method dominates*. Relevant if CellSurvey ever goes from 2D sections to 3D tissue.
+
+### Methodology most worth borrowing (for the Planned Stability Sweep)
+- **Pseudoreplication** (Tip 4): spots/cells are spatially autocorrelated and *not* independent replicates; treating thousands of spots as sample size inflates significance. This is the statistical foundation for why our sweep must count replication at the biological (sample) level, not the per-cell level.
+- **Robustness-to-parameter checks** (Tip 4): "check results for robustness to method/parameter choice" — exactly the sweep's premise, now with a cited endorsement.
+- **LLM cell-type annotation caution** (Tip 7): LLMs show only moderate accuracy for cell-type annotation and need expert oversight — a warning against over-relying on the CellVoyager/LLM seam.
+- **Segmentation-error propagation** (Tip 5): segmentation errors (merged/split cells, misassigned transcripts) propagate into per-cell estimates and must be validated — dovetails with the Bruhns et al. shortlist entry.
+
+### Caveats
+- Not code — a review/roadmap. No library to install; extract guidance, not a dependency.
+- Focused on ST proper (Visium/Xenium/MERFISH etc.); CellSurvey is multiplexed-antibody OME-TIFF + blob-detected transcripts, so platform-specific specifics transfer only loosely, but the analysis/statistical principles transfer directly.
+- Balanced platform-neutral framing means it favors generality over CellSurvey-specific prescriptiveness.
+
 ## Shortlist: additional candidates (not yet deep-dived)
 
 **Note:** flagged as future candidates from a library scan; full deep-dive analyses deferred.
