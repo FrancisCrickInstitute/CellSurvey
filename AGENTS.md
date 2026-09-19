@@ -127,7 +127,7 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 
 - **Zarr write-then-read pattern**: The pipeline writes the initial Zarr to disk then immediately reads it back before continuing to segmentation. This is intentional — it materializes the spots-including dataset as a clean checkpoint.
 
-- **Segmented Zarr incremental reuse**: The segmented Zarr (`_seg.zarr`) is checked before Stardist. If it already has a valid table, both Stardist and aggregation are skipped (jump to clustering). If it has boundaries but no table, only aggregation is re-run. If the file exists but can't be read, it's deleted via `shutil.rmtree` and a full re-run proceeds. This enables crash recovery at finer granularity than `--resume-from`.
+- **Segmented Zarr incremental reuse (gated on `--resume-from`)**: The segmented Zarr (`_seg.zarr`) is only checked for reuse when `--resume-from` is set. If it then has a valid table, both Stardist and aggregation are skipped (jump to clustering). If it has boundaries but no table, only aggregation is re-run. If the file exists but can't be read, it's deleted via `shutil.rmtree` and a full re-run proceeds. This enables crash recovery at finer granularity than `--resume-from`; without the flag, any existing `_seg.zarr` is simply overwritten.
 
 - **Pandas 2.x + anndata ArrowStringArray compatibility**: Two workarounds in the aggregation stage:
   1. `pd.option_context('future.infer_string', False)` wraps the `sopa.aggregate()` call to force plain object dtype for strings, avoiding ArrowStringArray which can't be written to Zarr backing stores.
