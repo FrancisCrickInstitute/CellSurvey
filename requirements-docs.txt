@@ -1,0 +1,4 @@
+# Documentation build dependencies for the CellSurvey MkDocs site.
+# Used by ReadTheDocs (see .readthedocs.yaml) and for local `mkdocs serve`.
+
+mkdocs-material>=9.5
