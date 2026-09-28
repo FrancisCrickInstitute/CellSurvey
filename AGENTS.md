@@ -17,6 +17,7 @@ Key dependency constraints:
 - **`tf_keras`** is a required pypi dependency — TF >=2.16 defaults to Keras 3, but Stardist needs legacy Keras 2 API to avoid cuDNN autotuner failures on CUDA 12/cuDNN 9
 - **`scipy` (`>=1.14, <2`)** and **`networkx` (`>=3.4, <4`)** for Delaunay triangulation and Louvain community detection (replacing MuSpAn)
 - **`python-igraph`** for fast Leiden clustering in Scanpy's spatial neighborhood analysis
+- **`bioio` (`>=3.4`) and `bioio-ome-tiff`** for reading channel names from OME-TIFF metadata (via `BioImage`); `setuptools` is pinned as a pypi dependency
 - **Windows and macOS are not supported** via pixi — only `linux-64` is in the platforms list.
 
 A **Dockerfile** is provided: Ubuntu 24.04 base, installs pixi, copies `pixi.toml`, sets `TF_USE_LEGACY_KERAS=1`, entrypoint is `pixi run python run.py`.
@@ -79,13 +80,13 @@ The pipeline is split into modules under the `cellsurvey/` package. `run.py` is 
 
 6. **K-means clustering** (`cli.py` → `utils.py`): Extracts the intensity matrix from the AnnData table, standardizes with `StandardScaler`, runs k-means, and attaches cluster labels to `sdata.tables['table'].obs`.
 
-7. **Network analysis** (`cli.py` → `network_analysis.py`): Extracts centroids from the cell boundaries GeoDataFrame. Builds a `scipy.spatial.Delaunay` triangulation, filters edges by `max_edge_distance`. Constructs a `networkx.Graph` from the filtered edges and runs `nx.community.louvain_communities()` with the `community_resolution` parameter and fixed seed 42. Returns a dict with `cell_ids`, `community_labels`, and `cluster_labels` arrays. Embeds `kmeans_cluster` and `community` labels into both the `stardist_boundaries` GeoDataFrame and the AnnData table obs. The segmented Zarr is written at this stage (single write after all labels are computed).
+7. **Network analysis** (`cli.py` → `network_analysis.py`): Extracts centroids from the cell boundaries GeoDataFrame. Builds a `scipy.spatial.Delaunay` triangulation, filters edges by `max_edge_distance`. Constructs a `networkx.Graph` from the filtered edges; when an intensity matrix is supplied, edges are weighted by expression similarity (`1 + Pearson corr`). Runs `nx.community.louvain_communities()` with the `community_resolution` parameter and fixed seed 42. Returns a dict with `cell_ids`, `community_labels`, and `cluster_labels` arrays. Embeds `kmeans_cluster` and `community` labels into both the `stardist_boundaries` GeoDataFrame and the AnnData table obs, and writes `summary.json` (cell/cluster/community/edge counts) to `--plot_dir`. The segmented Zarr is written at this stage (single write after all labels are computed).
 
 8. **Spot-to-cell assignment** (`cli.py` → `utils.py`): Spatial join of spots to cell boundaries using GeoPandas (`gpd.sjoin` with `predicate='within'`). Returns `None` if no spots are present in the dataset (no guard needed in `cli.py` — `export_to_qupath` handles `None`).
 
-9. **QuPath GeoJSON export** (`cli.py` → `export.py`): Exports cell boundaries and spot detections as GeoJSON features with community/cluster assignments and intensity measurements for QuPath visualization. Takes `cell_ids`, `community_labels`, and `cluster_labels` as direct arrays. Output is always `./qupath_export.geojson` (hardcoded).
+9. **QuPath GeoJSON export** (`cli.py` → `export.py`): Exports cell boundaries and spot detections as GeoJSON features with community/cluster assignments and intensity measurements for QuPath visualization. Takes `cell_ids`, `community_labels`, and `cluster_labels` as direct arrays. Output path is `--geojson-path` (default `./qupath_export.geojson`).
 
-10. **Spatial neighborhood analysis** (`cli.py`): Computes spatial neighbors radius graph, mean hop distance heatmap between clusters (`cell_type_to_cell_type.png`), UMAP embedding with k-means coloring (`umap_kmeans_cluster.png`), and Leiden clustering with `igraph` backend (`umap_leiden.png`). UMAP plots are saved to `--plot_dir`.
+10. **Spatial neighborhood analysis** (`cli.py`): Computes spatial neighbors radius graph, mean hop distance heatmap between clusters (`cell_type_to_cell_type.png`), UMAP embedding with k-means coloring (`umap_kmeans_cluster.png`), and Leiden clustering with `igraph` backend (`umap_leiden.png`). Also emits per-cluster/per-community density maps (`cell_density.png`), a mean channel-intensity heatmap per cluster (`cluster_intensity_heatmap.png`), and a morphology-by-cluster plot (`morphology_by_cluster.png`, only if an `area` column is present). All plots are saved to `--plot_dir`.
 
 ### CLI arguments
 
@@ -153,7 +154,7 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 
 - **AnnData `.X` can be sparse or dense**: `sopa.aggregate()` may produce either a scipy sparse matrix or a dense numpy array depending on the input data size and sopa version. The intensity extraction at `cli.py:238` handles both with `hasattr(measurements.X, 'toarray')`. Never assume `.X` is sparse.
 
-- **Hardcoded output paths**: The GeoJSON export always writes to `./qupath_export.geojson` regardless of the `-o` or `-p` flags.
+- **GeoJSON output path**: The QuPath GeoJSON path is configurable via `--geojson-path` (default `./qupath_export.geojson`). It is independent of `-o` and `-p`; all plot/PNG artifacts and `summary.json` go to `--plot_dir`.
 
 - **Matplotlib rcParams are set twice**: Global `font.size=20` and `axes.linewidth=3` at the start of `main()`, then overridden to `font.size=10` and `axes.linewidth=2` before the heatmap/UMAP plots. The `Agg` non-interactive backend is set at import time (`matplotlib.use('Agg')` before `import matplotlib.pyplot as plt`) to prevent plot windows from appearing on headless systems.
 
@@ -554,13 +555,23 @@ Ten tips spanning experimental design → platform selection → data structure 
 │   ├── __init__.py                   # Re-exports all public symbols
 │   ├── cli.py                        # main() with argparse and pipeline orchestration
 │   ├── blob_detection.py             # detect_blobs_in_tile, detect_blobs_tiled
-│   ├── network_analysis.py           # run_network_analysis (scipy Delaunay + networkx Louvain)
+│   ├── network_analysis.py           # run_network_analysis (scipy Delaunay + networkx Louvain, expr-similarity weights, summary.json)
 │   ├── export.py                     # export_to_qupath
 │   └── utils.py                      # remove_channel_suffix, cluster_data, assign_spots_to_cells, get_colors_for_communities
+├── docs/                             # MkDocs Material site (ReadTheDocs-hosted)
+│   ├── index.md                      # Landing / overview + pipeline diagram
+│   ├── installation.md               # pixi + Docker setup
+│   ├── getting-started.md            # First-run walkthrough
+│   └── DOCS_OUTLINE.md               # Docs plan (temporary; delete once pages are written)
 ├── Dockerfile                        # Ubuntu 24.04 + pixi + GPU-ready container
 ├── pixi.toml                         # Pixi environment config (linux-64 only)
 ├── pixi.lock                         # Pixi lockfile (generated)
+├── mkdocs.yml                        # MkDocs + Material config
+├── .readthedocs.yaml                 # ReadTheDocs build config
 ├── requirements.txt                  # Minimal pip requirements (sopa)
+├── requirements-docs.txt             # Docs build deps (mkdocs-material)
 ├── README.md                         # User-facing installation and usage docs
+├── LICENSE                           # License
+├── .gitignore / .gitattributes       # Git config
 └── .pixi/                            # Pixi environment directory (gitignored)
 ```
