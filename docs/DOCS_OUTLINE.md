@@ -15,19 +15,20 @@ hosted on ReadTheDocs. Delete or archive this file once the real docs exist.
 | CLI reference | Hand-authored Markdown table (auto-generated later via `mkdocs` + a small script) | argparse already has all flags/help; keep it in sync manually for now, or add a tiny generator. |
 | API reference | **Not initially** | 6 modules, minimal public API; documenting internals is lower value than user-facing guides. Revisit if the library surface grows. |
 | Python/version pinning | None added | Docs only — no new runtime dependencies. |
+| Audience | **Less computationally-literate** than Sopa | Guides written for biologists/researchers, not Python developers (see §4). |
 
 ## 2. Repo layout (target)
 
 ```
 docs/
-├── index.md                      # Landing / overview + quick-start
+├── index.md                      # Landing / overview + pipeline diagram + quick-start
 ├── installation.md               # pixi + Docker
 ├── getting-started.md            # First run, full example, expected outputs
 ├── pipeline.md                   # 10-stage walkthrough (user-facing)
 ├── parameters.md                 # Full CLI reference with tuning guidance
 ├── outputs.md                    # Every output file/plot explained
 ├── visualization.md              # Odon / QuPath / TissUUmaps / napari
-├── troubleshooting.md            # GPU, cuDNN, tf_keras, resume-from
+├── faq.md                        # Question-phrased how-to + troubleshooting (merged)
 ├── reference/                    # (future) library reference
 └── DOCS_OUTLINE.md               # This file (temporary)
 mkdocs.yml                        # MkDocs + Material config
@@ -39,6 +40,9 @@ mkdocs.yml                        # MkDocs + Material config
 ### 3.1 `index.md`
 - One-paragraph summary of what CellSurvey does.
 - "Who is this for" (spatial-biology researchers, bioinformaticians).
+- **Pipeline overview diagram** (Mermaid or a static image like Sopa's
+  `overview_white.png`) showing the main steps. This is the first thing a
+  non-technical reader needs.
 - Links to Installation and Getting Started.
 - Note the entry points: `run.py` (full pipeline) and `python -m cellsurvey.cli`
   (standalone module run). Crash recovery / re-analysis from an existing Zarr is
@@ -48,8 +52,9 @@ mkdocs.yml                        # MkDocs + Material config
 - Pixi install (the only supported path).
 - Docker build/run.
 - The TF ≥2.18 + `tf_keras` + `TF_USE_LEGACY_KERAS=1` requirement and *why*
-  (cuDNN 9 autotuner). Cross-link to `troubleshooting.md`.
+  (cuDNN 9 autotuner). Cross-link to `faq.md`.
 - Linux-only note (no Windows/macOS via pixi).
+- Pure setup only — no analysis walkthrough (mirrors Sopa's Getting Started).
 
 ### 3.3 `getting-started.md`
 - Minimal command.
@@ -88,6 +93,10 @@ Full table of every flag + default + type, grouped as in the README, **plus** a
 - `--resume-from` = crash recovery; two-level checkpoint with `_seg.zarr` reuse.
 - `--use-gpu` vs auto-detection.
 
+**Style note:** present this as a *walkthrough* (like Sopa's `cli_usage.md`),
+not a bare flag dump. Lead with defaults ("most runs need no changes"), then
+explain when to reach for each flag.
+
 ### 3.6 `outputs.md`
 Every artifact, what it means, and how to open it:
 
@@ -105,19 +114,61 @@ Move/expand the existing README "Visualising Results" section:
 Odon (recommended), QuPath, TissUUmaps, napari + napari-spatialdata, with the
 performance notes and the ≤24-category color-by caveat.
 
-### 3.8 `troubleshooting.md`
-- `Autotuner could not find any supported configs` → `tf_keras` + legacy Keras 2.
-- `tf_keras` / `ModuleNotFoundError` under `TF_USE_LEGACY_KERAS=1`.
-- GPU not detected → `--use-gpu`, or run CPU (slow).
-- `--resume-from` not finding Zarr; segmented-Zarr reuse logic.
-- ArrowStringArray Zarr write errors (pandas `future.infer_string`).
-- OME-TIFF vs other formats (only TIFF tested).
+### 3.8 `faq.md` (question-phrased how-to + troubleshooting, merged)
+Model on Sopa's `faq.md`: H2 headings phrased as **user questions**, each with a
+plain-language answer first, then a copy-pasteable snippet if needed. Folds in the
+former `troubleshooting.md` error cases as "it broke" questions.
+
+Proposed question list (draft — expand during writing):
+
+- What are the inputs and outputs of CellSurvey?
+- Do I need a GPU?
+- What do I do if "Autotuner could not find any supported configs" appears?
+  → `tf_keras` + `TF_USE_LEGACY_KERAS=1` (cuDNN 9 issue).
+- Why do I get `ModuleNotFoundError: No module named 'tf_keras'`?
+- GPU isn't detected — what now? → `--use-gpu`, or run CPU.
+- How do I resume a crashed run? → `--resume-from` + `_seg.zarr` reuse.
+- Which parameters should I change from their defaults?
+- Can I process formats other than OME-TIFF?
+- What does "No cell was returned by the segmentation" mean? (empty/edge patches)
 
 ### 3.9 `reference/` (future, deferred)
 - Auto-generated CLI reference.
 - Module/API reference if the public surface grows.
 
-## 4. MkDocs Material features to enable
+## 4. Sopa reference patterns (borrow / avoid)
+
+Sopa's docs (MkDocs Material, `prism-oncology/sopa/docs`) are the closest
+structural template, but Sopa targets **developers/advanced users**. Borrow its
+*structure*, soften its *content*.
+
+### Borrow
+
+- **Home = pitch + pipeline diagram** — a single visual of the main steps, as the
+  first thing a non-technical reader sees.
+- **Getting Started = pure install/setup**, no analysis walkthrough; links out to
+  tutorials/CLI for the actual work.
+- **FAQ phrased as user questions** ("How do I…", "What are the inputs…") — the
+  de-facto how-to for non-experts, navigated by *their* questions, not module names.
+- **Tabbed content** (`=== "Tab name"`) for install variants / per-technology commands.
+- **Admonitions** (`!!! note/tip/warning`) — already matches the README style.
+- **CLI as a progressive walkthrough** with `--help` pointers, not a bare flag table.
+- **Per-data-type tips page** (Sopa's `techno_specific.md`) — collects "for X data,
+  use these settings" in one place.
+
+### Avoid (too developer/API-focused for our audience)
+
+- **API-first Getting Started** — no `sopa.settings.*` globals, `SpatialData`/
+  `AnnData` objects, dask clients, env vars, or cluster-memory math up front.
+- **Auto-generated API pages** (`::: module`) surfaced prominently — defer to a
+  secondary `reference/` section or skip.
+- **Advanced tutorials at top level** (custom segmentation, alignment,
+  parallelization internals) — overwhelm a less-technical audience.
+- **Parameter-heavy commands without "just use the default" guidance**.
+- **FAQ answers that jump straight into Python** (`sopa.settings.auto_save_on_disk`,
+  `logging` levels) — give plain-language answers first.
+
+## 5. MkDocs Material features to enable
 
 - `material` theme with navigation, search, and code-copy.
 - Mermaid diagrams (pipeline data flow).
@@ -125,7 +176,7 @@ performance notes and the ≤24-category color-by caveat.
 - `tables` for the CLI reference.
 - `content.code.annotate` / tabs for platform-specific commands where needed.
 
-## 5. Build & deploy
+## 6. Build & deploy
 
 - `mkdocs.yml` at repo root.
 - `.readthedocs.yaml` with `mkdocs` build tool and `python: "3.12"`.
@@ -133,7 +184,7 @@ performance notes and the ≤24-category color-by caveat.
 - Local preview: `mkdocs serve`.
 - ReadTheDocs auto-builds on push to `main` and on tags.
 
-## 6. Open questions (resolve before generating)
+## 7. Open questions (resolve before generating)
 
 1. Keep the CLI reference **manual** vs. **generated from argparse**?
    (Generated is more maintainable; a 10-line script can dump `--help` to Markdown.)
@@ -142,16 +193,19 @@ performance notes and the ≤24-category color-by caveat.
    to the docs site, or kept duplicated? (Recommend: keep quick-start, link out.)
 4. Does `--resume-from` (including its segmented-Zarr reuse behaviour) get its own
    subsection in `pipeline.md`, or live primarily under `parameters.md` and
-   `troubleshooting.md`? (Recommend: cover it in `pipeline.md` + a troubleshooting
-   entry.)
+   `faq.md`? (Recommend: cover it in `pipeline.md` + a FAQ entry.)
+5. **FAQ vs. separate troubleshooting page**: merge (as outlined above, Sopa-style)
+   or keep `troubleshooting.md` as a distinct error-reference? (Recommend: merge
+   for a single help page; split later only if it grows unwieldy.)
 
-## 7. Order of work (after sign-off)
+## 8. Order of work (after sign-off)
 
 1. Scaffold `mkdocs.yml`, `.readthedocs.yaml`, `requirements-docs.txt`, `docs/`.
 2. Write `index.md`, `installation.md`, `getting-started.md`.
 3. Write `pipeline.md` (Mermaid diagram + stage table).
 4. Write `parameters.md` (flags + tuning).
-5. Write `outputs.md`, `visualization.md`, `troubleshooting.md`.
-6. Trim README to a quick-start that links to docs.
-7. Verify `mkdocs build` and `mkdocs serve` locally.
-8. Connect ReadTheDocs and confirm a clean build.
+5. Write `outputs.md`, `visualization.md`.
+6. Write `faq.md` (question-phrased, folding in troubleshooting).
+7. Trim README to a quick-start that links to docs.
+8. Verify `mkdocs build` and `mkdocs serve` locally.
+9. Connect ReadTheDocs and confirm a clean build.
