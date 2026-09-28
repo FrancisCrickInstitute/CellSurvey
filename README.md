@@ -1,4 +1,4 @@
-[![Documentation Status](https://readthedocs.org/projects/cellsurvey/badge/?version=latest)](https://cellsurvey.readthedocs.io/) [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/) [![Built with Pixi](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/prefix-dev/pixi/main/assets/badge/v0.json)](https://pixi.sh) ![Commit activity](https://img.shields.io/github/commit-activity/y/FrancisCrickInstitute/CellSurvey?style=plastic) ![GitHub](https://img.shields.io/github/license/FrancisCrickInstitute/CellSurvey?color=green&style=plastic)
+[![Documentation Status](https://readthedocs.org/projects/cell-survey/badge/?version=latest)](https://cell-survey.readthedocs.io/en/latest/) [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/) [![Built with Pixi](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/prefix-dev/pixi/main/assets/badge/v0.json)](https://pixi.sh) ![Commit activity](https://img.shields.io/github/commit-activity/y/FrancisCrickInstitute/CellSurvey?style=plastic) ![GitHub](https://img.shields.io/github/license/FrancisCrickInstitute/CellSurvey?color=green&style=plastic)
 
 # Overview
 
@@ -11,7 +11,7 @@ CellSurvey is a Python pipeline for image-based spatial biology/omics analysis b
 
 # Documentation
 
-Full documentation is available at **[cellsurvey.readthedocs.io](https://cellsurvey.readthedocs.io/)** — installation, a pipeline walkthrough, every parameter, the outputs reference, the visualisation guide, and an FAQ.
+Full documentation is available at **[cell-survey.readthedocs.io](https://cell-survey.readthedocs.io/en/latest/)** — installation, a pipeline walkthrough, every parameter, the outputs reference, the visualisation guide, and an FAQ.
 
 # Installation
 
@@ -60,7 +60,7 @@ pixi run python run.py -i <path_to_input_file> -o <path_to_output_zarr> -p <path
 ## Parameters
 
 A full reference of every flag, with tuning guidance, is in the
-[Parameters](https://cellsurvey.readthedocs.io/en/latest/parameters/) page. The
+[Parameters](https://cell-survey.readthedocs.io/en/latest/parameters/) page. The
 three required arguments are:
 
 * `-i`, `--input_file`: Path to the input multichannel TIFF image (OME-TIFF recommended).
@@ -77,5 +77,5 @@ pixi run python run.py -i ~/data/sample.tiff -o ~/results/output -p ~/results/pl
 
 For the full visualisation guide — Odon (recommended), QuPath, TissUUmaps, and
 napari + napari-spatialdata, with performance notes — see the
-[Visualising results](https://cellsurvey.readthedocs.io/en/latest/visualization/)
+[Visualising results](https://cell-survey.readthedocs.io/en/latest/visualization/)
 page.
