@@ -81,6 +81,10 @@ When the run finishes, you'll have:
 | Summary | `~/results/plots/summary.json` | Counts of cells, clusters, communities |
 | Plots | `~/results/plots/*.png` | Density maps, UMAP, heatmaps |
 
+!!! note "GeoJSON location"
+    The QuPath GeoJSON defaults to `./qupath_export.geojson` in the current
+    directory. Change it with `--geojson-path` if you want it elsewhere.
+
 The **segmented Zarr** (`*_seg.zarr`) is the main result — it contains
 everything downstream analysis and visualisation need.
 
