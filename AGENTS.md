@@ -26,6 +26,8 @@ There is no Makefile, no CI/CD, and no tests. The source code is split across 6 
 
 **TODO**: Set up linting and formatting (Ruff, mypy) with a `pyproject.toml` config and pre-commit hooks.
 
+**TODO (docs)**: Add a *tutorial* page and more visual illustrations to the MkDocs site. All eight nav pages are now written (`index`, `installation`, `getting-started`, `pipeline`, `parameters`, `outputs`, `visualization`, `faq`), but a step-by-step tutorial (with example inputs/outputs) and richer diagrams/example-plot images would help first-time users. Revisit `docs/` once example datasets and output images are available.
+
 ## Commands
 
 **Development environment setup (pixi):**
@@ -562,7 +564,11 @@ Ten tips spanning experimental design → platform selection → data structure 
 │   ├── index.md                      # Landing / overview + pipeline diagram
 │   ├── installation.md               # pixi + Docker setup
 │   ├── getting-started.md            # First-run walkthrough
-│   └── DOCS_OUTLINE.md               # Docs plan (temporary; delete once pages are written)
+│   ├── pipeline.md                   # 10-stage walkthrough
+│   ├── parameters.md                 # Full CLI reference + tuning guidance
+│   ├── outputs.md                    # Every output file explained
+│   ├── visualization.md              # Odon / QuPath / TissUUmaps / napari
+│   └── faq.md                        # Question-phrased how-to + troubleshooting
 ├── Dockerfile                        # Ubuntu 24.04 + pixi + GPU-ready container
 ├── pixi.toml                         # Pixi environment config (linux-64 only)
 ├── pixi.lock                         # Pixi lockfile (generated)
