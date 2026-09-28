@@ -1,0 +1,62 @@
+# MkDocs Material configuration for the CellSurvey documentation site.
+# Serves on ReadTheDocs. Local preview: `mkdocs serve`.
+
+site_name: CellSurvey
+site_description: Documentation for the CellSurvey spatial biology analysis pipeline
+site_url: https://franciscrickinstitute.github.io/CellSurvey/
+repo_name: FrancisCrickInstitute/CellSurvey
+repo_url: https://github.com/FrancisCrickInstitute/CellSurvey
+copyright: Copyright &copy; 2025 Francis Crick Institute
+
+theme:
+  name: material
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+  palette:
+    scheme: default
+    primary: indigo
+    accent: indigo
+  icon:
+    repo: fontawesome/brands/github
+
+# NOTE: Pages are created incrementally. Nav entries pointing at not-yet-written
+# files produce a MkDocs warning (not an error) because `strict` is left off.
+nav:
+  - Home: index.md
+  - Installation: installation.md
+  - Getting started: getting-started.md
+  - Pipeline: pipeline.md
+  - Parameters: parameters.md
+  - Outputs: outputs.md
+  - Visualising results: visualization.md
+  - FAQ: faq.md
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+
+plugins:
+  - search
