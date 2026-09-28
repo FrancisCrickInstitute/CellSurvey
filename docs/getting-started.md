@@ -24,6 +24,13 @@ pixi run python run.py \
 | `-o`, `--output_file` | Prefix for the output Zarr file (`.zarr` is appended automatically) |
 | `-p`, `--plot_dir` | Directory where summary plots are written |
 
+!!! note "Input formats"
+    The input must be a **multi-channel TIFF** — OME-TIFF (`.ome.tiff`) is
+    recommended. Its embedded channel names become the marker column headers in
+    your results. Plain `.tiff`/`.tif` also works, but channels then fall back to
+    numeric names. Non-TIFF formats such as ND2, CZI, LIF, or DV are **not**
+    currently supported.
+
 ## A realistic example
 
 ```bash

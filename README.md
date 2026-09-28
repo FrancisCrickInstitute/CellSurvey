@@ -56,7 +56,7 @@ pixi run python run.py -i <path_to_input_file> -o <path_to_output_zarr> -p <path
 ## Parameters
 
 ### Required
-* `-i`, `--input_file`: Path to the input image. While only TIFF files have been tested, most common microscopy formats should work.
+* `-i`, `--input_file`: Path to the input multichannel TIFF image. OME-TIFF (`.ome.tiff`) is recommended as its embedded channel names become the marker column headers; plain multi-channel `.tiff`/`.tif` also works. Non-TIFF formats (ND2, CZI, LIF, DV) are not currently supported.
 * `-o`, `--output_file`: Path for the output Zarr file (`.zarr` suffix appended automatically if missing). The input image is converted to a [SpatialData](https://www.nature.com/articles/s41592-024-02212-x) Zarr object.
 * `-p`, `--plot_dir`: Directory where all output plots will be saved.
 
