@@ -107,7 +107,8 @@ Stardist segmentation. Combined with the segmented-Zarr reuse (see
 
 You can explore how clustering responds to its parameters without re-running the
 expensive segmentation, using the read-only sweep over an existing segmented
-Zarr.
+Zarr. Results are written to CSVs in the same directory as the Zarr; the Zarr
+itself is never modified.
 
 ### Community sweep
 
@@ -126,17 +127,16 @@ This writes `community_sweep.csv` (one column per combination,
 
 ### Cluster sweep
 
-Sweep the k-means `k`:
+Sweep the k-means `k` (defaults to `5,8,10,12,15,20`):
 
 ```bash
 pixi run python -m cellsurvey.stability \
   --zarr <output>_seg.zarr \
-  --n-clusters 5,8,10,12,15,20
+  --mode clusters
 ```
 
 This writes `cluster_sweep.csv` (a `cluster_k<k>` column per value) and
-`cluster_sweep_summary.csv` (the k-means inertia per `k`, for an elbow plot). The
-Zarr is read but never modified.
+`cluster_sweep_summary.csv` (the k-means inertia per `k`, for an elbow plot).
 
 !!! note "Clusters are independent of communities"
     `--n-clusters` does **not** affect the communities: Louvain weights its graph

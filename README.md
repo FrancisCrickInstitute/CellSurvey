@@ -77,6 +77,7 @@ pixi run python run.py -i ~/data/sample.tiff -o ~/results/output -p ~/results/pl
 
 To explore how clustering responds to its parameters without re-running the
 expensive segmentation, use the read-only sweep over an existing segmented Zarr.
+Results are written to CSVs in the same directory as the Zarr.
 
 Sweep the Louvain resolution (and Delaunay edge distance) for communities:
 
@@ -87,12 +88,12 @@ pixi run python -m cellsurvey.stability \
   --max-edge-distances 1000
 ```
 
-Or sweep the k-means `k`:
+Or sweep the k-means `k` (defaults to `5,8,10,12,15,20`):
 
 ```bash
 pixi run python -m cellsurvey.stability \
   --zarr <output>_seg.zarr \
-  --n-clusters 5,8,10,12,15,20
+  --mode clusters
 ```
 
 Each writes per-cell labels (plus a summary CSV with the community count, or the

@@ -1,22 +1,23 @@
 """Parameter sweeps over an existing segmented Zarr (read-only).
 
-Two modes:
+Two modes (selected with ``--mode``):
 
 - **Community sweep** (default): re-runs Delaunay + Louvain community detection
   across a grid of (``community_resolution``, ``max_edge_distance``) values.
-- **Cluster sweep** (``--n-clusters``): re-runs k-means clustering across a range
-  of ``n_clusters`` values.
+- **Cluster sweep**: re-runs k-means clustering across a range of ``n_clusters``
+  values.
 
-Both write per-cell labels to CSV and never write back to the Zarr, so the
-original result is left untouched.
+Both write per-cell labels to CSV (by default into the Zarr's directory) and
+never write back to the Zarr, so the original result is left untouched.
 
 Note: k-means clustering is independent of community detection (Louvain weights
 edges from the raw intensity matrix, not the k-means labels).
 
 Run:  python -m cellsurvey.stability --zarr <output>_seg.zarr [--resolutions ...]
-      python -m cellsurvey.stability --zarr <output>_seg.zarr --n-clusters 5,8,10,15
+      python -m cellsurvey.stability --zarr <output>_seg.zarr --mode clusters
 """
 import argparse
+import os
 
 import numpy as np
 import pandas as pd
@@ -173,33 +174,36 @@ def main():
     parser = argparse.ArgumentParser(
         description="Parameter sweeps over an existing segmented Zarr (read-only).")
     parser.add_argument("--zarr", required=True, help="Path to the segmented Zarr (*_seg.zarr).")
+    parser.add_argument("--mode", choices=["communities", "clusters"], default="communities",
+                        help="Which sweep to run (default: communities).")
     parser.add_argument("--resolutions", default="0.1,0.05,0.02,0.01",
                         help="Louvain resolutions to sweep (community mode).")
     parser.add_argument("--max-edge-distances", default="1000",
                         help="Max edge distances to sweep (community mode).")
-    parser.add_argument("--n-clusters", default=None,
-                        help="Comma-separated k-means k values (cluster mode; if set, runs a cluster sweep).")
+    parser.add_argument("--n-clusters", default="5,8,10,12,15,20",
+                        help="k-means k values to sweep (cluster mode).")
     parser.add_argument("--output", default=None,
-                        help="Output CSV for per-cell labels (default depends on mode).")
+                        help="Output CSV for per-cell labels (default: <zarr_dir>/<mode>_sweep.csv).")
     parser.add_argument("--summary", default=None,
-                        help="Output CSV for per-sweep summary (default depends on mode).")
+                        help="Output CSV for per-sweep summary (default: <zarr_dir>/<mode>_sweep_summary.csv).")
     args = parser.parse_args()
 
     sdata = spatialdata.read_zarr(args.zarr)
+    zarr_dir = os.path.dirname(args.zarr) or "."
 
-    if args.n_clusters is not None:
+    if args.mode == "clusters":
         n_clusters_list = [int(x) for x in args.n_clusters.split(",")]
         result = run_cluster_sweep(sdata, n_clusters_list)
-        output = args.output or "cluster_sweep.csv"
-        summary = args.summary or "cluster_sweep_summary.csv"
+        output = args.output or os.path.join(zarr_dir, "cluster_sweep.csv")
+        summary = args.summary or os.path.join(zarr_dir, "cluster_sweep_summary.csv")
         cluster_sweep_to_csv(result, output)
         cluster_sweep_summary(result, summary)
     else:
         resolutions = [float(x) for x in args.resolutions.split(",")]
         max_edge_distances = [float(x) for x in args.max_edge_distances.split(",")]
         result = run_stability_sweep(sdata, resolutions, max_edge_distances)
-        output = args.output or "community_sweep.csv"
-        summary = args.summary or "community_sweep_summary.csv"
+        output = args.output or os.path.join(zarr_dir, "community_sweep.csv")
+        summary = args.summary or os.path.join(zarr_dir, "community_sweep_summary.csv")
         sweep_to_csv(result, output)
         sweep_summary(result, summary)
 
