@@ -565,7 +565,7 @@ Ten tips spanning experimental design → platform selection → data structure 
 │   ├── cli.py                        # main() with argparse and pipeline orchestration
 │   ├── blob_detection.py             # detect_blobs_in_tile, detect_blobs_tiled
 │   ├── network_analysis.py           # run_network_analysis + compute_louvain_communities (scipy Delaunay + networkx Louvain, expr-similarity weights, summary.json)
-│   ├── stability.py                  # run_stability_sweep (read-only parameter sweep → CSV)
+│   ├── stability.py                  # run_stability_sweep (community) + run_cluster_sweep (k-means), read-only → CSV
 │   ├── export.py                     # export_to_qupath
 │   └── utils.py                      # remove_channel_suffix, cluster_data, assign_spots_to_cells, get_colors_for_communities
 ├── docs/                             # MkDocs Material site (ReadTheDocs-hosted)

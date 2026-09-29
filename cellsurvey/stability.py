@@ -1,21 +1,29 @@
-"""Parameter stability sweep for Louvain community detection.
+"""Parameter sweeps over an existing segmented Zarr (read-only).
 
-Reads an existing segmented Zarr, re-runs Delaunay + Louvain community detection
-across a grid of (``community_resolution``, ``max_edge_distance``) values, and
-writes the per-cell labels to CSV. It never writes back to the Zarr, so the
+Two modes:
+
+- **Community sweep** (default): re-runs Delaunay + Louvain community detection
+  across a grid of (``community_resolution``, ``max_edge_distance``) values.
+- **Cluster sweep** (``--n-clusters``): re-runs k-means clustering across a range
+  of ``n_clusters`` values.
+
+Both write per-cell labels to CSV and never write back to the Zarr, so the
 original result is left untouched.
 
 Note: k-means clustering is independent of community detection (Louvain weights
-edges from the raw intensity matrix, not the k-means labels), so this sweep does
-not touch ``n_clusters``.
+edges from the raw intensity matrix, not the k-means labels).
 
 Run:  python -m cellsurvey.stability --zarr <output>_seg.zarr [--resolutions ...]
+      python -m cellsurvey.stability --zarr <output>_seg.zarr --n-clusters 5,8,10,15
 """
 import argparse
 
 import numpy as np
 import pandas as pd
 import spatialdata
+
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
 
 from cellsurvey.network_analysis import compute_louvain_communities
 from cellsurvey.utils import remove_channel_suffix
@@ -103,28 +111,99 @@ def sweep_summary(result, output_path):
     pd.DataFrame(rows).to_csv(output_path, index=False)
 
 
+def _coords_for_cell_ids(sdata, cell_ids, cell_boundaries="stardist_boundaries"):
+    """Return an (n, 2) array of centroids aligned to ``cell_ids``."""
+    boundaries = sdata.shapes[cell_boundaries]
+    lookup = {cid: (g.centroid.x, g.centroid.y)
+              for cid, g in zip(boundaries.index.values, boundaries.geometry)}
+    return np.array([lookup.get(cid, (np.nan, np.nan)) for cid in cell_ids], dtype=float)
+
+
+def run_cluster_sweep(sdata, n_clusters_list, cell_boundaries="stardist_boundaries", seed=42):
+    """Recompute k-means clusters across a range of ``n_clusters``.
+
+    Returns a dict with keys ``cell_ids``, ``coords``, ``labels`` (an
+    ``(n_cells, n_sweeps)`` int array, one column per ``k``), ``params`` (the
+    list of ``k`` values), and ``inertias``.
+    """
+    intensity_df = extract_intensity_matrix(sdata)
+    scaled = StandardScaler().fit_transform(intensity_df)
+    cell_ids = intensity_df.index.values
+    coords = _coords_for_cell_ids(sdata, cell_ids, cell_boundaries)
+
+    labels, inertias, k_values = [], [], []
+    for k in n_clusters_list:
+        km = KMeans(n_clusters=k, random_state=seed)
+        lab = km.fit_predict(scaled)
+        labels.append(lab)
+        inertias.append(float(km.inertia_))
+        k_values.append(k)
+        print(f"n_clusters={k}: inertia={km.inertia_:.1f}")
+
+    return {
+        "cell_ids": cell_ids,
+        "coords": coords,
+        "labels": np.column_stack(labels) if labels else np.zeros((len(cell_ids), 0), dtype=int),
+        "params": k_values,
+        "inertias": inertias,
+    }
+
+
+def cluster_sweep_to_csv(result, output_path):
+    """Write one row per cell, with a ``cluster_k<k>`` column per sweep."""
+    df = pd.DataFrame({
+        "cell_id": result["cell_ids"],
+        "x": result["coords"][:, 0],
+        "y": result["coords"][:, 1],
+    })
+    for k, col in zip(result["params"], result["labels"].T):
+        df[f"cluster_k{k}"] = col
+    df.to_csv(output_path, index=False)
+    return df
+
+
+def cluster_sweep_summary(result, output_path):
+    """Write one row per sweep with ``n_clusters`` and the k-means inertia."""
+    rows = [{"n_clusters": k, "inertia": inertia}
+            for k, inertia in zip(result["params"], result["inertias"])]
+    pd.DataFrame(rows).to_csv(output_path, index=False)
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Sweep Louvain community parameters over an existing segmented Zarr (read-only).")
+        description="Parameter sweeps over an existing segmented Zarr (read-only).")
     parser.add_argument("--zarr", required=True, help="Path to the segmented Zarr (*_seg.zarr).")
     parser.add_argument("--resolutions", default="0.1,0.05,0.02,0.01",
-                        help="Comma-separated Louvain resolutions.")
+                        help="Louvain resolutions to sweep (community mode).")
     parser.add_argument("--max-edge-distances", default="1000",
-                        help="Comma-separated max edge distances.")
-    parser.add_argument("--output", default="community_sweep.csv",
-                        help="Output CSV for per-cell labels.")
-    parser.add_argument("--summary", default="community_sweep_summary.csv",
-                        help="Output CSV for per-sweep community counts.")
+                        help="Max edge distances to sweep (community mode).")
+    parser.add_argument("--n-clusters", default=None,
+                        help="Comma-separated k-means k values (cluster mode; if set, runs a cluster sweep).")
+    parser.add_argument("--output", default=None,
+                        help="Output CSV for per-cell labels (default depends on mode).")
+    parser.add_argument("--summary", default=None,
+                        help="Output CSV for per-sweep summary (default depends on mode).")
     args = parser.parse_args()
 
-    resolutions = [float(x) for x in args.resolutions.split(",")]
-    max_edge_distances = [float(x) for x in args.max_edge_distances.split(",")]
-
     sdata = spatialdata.read_zarr(args.zarr)
-    result = run_stability_sweep(sdata, resolutions, max_edge_distances)
-    sweep_to_csv(result, args.output)
-    sweep_summary(result, args.summary)
-    print(f"Wrote {args.output} and {args.summary}")
+
+    if args.n_clusters is not None:
+        n_clusters_list = [int(x) for x in args.n_clusters.split(",")]
+        result = run_cluster_sweep(sdata, n_clusters_list)
+        output = args.output or "cluster_sweep.csv"
+        summary = args.summary or "cluster_sweep_summary.csv"
+        cluster_sweep_to_csv(result, output)
+        cluster_sweep_summary(result, summary)
+    else:
+        resolutions = [float(x) for x in args.resolutions.split(",")]
+        max_edge_distances = [float(x) for x in args.max_edge_distances.split(",")]
+        result = run_stability_sweep(sdata, resolutions, max_edge_distances)
+        output = args.output or "community_sweep.csv"
+        summary = args.summary or "community_sweep_summary.csv"
+        sweep_to_csv(result, output)
+        sweep_summary(result, summary)
+
+    print(f"Wrote {output} and {summary}")
 
 
 if __name__ == "__main__":

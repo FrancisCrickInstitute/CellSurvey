@@ -105,28 +105,44 @@ Stardist segmentation. Combined with the segmented-Zarr reuse (see
 
 ## Parameter sweeps
 
-To see how many communities result at different `--community-resolution` (and
-`--max-edge-distance`) values — without re-running segmentation — use the
-read-only sweep over an existing segmented Zarr:
+You can explore how clustering responds to its parameters without re-running the
+expensive segmentation, using the read-only sweep over an existing segmented
+Zarr.
+
+### Community sweep
+
+Sweep the Louvain resolution (and Delaunay edge distance):
 
 ```bash
 pixi run python -m cellsurvey.stability \
   --zarr <output>_seg.zarr \
   --resolutions 0.1,0.05,0.02,0.01 \
-  --max-edge-distances 1000 \
-  --output community_sweep.csv \
-  --summary community_sweep_summary.csv
+  --max-edge-distances 1000
 ```
 
-It writes `community_sweep.csv` (one column per parameter combination,
+This writes `community_sweep.csv` (one column per combination,
 `community_r<res>_d<dist>`, plus `cell_id`/`x`/`y`) and
-`community_sweep_summary.csv` (community count per combination). The Zarr is
-read but never modified.
+`community_sweep_summary.csv` (community count per combination).
+
+### Cluster sweep
+
+Sweep the k-means `k`:
+
+```bash
+pixi run python -m cellsurvey.stability \
+  --zarr <output>_seg.zarr \
+  --n-clusters 5,8,10,12,15,20
+```
+
+This writes `cluster_sweep.csv` (a `cluster_k<k>` column per value) and
+`cluster_sweep_summary.csv` (the k-means inertia per `k`, for an elbow plot). The
+Zarr is read but never modified.
 
 !!! note "Clusters are independent of communities"
     `--n-clusters` does **not** affect the communities: Louvain weights its graph
-    from the raw intensity matrix, not the k-means labels. The sweep therefore
-    varies only `--community-resolution` and `--max-edge-distance`.
+    from the raw intensity matrix, not the k-means labels. Sweep them separately
+    — `--n-clusters` for the expression clusters, `--community-resolution` /
+    `--max-edge-distance` for the spatial communities.
 
 ---
 

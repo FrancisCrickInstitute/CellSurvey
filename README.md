@@ -75,21 +75,28 @@ pixi run python run.py -i ~/data/sample.tiff -o ~/results/output -p ~/results/pl
 
 ## Stability sweep
 
-To explore how community detection responds to the Louvain resolution (and
-Delaunay edge distance) without re-running the expensive segmentation, use the
-read-only sweep over an existing segmented Zarr:
+To explore how clustering responds to its parameters without re-running the
+expensive segmentation, use the read-only sweep over an existing segmented Zarr.
+
+Sweep the Louvain resolution (and Delaunay edge distance) for communities:
 
 ```bash
 pixi run python -m cellsurvey.stability \
   --zarr <output>_seg.zarr \
   --resolutions 0.1,0.05,0.02,0.01 \
-  --max-edge-distances 1000 \
-  --output community_sweep.csv \
-  --summary community_sweep_summary.csv
+  --max-edge-distances 1000
 ```
 
-This writes per-cell community labels for each parameter combination to a CSV
-and leaves the Zarr untouched.
+Or sweep the k-means `k`:
+
+```bash
+pixi run python -m cellsurvey.stability \
+  --zarr <output>_seg.zarr \
+  --n-clusters 5,8,10,12,15,20
+```
+
+Each writes per-cell labels (plus a summary CSV with the community count, or the
+k-means inertia) and leaves the Zarr untouched.
 
 # Visualising Results
 
