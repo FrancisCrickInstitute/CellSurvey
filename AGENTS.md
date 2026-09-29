@@ -190,15 +190,19 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 ### Parameters to explore
 | Parameter | Range | Rationale |
 |---|---|---|
-| `n_clusters` (k-means) | 5–20 | Different cluster resolutions change the expression-feature space fed into Louvain |
 | `community_resolution` (Louvain) | 0.05–1.0 | Directly controls community granularity |
 | `max_edge_distance` | 500–2000 | Changes which cells are neighbors in the Delaunay graph |
+
+> **`n_clusters` is NOT part of the community sweep.** k-means clustering and
+> Louvain community detection are independent: Louvain weights its Delaunay edges
+> from the raw intensity matrix, never from the k-means labels. So `n_clusters`
+> only affects the `kmeans_cluster` labels, not the `community` labels.
 
 (Re-running Stardist or blob detection with varied parameters is not in scope — too expensive. The sweep operates on an existing `_seg.zarr`.)
 
 ### Phases
 
-**Phase 1 — Sweep**: For each combination (or random sample, e.g. 50–100 draws), re-run k-means → Delaunay → Louvain using the existing segmented Zarr. Stack results into an `(n_cells, n_sweeps)` assignment matrix.
+**Phase 1 — Sweep**: For each combination (or random sample, e.g. 50–100 draws), re-run Delaunay → Louvain using the existing segmented Zarr. Stack results into an `(n_cells, n_sweeps)` assignment matrix.
 
 **Phase 2 — Stability metrics**:
 - **Co-occurrence matrix**: `(n_cells, n_cells)` — fraction of sweeps where cells A and B share a community
@@ -207,8 +211,11 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 
 **Phase 3 — Consensus communities**: Hierarchical clustering on the co-occurrence matrix → final high-confidence niches. Export alongside per-cell confidence scores to GeoJSON.
 
-### Implementation sketch
-New module `cellsurvey/stability.py` with `run_stability_sweep(sdata, intensity_df, param_grid)` returning a dict of assignment matrix, co-occurrence, entropy, consensus labels, and confidence scores. CLI flag: `--stability-sweep` with optional `--sweep-iterations` (default 50).
+### Implementation (Phase 1 done)
+New module `cellsurvey/stability.py` with `run_stability_sweep(sdata, resolutions, max_edge_distances)` returning a dict with `cell_ids`, `coords`, an `(n_cells, n_sweeps)` label matrix, and the `(resolution, max_edge_distance)` params. It reads an existing `_seg.zarr` **read-only** (never writes back), and `sweep_to_csv`/`sweep_summary` write per-cell labels and per-sweep community counts to CSVs. Standalone entry point: `python -m cellsurvey.stability --zarr <output>_seg.zarr --resolutions ... --max-edge-distances ...`.
+
+Phases 2–3 (stability metrics + consensus communities) are still TODO:
+- `run_stability_sweep` should gain co-occurrence, per-cell entropy, consensus labels, and confidence scores (the `(n_cells, n_sweeps)` matrix is the input to these).
 
 ### Outputs
 - `stability_map.png` — spatial heatmap of per-cell entropy (uncertainty)
@@ -216,7 +223,7 @@ New module `cellsurvey/stability.py` with `run_stability_sweep(sdata, intensity_
 - `stability_scores` and `consensus_community` columns in GeoJSON export
 
 ### Risks
-- Full grid search is `O(n_clusters × n_resolutions × n_distances)` — random sampling is more practical
+- Full grid search is `O(n_resolutions × n_distances)` — random sampling is more practical
 - Co-occurrence matrix is `O(n_cells²)` memory — sparse storage or chunking needed for large datasets
 
 ## Reference: PANORAMIC (plevritis-lab)
@@ -557,7 +564,8 @@ Ten tips spanning experimental design → platform selection → data structure 
 │   ├── __init__.py                   # Re-exports all public symbols
 │   ├── cli.py                        # main() with argparse and pipeline orchestration
 │   ├── blob_detection.py             # detect_blobs_in_tile, detect_blobs_tiled
-│   ├── network_analysis.py           # run_network_analysis (scipy Delaunay + networkx Louvain, expr-similarity weights, summary.json)
+│   ├── network_analysis.py           # run_network_analysis + compute_louvain_communities (scipy Delaunay + networkx Louvain, expr-similarity weights, summary.json)
+│   ├── stability.py                  # run_stability_sweep (read-only parameter sweep → CSV)
 │   ├── export.py                     # export_to_qupath
 │   └── utils.py                      # remove_channel_suffix, cluster_data, assign_spots_to_cells, get_colors_for_communities
 ├── docs/                             # MkDocs Material site (ReadTheDocs-hosted)

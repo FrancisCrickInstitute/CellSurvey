@@ -5,6 +5,45 @@ from scipy.spatial import Delaunay
 import networkx as nx
 
 
+def compute_louvain_communities(coords, imat, comm_detect_res=0.1, max_edge_distance=1000, seed=42):
+    """Build a Delaunay graph of ``coords``, weighted by expression similarity in
+    ``imat``, and return per-node Louvain community labels.
+
+    ``imat`` is an ``(n_cells, n_markers)`` array aligned to ``coords``; if None,
+    the graph is left unweighted. Returns ``(community_labels, n_edges)``.
+    """
+    n_cells = len(coords)
+    tri = Delaunay(coords)
+    edges = set()
+    for simplex in tri.simplices:
+        for i in range(3):
+            for j in range(i + 1, 3):
+                a, b = simplex[i], simplex[j]
+                dist = np.linalg.norm(coords[a] - coords[b])
+                if dist <= max_edge_distance:
+                    edges.add((a, b))
+
+    G = nx.Graph()
+    G.add_nodes_from(range(n_cells))
+    if imat is not None:
+        for a, b in edges:
+            corr = np.corrcoef(imat[a], imat[b])[0, 1]
+            G.add_edge(a, b, weight=1 + corr)
+    else:
+        G.add_edges_from(edges)
+
+    communities = nx.community.louvain_communities(
+        G, weight='weight' if imat is not None else None,
+        resolution=comm_detect_res, seed=seed)
+
+    community_labels = np.full(n_cells, -1, dtype=int)
+    for comm_idx, comm in enumerate(communities):
+        for node in comm:
+            community_labels[node] = comm_idx
+
+    return community_labels, len(edges)
+
+
 def run_network_analysis(sdata, intensity_matrix=None, cell_boundaries='stardist_boundaries', index_name='cell_id',
                output_dir='.', cell_colour='table: kmeans_cluster', comm_detect_res=0.1,
                max_edge_distance=1000, fig_size=20):
@@ -23,43 +62,18 @@ def run_network_analysis(sdata, intensity_matrix=None, cell_boundaries='stardist
             cluster_labels[idx] = int(table.obs.loc[cell_id, 'kmeans_cluster'])
 
     print("\nBuilding Delaunay triangulation...")
-    tri = Delaunay(coords)
-    edges = set()
-    for simplex in tri.simplices:
-        for i in range(3):
-            for j in range(i + 1, 3):
-                a, b = simplex[i], simplex[j]
-                dist = np.linalg.norm(coords[a] - coords[b])
-                if dist <= max_edge_distance:
-                    edges.add((a, b))
-
-    print(f"Delaunay network: {len(edges)} edges (filtered to max distance {max_edge_distance})")
-
-    print("\nDetecting Louvain communities...")
-    G = nx.Graph()
-    G.add_nodes_from(range(n_cells))
-
+    imat = None
     if intensity_matrix is not None:
         cell_ids = boundaries.index.values
         imat = np.zeros((n_cells, intensity_matrix.shape[1]))
         for pos_idx, cell_id in enumerate(cell_ids):
             if cell_id in intensity_matrix.index:
                 imat[pos_idx] = intensity_matrix.loc[cell_id].values
-        print("Computing edge weights from expression similarity...")
-        for a, b in edges:
-            corr = np.corrcoef(imat[a], imat[b])[0, 1]
-            weight = 1 + corr
-            G.add_edge(a, b, weight=weight)
-    else:
-        G.add_edges_from(edges)
 
-    communities = nx.community.louvain_communities(G, weight='weight' if intensity_matrix is not None else None,
-                                                  resolution=comm_detect_res, seed=42)
-
-    community_labels = np.full(n_cells, -1, dtype=int)
-    for comm_idx, comm in enumerate(communities):
-        for node in comm:
-            community_labels[node] = comm_idx
+    community_labels, n_edges = compute_louvain_communities(
+        coords, imat, comm_detect_res=comm_detect_res,
+        max_edge_distance=max_edge_distance, seed=42)
+    print(f"Delaunay network: {n_edges} edges (filtered to max distance {max_edge_distance})")
 
     n_communities = len(set(community_labels)) - (1 if -1 in community_labels else 0)
     print(f"Found {n_communities} communities")
@@ -73,7 +87,7 @@ def run_network_analysis(sdata, intensity_matrix=None, cell_boundaries='stardist
         'n_cells': int(n_cells),
         'n_clusters': int(len(set(cluster_labels)) - (1 if -1 in cluster_labels else 0)),
         'n_communities': int(n_communities),
-        'n_edges': len(edges),
+        'n_edges': int(n_edges),
         'max_edge_distance': max_edge_distance,
         'community_resolution': comm_detect_res,
         'cluster_sizes': {int(k): int(v) for k, v in zip(*np.unique(cluster_labels[cluster_labels >= 0], return_counts=True))},

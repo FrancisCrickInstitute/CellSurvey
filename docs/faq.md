@@ -12,6 +12,17 @@ that isn't covered here, check the error message and the sections below.
 See [Getting started](getting-started.md) and [Outputs](outputs.md) for the full
 picture.
 
+## What's the difference between clusters and communities?
+
+- **Clusters** (`kmeans_cluster`) group cells by **expression** — cells with a
+  similar marker profile, wherever they are in the tissue.
+- **Communities** (`community`) group cells by **space** — cells that sit next to
+  each other, regardless of marker similarity.
+
+A single cell type therefore usually spans several communities (e.g. CD31⁺ blood
+vessels are separate communities), while a cluster labels that cell type as one
+group across the whole tissue. See [Pipeline](pipeline.md) for details.
+
 ## Do I need a GPU?
 
 Strictly, no — but practically, yes. Stardist segmentation is the slowest stage,

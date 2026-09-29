@@ -144,6 +144,18 @@ Builds a spatial network of neighbouring cells and detects communities.
     Both k-means and Louvain use a fixed random seed (42), so the same input and
     parameters give the same result.
 
+!!! tip "Clusters vs communities"
+    These two labels answer different questions and are easy to confuse:
+
+    - **Clusters** (`kmeans_cluster`) group cells by **expression** — cells with
+      similar marker profiles, wherever they sit in the tissue.
+    - **Communities** (`community`) group cells by **space** — cells that sit next
+      to each other in the tissue, regardless of whether they share markers.
+
+    So one cell type often appears in many communities (e.g. CD31⁺ vessels are
+    spatially separated, so each vessel is its own community), while a cluster
+    groups that cell type into a single label across the whole tissue.
+
 ## 8. Spot-to-cell assignment
 
 Assigns each detected spot to the cell that contains it.
