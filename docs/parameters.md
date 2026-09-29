@@ -103,6 +103,31 @@ Stardist segmentation. Combined with the segmented-Zarr reuse (see
     Plots and `summary.json` are written to `--plot_dir`; the GeoJSON goes to
     `--geojson-path` (independent of `-o` and `-p`).
 
+## Parameter sweeps
+
+To see how many communities result at different `--community-resolution` (and
+`--max-edge-distance`) values — without re-running segmentation — use the
+read-only sweep over an existing segmented Zarr:
+
+```bash
+pixi run python -m cellsurvey.stability \
+  --zarr <output>_seg.zarr \
+  --resolutions 0.1,0.05,0.02,0.01 \
+  --max-edge-distances 1000 \
+  --output community_sweep.csv \
+  --summary community_sweep_summary.csv
+```
+
+It writes `community_sweep.csv` (one column per parameter combination,
+`community_r<res>_d<dist>`, plus `cell_id`/`x`/`y`) and
+`community_sweep_summary.csv` (community count per combination). The Zarr is
+read but never modified.
+
+!!! note "Clusters are independent of communities"
+    `--n-clusters` does **not** affect the communities: Louvain weights its graph
+    from the raw intensity matrix, not the k-means labels. The sweep therefore
+    varies only `--community-resolution` and `--max-edge-distance`.
+
 ---
 
 Next: [Outputs](outputs.md) for a description of every file the pipeline
