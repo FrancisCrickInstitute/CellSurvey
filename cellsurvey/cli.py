@@ -371,8 +371,8 @@ def main():
     y = np.array([centroid_map.get(cid, (np.nan, np.nan))[1] for cid in obs_ids])
     bins = min(200, int(np.sqrt(len(x))))
 
-    cluster_labels_arr = obs['kmeans_cluster'].values
-    community_labels_arr = np.array([cell_to_community.get(cid, -1) for cid in obs_ids])
+    cluster_labels_arr = obs['kmeans_cluster'].astype(int).to_numpy()
+    community_labels_arr = obs['community'].astype(int).to_numpy()
 
     n_clusters = args.n_clusters
     n_communities = len(set(community_labels_arr)) - (1 if -1 in community_labels_arr else 0)
