@@ -228,7 +228,7 @@ Phases 2–3 (stability metrics + consensus communities) are still TODO:
 
 ## Planned: Cell segmentation (nucleus expansion → whole cell)
 
-**Status**: planned — not implemented.
+**Status**: in progress — **v1 (buffer) implemented and wired**: `--cell-expansion` builds `cell_boundaries` and aggregation now targets them. **v2 (non-overlapping) pending**, as are the separate `nucleus` table and `--cluster-regions` downstream threading.
 
 **Goal**: The pipeline currently segments **nuclei only** (Stardist → `stardist_boundaries`). Marker intensity and RNA spots are mostly cytoplasmic, so aggregating over nuclei misses the cytoplasm. Add a **whole-cell** boundary as an expanded version of each nucleus (QuPath-style). A distinct **cytoplasm** compartment is deferred to proper whole-cell segmentation later (Cellpose) — it is *not* approximated arithmetically in this phase.
 
@@ -263,7 +263,7 @@ Two implementation tiers:
 1. **v1 — simple buffer (start here)**: `shapely.buffer(nucleus_geometry, expansion_px)`. Fast, trivially parallel over rows, but produces **overlapping** polygons where cells are dense; overlap double-counts pixels in aggregation.
 2. **v2 — non-overlapping (QuPath-faithful)**: assign each pixel to the nearest nucleus via a distance transform clipped to the expansion radius. **Sopa already ships this**: `sopa.shapes.expand` / `sopa.shapes.expand.remove_overlap()` (Voronoi-based) — prefer reusing it over hand-writing `scipy.ndimage.distance_transform_edt` + `skimage.segmentation.watershed`. `sopa.aggregate()` also takes a `no_overlap` parameter, but that only disambiguates overlap at aggregation time, not the geometry itself.
 
-Recommend implementing v1 to wire the plumbing, then upgrade to v2 (via `sopa.shapes.expand.remove_overlap`) before trusting whole-cell measurements.
+v1 is implemented (wired through `cli.py`); upgrade to v2 (via `sopa.shapes.expand.remove_overlap`) before trusting whole-cell measurements quantitatively.
 
 ### Aggregation & measurements (two tables)
 
@@ -286,17 +286,12 @@ Each table's `.obs` index is the same `cell_id`, so `table` and `nucleus` join c
 
 ### Implementation plan
 
-1. **Read physical pixel size** — helper `get_pixel_size(imagepath)` using `BioImage(...).physical_pixel_sizes`, returning µm/px (with a fallback path when absent).
-
-2. **New geometry function** — `expand_nuclei(nuclei_gdf, expansion_um, pixel_size_um) -> cell_gdf` (new module `cellsurvey/segmentation.py`; v1 `shapely.buffer`, v2 `sopa.shapes.expand.remove_overlap`).
-
-3. **New CLI flags** — `--cell-expansion` (µm, default `5.0`) and `--cluster-regions` (comma-separated region table keys, default `cell,nucleus`).
-
-4. **Insert after Stardist (stage 4), before aggregation (stage 5)** — build `cell_boundaries` and store it in `sdata.shapes` (keep `stardist_boundaries`).
-
-5. **Aggregate twice** — `sopa.aggregate` over `cell_boundaries` → `table`, and over `stardist_boundaries` → `nucleus`.
-
-6. **Thread the region through downstream** — replace the hardcoded `sdata.tables['table']` reads in `cli.py` and the `'stardist_boundaries'` defaults in `network_analysis.py`, `utils.py`, `export.py`, and `stability.py` with the selected cell/region layers (single source of truth for the shapes/table keys).
+1. **Read physical pixel size** — **done**: `get_pixel_size(imagepath)` in `cellsurvey/segmentation.py` (returns µm/px or `None`).
+2. **Expand nuclei (v1)** — **done**: `expand_nuclei(nuclei_gdf, expansion_um, pixel_size_um)` via `shapely.buffer`. v2 (`sopa.shapes.expand.remove_overlap`) still pending.
+3. **`--cell-expansion` flag** — **done** (µm, default `5.0`). `--cluster-regions` deferred to step 6 (only meaningful once the second table exists).
+4. **Build & store `cell_boundaries`** — **done**: inserted after Stardist, before aggregation; `stardist_boundaries` kept.
+5. **Aggregate over cells** — **partially done**: `sopa.aggregate` now targets `cell_boundaries` → `table` (whole-cell). The separate `stardist_boundaries` → `nucleus` table is **pending**.
+6. **Thread region through downstream** — **pending**: replace hardcoded `'stardist_boundaries'` in `export.py`, `assign_spots_to_cells`, `network_analysis.py`, `stability.py`, and add `--cluster-regions`.
 
 ### Future: Cellpose (proper cytoplasm segmentation)
 Integrate **Cellpose** for true whole-cell segmentation (cell + cytoplasm), replacing the nucleus-expansion approximation. Cellpose is the dominant pretrained whole-cell segmenter for fluorescent microscopy, and would also yield a genuine **cytoplasm** compartment (cell minus nucleus) — the piece this phase deliberately does not approximate. Note: Cellpose is PyTorch-based (see the TF/Torch co-existence note) — recommend a separate pixi environment or a deferred, opt-in `--segmenter cellpose` path. Recorded here for later; not in scope for the expansion work.
