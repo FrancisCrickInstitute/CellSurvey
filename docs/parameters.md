@@ -95,7 +95,6 @@ Stardist segmentation. Combined with the segmented-Zarr reuse (see
 | Flag | Default | What it controls |
 |---|---|---|
 | `--geojson-path` | `./qupath_export.geojson` | Output path for the QuPath GeoJSON. |
-| `--fig-size` | `20` | Figure size for plots. |
 | `--font-size` | `20` | Font size for plots. |
 | `--axes-linewidth` | `3` | Axes line width for plots. |
 

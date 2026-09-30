@@ -71,8 +71,6 @@ def main():
                         help='Path to existing Zarr to resume from (skips image loading and spot detection)')
     parser.add_argument('--geojson-path', default='./qupath_export.geojson',
                         help='Output path for QuPath GeoJSON (default: ./qupath_export.geojson)')
-    parser.add_argument('--fig-size', type=int, default=20,
-                        help='Figure size for network analysis plots (default: 20)')
     parser.add_argument('--font-size', type=int, default=20,
                         help='Font size for plots (default: 20)')
     parser.add_argument('--axes-linewidth', type=int, default=3,
@@ -269,8 +267,7 @@ def main():
     result = run_network_analysis(sdata, intensity_matrix=intensity_df,
                                 comm_detect_res=args.community_resolution,
                                 max_edge_distance=args.max_edge_distance,
-                                output_dir=args.plot_dir,
-                                fig_size=args.fig_size)
+                                output_dir=args.plot_dir)
 
     spots_with_cells = assign_spots_to_cells(sdata)
 

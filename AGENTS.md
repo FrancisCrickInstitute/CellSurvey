@@ -116,7 +116,6 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 | `--radius-max` | `1000` | Max radius for spatial neighbors graph |
 | `--resume-from` | — | Path to existing Zarr to resume from (skips image loading and spot detection) |
 | `--geojson-path` | `./qupath_export.geojson` | Output path for QuPath GeoJSON |
-| `--fig-size` | `20` | Figure size for plots |
 | `--font-size` | `20` | Font size for plots |
 | `--axes-linewidth` | `3` | Axes line width for plots |
 

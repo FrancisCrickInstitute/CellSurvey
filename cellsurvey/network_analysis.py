@@ -45,8 +45,7 @@ def compute_louvain_communities(coords, imat, comm_detect_res=0.1, max_edge_dist
 
 
 def run_network_analysis(sdata, intensity_matrix=None, cell_boundaries='stardist_boundaries', index_name='cell_id',
-               output_dir='.', cell_colour='table: kmeans_cluster', comm_detect_res=0.1,
-               max_edge_distance=1000, fig_size=20):
+               output_dir='.', comm_detect_res=0.1, max_edge_distance=1000):
     boundaries = sdata.shapes[cell_boundaries]
     boundaries.index.name = index_name
 
