@@ -29,7 +29,7 @@ from spatialdata.transformations import Identity
 from cellsurvey.utils import remove_channel_suffix, cluster_data, assign_spots_to_cells
 from cellsurvey.blob_detection import detect_blobs_tiled
 from cellsurvey.network_analysis import run_network_analysis
-from cellsurvey.segmentation import get_pixel_size
+from cellsurvey.segmentation import get_pixel_size, expand_nuclei
 from cellsurvey.export import export_to_qupath
 
 
@@ -42,6 +42,8 @@ def main():
                         help='Enable RNA spot blob detection on the specified channels')
     parser.add_argument('--use-gpu', action='store_true',
                         help='Force GPU usage for Stardist segmentation (auto-detected if not specified)')
+    parser.add_argument('--cell-expansion', type=float, default=5.0,
+                        help='Cell expansion radius in microns (default: 5.0)')
     parser.add_argument('--channels', help='Comma-separated channel indices for blob detection',
                         default='9,10,11,12')
     parser.add_argument('--thresholds', help='Comma-separated blob detection thresholds (one per channel)',
@@ -225,6 +227,16 @@ def main():
         sopa.segmentation.stardist(dataset, model_type='2D_versatile_fluo', channels=unique_channels[0])
 
     if needs_aggregation:
+        if args.cell_expansion > 0:
+            if 'stardist_boundaries' not in dataset.shapes:
+                print("WARNING: no stardist_boundaries to expand; skipping cell expansion")
+            elif pixel_size_um is None:
+                print("WARNING: no physical pixel size available; cannot expand cells in µm; skipping")
+            else:
+                nuclei = dataset.shapes['stardist_boundaries']
+                dataset["cell_boundaries"] = expand_nuclei(nuclei, args.cell_expansion, pixel_size_um)
+                print(f"Expanded {len(nuclei)} nuclei into cell boundaries (--cell-expansion={args.cell_expansion} µm)")
+
         print("Aggregating...")
 
         # Force pandas to use plain object dtype for strings, not ArrowStringArray,
