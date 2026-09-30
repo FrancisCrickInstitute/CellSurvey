@@ -43,14 +43,14 @@ def extract_intensity_matrix(sdata, table_key="table"):
     return df.loc[:, ~df.columns.duplicated(keep="first")]
 
 
-def extract_coords(sdata, cell_boundaries="stardist_boundaries"):
+def extract_coords(sdata, cell_boundaries="cell_boundaries"):
     boundaries = sdata.shapes[cell_boundaries]
     centroids = boundaries.geometry.centroid
     return boundaries.index.values, np.column_stack([centroids.x.values, centroids.y.values])
 
 
 def run_stability_sweep(sdata, resolutions, max_edge_distances,
-                        cell_boundaries="stardist_boundaries", seed=42):
+                        cell_boundaries="cell_boundaries", seed=42):
     """Recompute Louvain communities across a parameter grid.
 
     Returns a dict with keys ``cell_ids``, ``coords``, ``labels`` (an
@@ -112,7 +112,7 @@ def sweep_summary(result, output_path):
     pd.DataFrame(rows).to_csv(output_path, index=False)
 
 
-def _coords_for_cell_ids(sdata, cell_ids, cell_boundaries="stardist_boundaries"):
+def _coords_for_cell_ids(sdata, cell_ids, cell_boundaries="cell_boundaries"):
     """Return an (n, 2) array of centroids aligned to ``cell_ids``."""
     boundaries = sdata.shapes[cell_boundaries]
     lookup = {cid: (g.centroid.x, g.centroid.y)
@@ -120,7 +120,7 @@ def _coords_for_cell_ids(sdata, cell_ids, cell_boundaries="stardist_boundaries")
     return np.array([lookup.get(cid, (np.nan, np.nan)) for cid in cell_ids], dtype=float)
 
 
-def run_cluster_sweep(sdata, n_clusters_list, cell_boundaries="stardist_boundaries", seed=42):
+def run_cluster_sweep(sdata, n_clusters_list, cell_boundaries="cell_boundaries", seed=42):
     """Recompute k-means clusters across a range of ``n_clusters``.
 
     Returns a dict with keys ``cell_ids``, ``coords``, ``labels`` (an

@@ -31,7 +31,7 @@ def cluster_data(data, n_clusters=10, random_seed=42):
     return cluster_labels, distances
 
 
-def assign_spots_to_cells(spatial_data, spots_key='spots', cell_boundaries='stardist_boundaries'):
+def assign_spots_to_cells(spatial_data, spots_key='spots', cell_boundaries='cell_boundaries'):
     if spots_key not in spatial_data.points:
         print("No spots found, skipping spot-to-cell assignment")
         return None

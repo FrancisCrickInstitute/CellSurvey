@@ -6,7 +6,7 @@ from cellsurvey.utils import get_colors_for_communities
 
 
 def export_to_qupath(cell_ids, community_labels, cluster_labels, output_path, sdata, intensity_df,
-                     spots_with_cells=None):
+                     spots_with_cells=None, cell_boundaries='cell_boundaries'):
     print("Exporting to QuPath GeoJSON format...")
 
     cell_to_community = dict(zip(cell_ids, community_labels))
@@ -18,7 +18,7 @@ def export_to_qupath(cell_ids, community_labels, cluster_labels, output_path, sd
     features = []
 
     print("Exporting cell boundaries with community labels...")
-    boundaries = sdata.shapes['stardist_boundaries']
+    boundaries = sdata.shapes.get(cell_boundaries, sdata.shapes['stardist_boundaries'])
     for idx, row in boundaries.iterrows():
         community = cell_to_community.get(idx, -1)
         cluster_id = cell_to_cluster.get(idx, -1)

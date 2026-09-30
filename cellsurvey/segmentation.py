@@ -127,6 +127,10 @@ def _watershed_expand(nuclei_gdf, expansion_px):
         fallback.geometry = nuclei_gdf.loc[missing].geometry.buffer(expansion_px)
         result = pd.concat([result, fallback])
 
+    # Record the original nucleus id so it survives sopa.aggregate's re-indexing
+    # (which assigns new cell ids to the shapes).
+    result["nucleus_id"] = result.index
+
     return result
 
 

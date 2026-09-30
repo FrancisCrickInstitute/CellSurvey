@@ -296,12 +296,13 @@ def main():
                                 max_edge_distance=args.max_edge_distance,
                                 output_dir=args.plot_dir)
 
-    spots_with_cells = assign_spots_to_cells(sdata)
+    spots_with_cells = assign_spots_to_cells(sdata, cell_boundaries=network_shapes_key)
 
     export_to_qupath(result['cell_ids'], result['community_labels'], result['cluster_labels'],
                      output_path=args.geojson_path,
                      sdata=sdata, intensity_df=intensity_df,
-                     spots_with_cells=spots_with_cells)
+                     spots_with_cells=spots_with_cells,
+                     cell_boundaries=network_shapes_key)
 
     # Persist everything to Zarr.
     # Write to a temporary path first, then replace the target path atomically
@@ -313,6 +314,16 @@ def main():
     sdata.shapes[network_shapes_key]['kmeans_cluster'] = result['cluster_labels']
     sdata.shapes[network_shapes_key]['community'] = result['community_labels']
     sdata.tables['table'].obs['community'] = pd.Categorical(result['community_labels'])
+
+    # Also attach cluster/community to the nuclei (stardist_boundaries) via the
+    # nucleus_id recorded before sopa.aggregate re-indexed the cells.
+    if 'nucleus_id' in sdata.shapes[network_shapes_key].columns:
+        cell_gdf = sdata.shapes[network_shapes_key]
+        nucleus_to_cluster = dict(zip(cell_gdf['nucleus_id'], result['cluster_labels']))
+        nucleus_to_community = dict(zip(cell_gdf['nucleus_id'], result['community_labels']))
+        nuclei = sdata.shapes['stardist_boundaries']
+        nuclei['kmeans_cluster'] = [nucleus_to_cluster.get(cid, -1) for cid in nuclei.index]
+        nuclei['community'] = [nucleus_to_community.get(cid, -1) for cid in nuclei.index]
     print(f'Saving Zarr to {seg_zarr_path}')
     try:
         tmpdir = tempfile.mkdtemp(dir=os.path.dirname(seg_zarr_path) or '.')

@@ -228,7 +228,7 @@ Phases 2–3 (stability metrics + consensus communities) are still TODO:
 
 ## Planned: Cell segmentation (nucleus expansion → whole cell)
 
-**Status**: in progress — **v1/v2/v3 implemented and wired**: `--cell-expansion` builds non-overlapping `cell_boundaries` via a marker-controlled watershed (`_watershed_expand`: rasterize → EDT → watershed → vectorize) and aggregation targets them. **Pending**: the separate `nucleus` table and `--cluster-regions` downstream threading.
+**Status**: implemented and wired — `--cell-expansion` builds non-overlapping `cell_boundaries` via a marker-controlled watershed (`_watershed_expand`: rasterize → EDT → watershed → vectorize); aggregation, clustering, the Louvain network, spot assignment, export, and the sweeps all target the cell layer, and cluster/community are mapped back onto `stardist_boundaries` (nuclei) via a recorded `nucleus_id`. **Remaining**: the separate `nucleus` table and `--cluster-regions` multi-region clustering.
 
 **Goal**: The pipeline currently segments **nuclei only** (Stardist → `stardist_boundaries`). Marker intensity and RNA spots are mostly cytoplasmic, so aggregating over nuclei misses the cytoplasm. Add a **whole-cell** boundary as an expanded version of each nucleus (QuPath-style). A distinct **cytoplasm** compartment is deferred to proper whole-cell segmentation later (Cellpose) — it is *not* approximated arithmetically in this phase.
 
@@ -328,18 +328,19 @@ Each table's `.obs` index is the same `cell_id`, so `table` and `nucleus` join c
 
 ### Downstream consumption
 
-- **Region selection for clustering/network** — add `--cluster-regions` (comma-separated region table keys, default `cell,nucleus`). The selected regions' feature matrices are **concatenated** column-wise into one `(n_cells, n_regions × n_markers)` matrix that drives k-means (`cluster_data`) and Louvain edge weights (`run_network_analysis`). Clustering on *both* nuclear and whole-cell signal is fully supported — no need to pick one. (Note: whole-cell already includes the nuclear signal, so the two are partly redundant; the genuinely complementary pair is nucleus + cytoplasm, which arrives with proper segmentation.)
-- **Spot assignment** — `assign_spots_to_cells()` assigns to `cell_boundaries` (whole cell), then classifies each spot as nuclear vs cytoplasmic via a second `within` predicate against `stardist_boundaries` (nucleus `within` → nuclear, else cytoplasmic). Works with the two solid geometries — no donut needed.
-- **GeoJSON export** — `export_to_qupath()` emits per-region measurements, prefixed by compartment: `Nucleus: <channel> mean`, `Cell: <channel> mean`. Cell boundaries are the primary `objectType: "cell"` features; nuclei optionally exported as `objectType: "nucleus"` with a `parent_id` link to the cell.
+- **Region selection for clustering/network** — **done** (single region): clustering and the Louvain network run on the whole-cell `table` / `cell_boundaries`. `--cluster-regions` (multi-region concatenation) remains a future option.
+- **Spot assignment** — **done**: `assign_spots_to_cells()` assigns spots to `cell_boundaries` (whole cell). Nuclear-vs-cytoplasmic spot classification (a second `within` predicate) is still a future refinement.
+- **GeoJSON export** — **done**: `export_to_qupath()` exports `cell_boundaries` (cells) with cluster/community. Per-compartment measurements (nucleus/cytoplasm/cell) are still future.
+- **Nuclei labels** — **done**: cluster/community are mapped back onto `stardist_boundaries` via the `nucleus_id` column recorded in `expand_nuclei` (survives `sopa.aggregate`'s re-indexing).
 
 ### Implementation plan
 
 1. **Read physical pixel size** — **done**: `get_pixel_size(imagepath)` in `cellsurvey/segmentation.py` (returns µm/px or `None`).
-2. **Expand nuclei (v1 + v2)** — **done**: `expand_nuclei(nuclei_gdf, expansion_um, pixel_size_um)` buffers then clips to a custom Voronoi tiling (`_resolve_overlap`), producing non-overlapping cells.
-3. **`--cell-expansion` flag** — **done** (µm, default `5.0`). `--cluster-regions` deferred to step 6 (only meaningful once the second table exists).
+2. **Expand nuclei (v3)** — **done**: `expand_nuclei(nuclei_gdf, expansion_um, pixel_size_um)` rasterizes nuclei and expands them via a marker-controlled watershed (`_watershed_expand`), producing non-overlapping cells. Records `nucleus_id` on each cell.
+3. **`--cell-expansion` flag** — **done** (µm, default `5.0`).
 4. **Build & store `cell_boundaries`** — **done**: inserted after Stardist, before aggregation; `stardist_boundaries` kept.
 5. **Aggregate over cells** — **partially done**: `sopa.aggregate` now targets `cell_boundaries` → `table` (whole-cell). The separate `stardist_boundaries` → `nucleus` table is **pending**.
-6. **Thread region through downstream** — **pending**: replace hardcoded `'stardist_boundaries'` in `export.py`, `assign_spots_to_cells`, `network_analysis.py`, `stability.py`, and add `--cluster-regions`.
+6. **Thread region through downstream** — **done**: `export.py`, `assign_spots_to_cells`, `network_analysis.py`, and `stability.py` now default to / are passed `cell_boundaries`; cluster/community are mapped onto `stardist_boundaries` via `nucleus_id`. `--cluster-regions` not added (single whole-cell table for now).
 
 ### Future: Cellpose (proper cytoplasm segmentation)
 Integrate **Cellpose** for true whole-cell segmentation (cell + cytoplasm), replacing the nucleus-expansion approximation. Cellpose is the dominant pretrained whole-cell segmenter for fluorescent microscopy, and would also yield a genuine **cytoplasm** compartment (cell minus nucleus) — the piece this phase deliberately does not approximate. Note: Cellpose is PyTorch-based (see the TF/Torch co-existence note) — recommend a separate pixi environment or a deferred, opt-in `--segmenter cellpose` path. Recorded here for later; not in scope for the expansion work.
