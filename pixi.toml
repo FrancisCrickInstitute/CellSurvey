@@ -2,7 +2,7 @@
 authors = ["Dave Barry <david.barry@crick.ac.uk>"]
 channels = ["conda-forge"]
 name = "CellSurvey"
-platforms = ["linux-64"]
+platforms = ["linux-64", "win-64"]
 version = "0.1.0"
 
 [tasks]
@@ -10,6 +10,9 @@ version = "0.1.0"
 [dependencies]
 
 [target.linux-64.dependencies]
+python = ">=3.12, <3.13"
+
+[target.win-64.dependencies]
 python = ">=3.12, <3.13"
 
 [environments]
@@ -28,3 +31,6 @@ networkx = ">=3.4, <4"
 
 [target.linux-64.pypi-dependencies]
 tensorflow = { version = ">=2.18", extras = ["and-cuda"] }
+
+[target.win-64.pypi-dependencies]
+tensorflow = ">=2.18"

@@ -8,7 +8,7 @@ CellSurvey is a spatial biology/omics analysis pipeline built on [Sopa](https://
 
 ## Environment and package management
 
-This project uses **pixi** (via `pixi.toml`) for environment management targeting `linux-64` only. The lockfile is `pixi.lock`.
+This project uses **pixi** (via `pixi.toml`) for environment management targeting `linux-64` (GPU) and `win-64` (CPU-only, for local testing). The lockfile is `pixi.lock`.
 
 Key dependency constraints:
 - **Python**: `>=3.12, <3.13` on `linux-64`
@@ -18,7 +18,7 @@ Key dependency constraints:
 - **`scipy` (`>=1.14, <2`)** and **`networkx` (`>=3.4, <4`)** for Delaunay triangulation and Louvain community detection (replacing MuSpAn)
 - **`python-igraph`** for fast Leiden clustering in Scanpy's spatial neighborhood analysis
 - **`bioio` (`>=3.4`) and `bioio-ome-tiff`** for reading channel names from OME-TIFF metadata (via `BioImage`); `setuptools` is pinned as a pypi dependency
-- **Windows and macOS are not supported** via pixi — only `linux-64` is in the platforms list.
+- **Windows is CPU-only for local testing** via pixi (`win-64`, TensorFlow CPU wheel — no GPU, no `and-cuda`). **macOS is not supported** — only `linux-64` and `win-64` are in the platforms list.
 - **Sopa is a single-maintainer dependency risk**: Sopa is maintained almost entirely by one person (Quentin Blampey), who has left academia. CellSurvey currently uses Sopa for image reading, patching, the Stardist wrapper, aggregation, and spatial-neighbour analysis. **Strategic aim**: gradually reduce Sopa coupling — own the segmentation/aggregation/spatial steps directly where practical — while continuing to use it in the short term. The cell-segmentation work (and eventual Cellpose integration) is a natural seam to start decoupling.
 
 A **Dockerfile** is provided: Ubuntu 24.04 base, installs pixi, copies `pixi.toml`, sets `TF_USE_LEGACY_KERAS=1`, entrypoint is `pixi run python run.py`.

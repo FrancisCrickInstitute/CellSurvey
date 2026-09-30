@@ -29,6 +29,7 @@ from spatialdata.transformations import Identity
 from cellsurvey.utils import remove_channel_suffix, cluster_data, assign_spots_to_cells
 from cellsurvey.blob_detection import detect_blobs_tiled
 from cellsurvey.network_analysis import run_network_analysis
+from cellsurvey.segmentation import get_pixel_size
 from cellsurvey.export import export_to_qupath
 
 
@@ -83,6 +84,13 @@ def main():
     os.makedirs(args.plot_dir, exist_ok=True)
 
     imagepath = args.input_file
+
+    pixel_size_um = get_pixel_size(imagepath)
+    if pixel_size_um is None:
+        print("WARNING: no physical pixel size in image metadata (cell expansion in µm unavailable)")
+    else:
+        print(f"Physical pixel size: {pixel_size_um:.4f} µm/px")
+
     zarr_path = args.output_file
     if not zarr_path.endswith('.zarr'):
         zarr_path += '.zarr'
