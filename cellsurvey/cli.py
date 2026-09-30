@@ -306,7 +306,13 @@ def main():
     import shutil as _shutil
     sdata.shapes['stardist_boundaries']['kmeans_cluster'] = result['cluster_labels']
     sdata.shapes['stardist_boundaries']['community'] = result['community_labels']
-    sdata.tables['table'].obs['community'] = pd.Categorical(result['community_labels'])
+
+    # The table holds a (filtered) subset of cells; map community labels by cell
+    # id rather than assuming the same length/order as the network-analysis result.
+    cell_to_community = {str(cid): comm for cid, comm in zip(result['cell_ids'], result['community_labels'])}
+    sdata.tables['table'].obs['community'] = pd.Categorical(
+        [cell_to_community.get(str(cid), -1) for cid in sdata.tables['table'].obs.index]
+    )
     print(f'Saving Zarr to {seg_zarr_path}')
     try:
         tmpdir = tempfile.mkdtemp(dir=os.path.dirname(seg_zarr_path) or '.')

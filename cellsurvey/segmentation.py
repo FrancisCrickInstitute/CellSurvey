@@ -6,6 +6,7 @@ approximate whole-cell boundaries via a marker-controlled watershed
 """
 
 import numpy as np
+import pandas as pd
 import geopandas as gpd
 import shapely
 from scipy.ndimage import distance_transform_edt
@@ -116,6 +117,16 @@ def _watershed_expand(nuclei_gdf, expansion_px):
 
     result = nuclei_gdf.loc[cell_ids].copy()
     result.geometry = gpd.GeoSeries(geometries, index=cell_ids, crs=nuclei_gdf.crs)
+
+    # Fallback: any nucleus that produced no watershed cell gets a buffered copy,
+    # so the cell count always matches the input nuclei.
+    missing = nuclei_gdf.index.difference(result.index)
+    if len(missing) > 0:
+        print(f"WARNING: {len(missing)} nuclei produced no watershed cell; using buffered fallback")
+        fallback = nuclei_gdf.loc[missing].copy()
+        fallback.geometry = nuclei_gdf.loc[missing].geometry.buffer(expansion_px)
+        result = pd.concat([result, fallback])
+
     return result
 
 
