@@ -361,12 +361,18 @@ def main():
     # Per-cluster cell density maps with distance-based soft weighting.
     # Closer to cluster center → higher weight in that cluster's density.
     obs = sdata.tables['table'].obs
-    centroids = sdata.shapes['stardist_boundaries'].geometry.centroid
-    x, y = centroids.x.values, centroids.y.values
+    obs_ids = [str(cid) for cid in obs.index]
+
+    # Cell centroids aligned to the table (a filtered subset of cell_boundaries).
+    cell_gdf = sdata.shapes.get('cell_boundaries', sdata.shapes['stardist_boundaries'])
+    centroid_map = {str(cid): (geom.centroid.x, geom.centroid.y)
+                    for cid, geom in zip(cell_gdf.index, cell_gdf.geometry)}
+    x = np.array([centroid_map.get(cid, (np.nan, np.nan))[0] for cid in obs_ids])
+    y = np.array([centroid_map.get(cid, (np.nan, np.nan))[1] for cid in obs_ids])
     bins = min(200, int(np.sqrt(len(x))))
 
     cluster_labels_arr = obs['kmeans_cluster'].values
-    community_labels_arr = result['community_labels']
+    community_labels_arr = np.array([cell_to_community.get(cid, -1) for cid in obs_ids])
 
     n_clusters = args.n_clusters
     n_communities = len(set(community_labels_arr)) - (1 if -1 in community_labels_arr else 0)
