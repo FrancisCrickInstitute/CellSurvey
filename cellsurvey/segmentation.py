@@ -1,14 +1,15 @@
 """Cell segmentation: nucleus expansion into whole-cell boundaries.
 
-Step 1 of the cell-segmentation plan: read the physical pixel size (µm/px) from
-the input image's OME metadata so that cell expansion can be specified in microns
-rather than pixels.
+Reads the physical pixel size (µm/px) from OME metadata and expands nuclei into
+approximate whole-cell boundaries (QuPath-style, non-overlapping).
 """
 
+import numpy as np
 import geopandas as gpd
+import shapely
+from shapely.geometry import MultiPoint
 
 from bioio import BioImage
-from sopa.shapes.expand import remove_overlap
 
 
 def get_pixel_size(imagepath):
@@ -53,13 +54,40 @@ def get_pixel_size(imagepath):
     return float(x)
 
 
+def _resolve_overlap(cell_gdf):
+    """Clip overlapping polygons to their Voronoi cells (non-overlapping).
+
+    A robust replacement for ``sopa.shapes.expand.remove_overlap``, which empties
+    most cells on dense data. Each polygon is intersected with the Voronoi cell
+    of its centroid, so adjacent cells stop where they meet (QuPath-style).
+    """
+    centroids = cell_gdf.geometry.centroid
+    coords = np.column_stack([centroids.x.values, centroids.y.values])
+
+    bbox = shapely.box(*cell_gdf.total_bounds)
+    voronoi = shapely.voronoi_polygons(MultiPoint(coords), extend_to=bbox)
+    tree = shapely.STRtree(list(voronoi.geoms))
+
+    new_geometries = []
+    for i in range(len(cell_gdf)):
+        centroid = centroids.iloc[i]
+        matches = tree.query(centroid, predicate="contains")
+        if len(matches) == 0:
+            matches = tree.query(centroid, predicate="intersects")
+        region = voronoi.geoms[int(matches[0])]
+        new_geometries.append(cell_gdf.geometry.iloc[i].intersection(region))
+
+    result = cell_gdf.copy()
+    result.geometry = new_geometries
+    return result
+
+
 def expand_nuclei(nuclei_gdf, expansion_um, pixel_size_um):
     """Expand nucleus polygons into non-overlapping whole-cell boundaries (v2).
 
     Buffers each nucleus geometry outward by ``expansion_um`` (converted to
-    pixels via ``pixel_size_um``), then removes overlaps with a Voronoi-based
-    partition so adjacent cells stop where they meet (QuPath-style), via
-    ``sopa.shapes.expand.remove_overlap``.
+    pixels via ``pixel_size_um``), then clips each to its Voronoi cell so
+    adjacent cells stop where they meet (QuPath-style).
 
     Parameters
     ----------
@@ -80,11 +108,4 @@ def expand_nuclei(nuclei_gdf, expansion_um, pixel_size_um):
     expansion_px = expansion_um / pixel_size_um
     cell_gdf = nuclei_gdf.copy()
     cell_gdf["geometry"] = nuclei_gdf.geometry.buffer(expansion_px)
-
-    result = remove_overlap(cell_gdf)
-    # `remove_overlap` returns a GeoSeries (not a GeoDataFrame) when there is
-    # nothing to remove; normalise so we always return a GeoDataFrame.
-    if isinstance(result, gpd.GeoSeries):
-        cell_gdf["geometry"] = result
-        return cell_gdf
-    return result
+    return _resolve_overlap(cell_gdf)

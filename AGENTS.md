@@ -228,7 +228,7 @@ Phases 2–3 (stability metrics + consensus communities) are still TODO:
 
 ## Planned: Cell segmentation (nucleus expansion → whole cell)
 
-**Status**: in progress — **v1 (buffer) implemented and wired**: `--cell-expansion` builds `cell_boundaries` and aggregation now targets them. **v2 (non-overlapping) pending**, as are the separate `nucleus` table and `--cluster-regions` downstream threading.
+**Status**: in progress — **v1 + v2 (non-overlapping) implemented and wired**: `--cell-expansion` builds non-overlapping `cell_boundaries` (buffer + custom Voronoi clip) and aggregation targets them. **Pending**: the separate `nucleus` table and `--cluster-regions` downstream threading.
 
 **Goal**: The pipeline currently segments **nuclei only** (Stardist → `stardist_boundaries`). Marker intensity and RNA spots are mostly cytoplasmic, so aggregating over nuclei misses the cytoplasm. Add a **whole-cell** boundary as an expanded version of each nucleus (QuPath-style). A distinct **cytoplasm** compartment is deferred to proper whole-cell segmentation later (Cellpose) — it is *not* approximated arithmetically in this phase.
 
@@ -261,9 +261,9 @@ QuPath detects nuclei, then dilates each nucleus by a `cellExpansion` distance, 
 Two implementation tiers:
 
 1. **v1 — simple buffer (start here)**: `shapely.buffer(nucleus_geometry, expansion_px)`. Fast, trivially parallel over rows, but produces **overlapping** polygons where cells are dense; overlap double-counts pixels in aggregation.
-2. **v2 — non-overlapping (QuPath-faithful)**: assign each pixel to the nearest nucleus via a distance transform clipped to the expansion radius. **Sopa already ships this**: `sopa.shapes.expand` / `sopa.shapes.expand.remove_overlap()` (Voronoi-based) — prefer reusing it over hand-writing `scipy.ndimage.distance_transform_edt` + `skimage.segmentation.watershed`. `sopa.aggregate()` also takes a `no_overlap` parameter, but that only disambiguates overlap at aggregation time, not the geometry itself.
+2. **v2 — non-overlapping (QuPath-faithful)**: clip each buffered cell to the Voronoi cell of its centroid so adjacent cells stop where they meet. **Implemented with our own `_resolve_overlap()`** (shapely `voronoi_polygons` + STRtree). **Note**: `sopa.shapes.expand.remove_overlap()` — and `sopa.aggregate(no_overlap=True)`, which calls it — were found to empty most cells on dense data (1742/2107 → NaN geometries), so they are **not** used.
 
-v1 is implemented (wired through `cli.py`); upgrade to v2 (via `sopa.shapes.expand.remove_overlap`) before trusting whole-cell measurements quantitatively.
+v1 + v2 are implemented and wired through `cli.py` (buffer + custom Voronoi clip).
 
 ### Aggregation & measurements (two tables)
 
@@ -287,7 +287,7 @@ Each table's `.obs` index is the same `cell_id`, so `table` and `nucleus` join c
 ### Implementation plan
 
 1. **Read physical pixel size** — **done**: `get_pixel_size(imagepath)` in `cellsurvey/segmentation.py` (returns µm/px or `None`).
-2. **Expand nuclei (v1)** — **done**: `expand_nuclei(nuclei_gdf, expansion_um, pixel_size_um)` via `shapely.buffer`. v2 (`sopa.shapes.expand.remove_overlap`) still pending.
+2. **Expand nuclei (v1 + v2)** — **done**: `expand_nuclei(nuclei_gdf, expansion_um, pixel_size_um)` buffers then clips to a custom Voronoi tiling (`_resolve_overlap`), producing non-overlapping cells.
 3. **`--cell-expansion` flag** — **done** (µm, default `5.0`). `--cluster-regions` deferred to step 6 (only meaningful once the second table exists).
 4. **Build & store `cell_boundaries`** — **done**: inserted after Stardist, before aggregation; `stardist_boundaries` kept.
 5. **Aggregate over cells** — **partially done**: `sopa.aggregate` now targets `cell_boundaries` → `table` (whole-cell). The separate `stardist_boundaries` → `nucleus` table is **pending**.
@@ -302,7 +302,7 @@ Integrate **Cellpose** for true whole-cell segmentation (cell + cytoplasm), repl
 - **Fixed vs per-nucleus radius**: QuPath uses a fixed `cellExpansion`; a per-nucleus radius (scaled to nucleus area) is more accurate but adds a parameter.
 
 ### Risks
-- v1 overlaps double-count pixels and inflate aggregated intensity; must be replaced by v2 (or overlap-resolved) before trusting whole-cell measurements.
+- ~~v1 overlaps double-count pixels and inflate aggregated intensity~~ — resolved: v2 clips to a Voronoi tiling, so cells no longer overlap.
 - Two tables and a region-selection flag widen the downstream surface (clustering, network, export, sweeps) — easy to miss a hardcoded `'stardist_boundaries'`/`'table'` reference; grep thoroughly.
 - Missing OME physical pixel size breaks µm conversion; need an explicit, well-documented fallback.
 
