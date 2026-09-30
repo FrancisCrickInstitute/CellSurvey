@@ -228,7 +228,7 @@ Phases 2–3 (stability metrics + consensus communities) are still TODO:
 
 ## Planned: Cell segmentation (nucleus expansion → whole cell)
 
-**Status**: in progress — **v1 + v2 (non-overlapping) implemented and wired**: `--cell-expansion` builds non-overlapping `cell_boundaries` (buffer + custom Voronoi clip) and aggregation targets them. **v3 (marker-controlled watershed) planned** to replace the Voronoi clip (its boundaries are too severe). **Pending**: the separate `nucleus` table and `--cluster-regions` downstream threading.
+**Status**: in progress — **v1/v2/v3 implemented and wired**: `--cell-expansion` builds non-overlapping `cell_boundaries` via a marker-controlled watershed (`_watershed_expand`: rasterize → EDT → watershed → vectorize) and aggregation targets them. **Pending**: the separate `nucleus` table and `--cluster-regions` downstream threading.
 
 **Goal**: The pipeline currently segments **nuclei only** (Stardist → `stardist_boundaries`). Marker intensity and RNA spots are mostly cytoplasmic, so aggregating over nuclei misses the cytoplasm. Add a **whole-cell** boundary as an expanded version of each nucleus (QuPath-style). A distinct **cytoplasm** compartment is deferred to proper whole-cell segmentation later (Cellpose) — it is *not* approximated arithmetically in this phase.
 
@@ -265,11 +265,17 @@ Two implementation tiers:
 
 v1 + v2 are implemented and wired through `cli.py` (buffer + custom Voronoi clip).
 
-### v3 — marker-controlled watershed (planned)
+### v3 — marker-controlled watershed (implemented)
 
-**Problem**: v2's Voronoi clip produces straight, "severe" boundaries between
+**Problem**: v2's Voronoi clip produced straight, "severe" boundaries between
 adjacent cells — Voronoi lines at the midpoint between centroids, which ignore
-cell morphology.
+cell morphology. v3 replaces it with a raster-based watershed.
+
+**Implemented** in `_watershed_expand` (`cellsurvey/segmentation.py`): rasterize
+nuclei → `distance_transform_edt` → `skimage.segmentation.watershed` (capped at
+`cellExpansion`) → vectorize back to polygons. **Gotcha**: `find_contours` on a
+region that exactly fills its bounding box returns nothing (only corner cells
+survive), so each region is padded with a background border before contouring.
 
 **Reference**: QuPath's `WatershedCellDetection` (ImageJ-based; see
 [`qupath.imagej.detect.cells.WatershedCellDetection`](https://qupath.github.io/javadoc/docs/qupath/imagej/detect/cells/WatershedCellDetection.html)).
@@ -296,7 +302,7 @@ watershed boundary follows the distance-transform ridges (curving with nucleus
 shape/size), much less severe than straight Voronoi lines — but still not
 membrane-aware.
 
-**Implementation plan**:
+**Implementation plan** (done):
 1. Rasterize `stardist_boundaries` to a labeled nucleus image (markers) at image resolution.
 2. `distance_transform_edt` + `watershed` with the `cellExpansion` cap.
 3. Vectorize the labeled result back to `cell_boundaries` polygons (preserve `cell_id`).
