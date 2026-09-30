@@ -287,7 +287,11 @@ def main():
 
     print(f"\nUpdated obs columns: {list(sdata.tables['table'].obs.columns)}")
 
+    # Build the network on the cell layer (not the nuclei), so cell ids match the
+    # table produced by aggregation over that layer.
+    network_shapes_key = 'cell_boundaries' if 'cell_boundaries' in sdata.shapes else 'stardist_boundaries'
     result = run_network_analysis(sdata, intensity_matrix=intensity_df,
+                                cell_boundaries=network_shapes_key,
                                 comm_detect_res=args.community_resolution,
                                 max_edge_distance=args.max_edge_distance,
                                 output_dir=args.plot_dir)
@@ -304,15 +308,11 @@ def main():
     # to avoid "path in use" errors when the segmented Zarr was loaded for resumption.
     import tempfile
     import shutil as _shutil
-    sdata.shapes['stardist_boundaries']['kmeans_cluster'] = result['cluster_labels']
-    sdata.shapes['stardist_boundaries']['community'] = result['community_labels']
-
-    # The table holds a (filtered) subset of cells; map community labels by cell
-    # id rather than assuming the same length/order as the network-analysis result.
-    cell_to_community = {str(cid): comm for cid, comm in zip(result['cell_ids'], result['community_labels'])}
-    sdata.tables['table'].obs['community'] = pd.Categorical(
-        [cell_to_community.get(str(cid), -1) for cid in sdata.tables['table'].obs.index]
-    )
+    # Attach cluster/community to the network shapes layer and the table (they
+    # share the same index/cell ids).
+    sdata.shapes[network_shapes_key]['kmeans_cluster'] = result['cluster_labels']
+    sdata.shapes[network_shapes_key]['community'] = result['community_labels']
+    sdata.tables['table'].obs['community'] = pd.Categorical(result['community_labels'])
     print(f'Saving Zarr to {seg_zarr_path}')
     try:
         tmpdir = tempfile.mkdtemp(dir=os.path.dirname(seg_zarr_path) or '.')

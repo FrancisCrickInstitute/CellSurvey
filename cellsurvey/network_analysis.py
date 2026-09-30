@@ -28,6 +28,8 @@ def compute_louvain_communities(coords, imat, comm_detect_res=0.1, max_edge_dist
     if imat is not None:
         for a, b in edges:
             corr = np.corrcoef(imat[a], imat[b])[0, 1]
+            if not np.isfinite(corr):
+                corr = 0.0
             G.add_edge(a, b, weight=1 + corr)
     else:
         G.add_edges_from(edges)
