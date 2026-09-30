@@ -237,15 +237,18 @@ def main():
                 dataset["cell_boundaries"] = expand_nuclei(nuclei, args.cell_expansion, pixel_size_um)
                 print(f"Expanded {len(nuclei)} nuclei into cell boundaries (--cell-expansion={args.cell_expansion} µm)")
 
-        print("Aggregating...")
+        # Aggregate over whole cells when cell expansion produced them, else nuclei.
+        agg_shapes_key = 'cell_boundaries' if 'cell_boundaries' in dataset.shapes else 'stardist_boundaries'
+        print(f"Aggregating over {agg_shapes_key}...")
 
         # Force pandas to use plain object dtype for strings, not ArrowStringArray,
         # which can't be written to Zarr backing stores by anndata
         with pd.option_context('future.infer_string', False):
             if "spots" in dataset.points:
-                sopa.aggregate(dataset, aggregate_genes=True, points_key='spots', gene_column='gene')
+                sopa.aggregate(dataset, aggregate_genes=True, points_key='spots', gene_column='gene',
+                               shapes_key=agg_shapes_key)
             else:
-                sopa.aggregate(dataset)
+                sopa.aggregate(dataset, shapes_key=agg_shapes_key)
 
         np.random.seed(42)
 
