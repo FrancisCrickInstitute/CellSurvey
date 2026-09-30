@@ -19,6 +19,7 @@ Key dependency constraints:
 - **`python-igraph`** for fast Leiden clustering in Scanpy's spatial neighborhood analysis
 - **`bioio` (`>=3.4`) and `bioio-ome-tiff`** for reading channel names from OME-TIFF metadata (via `BioImage`); `setuptools` is pinned as a pypi dependency
 - **Windows and macOS are not supported** via pixi — only `linux-64` is in the platforms list.
+- **Sopa is a single-maintainer dependency risk**: Sopa is maintained almost entirely by one person (Quentin Blampey), who has left academia. CellSurvey currently uses Sopa for image reading, patching, the Stardist wrapper, aggregation, and spatial-neighbour analysis. **Strategic aim**: gradually reduce Sopa coupling — own the segmentation/aggregation/spatial steps directly where practical — while continuing to use it in the short term. The cell-segmentation work (and eventual Cellpose integration) is a natural seam to start decoupling.
 
 A **Dockerfile** is provided: Ubuntu 24.04 base, installs pixi, copies `pixi.toml`, sets `TF_USE_LEGACY_KERAS=1`, entrypoint is `pixi run python run.py`.
 
@@ -224,6 +225,129 @@ Phases 2–3 (stability metrics + consensus communities) are still TODO:
 ### Risks
 - Full grid search is `O(n_resolutions × n_distances)` — random sampling is more practical
 - Co-occurrence matrix is `O(n_cells²)` memory — sparse storage or chunking needed for large datasets
+
+## Planned: Cell segmentation (nucleus expansion → whole cell)
+
+**Status**: planned — not implemented.
+
+**Goal**: The pipeline currently segments **nuclei only** (Stardist → `stardist_boundaries`). Marker intensity and RNA spots are mostly cytoplasmic, so aggregating over nuclei misses the cytoplasm. Add a **whole-cell** boundary as an expanded version of each nucleus (QuPath-style). A distinct **cytoplasm** compartment is deferred to proper whole-cell segmentation later (Cellpose) — it is *not* approximated arithmetically in this phase.
+
+### Why this matters
+- `sopa.aggregate()` measures mean intensity inside each shape. Using nuclei alone undercounts cytoplasmic/membrane markers and conflates nuclear vs cytoplasmic signal.
+- Many markers are compartment-specific (nuclear transcription factors vs membrane/cytoplasmic proteins); quantifying them in the *correct* compartment is a core goal.
+- `assign_spots_to_cells()` (`gpd.sjoin` with `predicate='within'`) should assign spots to the **whole cell**, and additionally classify each spot as **nuclear vs cytoplasmic**.
+- Downstream cell `area` (for `morphology_by_cluster.png`) is biologically meaningful only at whole-cell scale.
+
+### The regions
+
+| Region | Shape layer (proposed) | Definition |
+|---|---|---|
+| Nucleus | `stardist_boundaries` (existing) | Stardist output, unchanged |
+| Whole cell | `cell_boundaries` (new) | Nucleus expanded by `--cell-expansion` µm |
+
+Both share the same `cell_id` index, so their measurements are joinable. A third compartment — **cytoplasm** (whole cell minus nucleus) — is intentionally **deferred** to proper whole-cell segmentation (see Future: Cellpose); it is not derived arithmetically.
+
+### Units: microns, not pixels
+
+- `--cell-expansion` is expressed in **µm** (default `5.0`, matching QuPath's `cellExpansion`).
+- Physical pixel size (µm/px) is read from OME metadata via `BioImage(imagepath).physical_pixel_sizes` (bioio). For 2D images this is `(Y, X)`; guard for missing metadata.
+- Geometry operations run in pixel coordinates (as Stardist/SOPA produce), so the µm radius is converted to px internally: `expansion_px = expansion_um / pixel_size_um`.
+- If physical pixel size is unavailable, warn and fall back to an explicit `--cell-expansion-px` (or refuse with a clear error).
+- **Related cleanup (separate, deferred)**: the existing pixel-based params (`--max-edge-distance`, `--radius-min/max`) should eventually move to µm too, but that touches Delaunay/neighbour logic and existing outputs — keep it out of this change.
+
+### Approach (QuPath-style expansion)
+QuPath detects nuclei, then dilates each nucleus by a `cellExpansion` distance, using a distance-transform/watershed expansion so neighbouring cells stop where they meet (no overlap).
+
+Two implementation tiers:
+
+1. **v1 — simple buffer (start here)**: `shapely.buffer(nucleus_geometry, expansion_px)`. Fast, trivially parallel over rows, but produces **overlapping** polygons where cells are dense; overlap double-counts pixels in aggregation.
+2. **v2 — non-overlapping (QuPath-faithful)**: assign each pixel to the nearest nucleus via a distance transform clipped to the expansion radius. **Sopa already ships this**: `sopa.shapes.expand` / `sopa.shapes.expand.remove_overlap()` (Voronoi-based) — prefer reusing it over hand-writing `scipy.ndimage.distance_transform_edt` + `skimage.segmentation.watershed`. `sopa.aggregate()` also takes a `no_overlap` parameter, but that only disambiguates overlap at aggregation time, not the geometry itself.
+
+Recommend implementing v1 to wire the plumbing, then upgrade to v2 (via `sopa.shapes.expand.remove_overlap`) before trusting whole-cell measurements.
+
+### Aggregation & measurements (two tables)
+
+`cli.py` currently calls `sopa.aggregate()` once (over `stardist_boundaries`). With whole-cell expansion, aggregate **two solid regions** (no holes):
+
+| Compartment | Source | How |
+|---|---|---|
+| Whole cell | `cell_boundaries` | `sopa.aggregate(..., shapes_key='cell_boundaries')` → `table` |
+| Nucleus | `stardist_boundaries` | `sopa.aggregate(..., shapes_key='stardist_boundaries')` → `nucleus` |
+
+Each table's `.obs` index is the same `cell_id`, so `table` and `nucleus` join cleanly. Decide whether the *primary* `table` should be whole-cell (recommended — most biologically meaningful) or nucleus (current behaviour); open question below.
+
+**Cytoplasm** is *not* computed in this phase — it requires a proper cell/cytoplasm segmentation, deferred to the Cellpose path. (This also sidesteps a known Sopa limitation: `sopa.aggregate()` ignores polygon holes, so a donut-shaped cytoplasm couldn't be aggregated correctly anyway.)
+
+### Downstream consumption
+
+- **Region selection for clustering/network** — add `--cluster-regions` (comma-separated region table keys, default `cell,nucleus`). The selected regions' feature matrices are **concatenated** column-wise into one `(n_cells, n_regions × n_markers)` matrix that drives k-means (`cluster_data`) and Louvain edge weights (`run_network_analysis`). Clustering on *both* nuclear and whole-cell signal is fully supported — no need to pick one. (Note: whole-cell already includes the nuclear signal, so the two are partly redundant; the genuinely complementary pair is nucleus + cytoplasm, which arrives with proper segmentation.)
+- **Spot assignment** — `assign_spots_to_cells()` assigns to `cell_boundaries` (whole cell), then classifies each spot as nuclear vs cytoplasmic via a second `within` predicate against `stardist_boundaries` (nucleus `within` → nuclear, else cytoplasmic). Works with the two solid geometries — no donut needed.
+- **GeoJSON export** — `export_to_qupath()` emits per-region measurements, prefixed by compartment: `Nucleus: <channel> mean`, `Cell: <channel> mean`. Cell boundaries are the primary `objectType: "cell"` features; nuclei optionally exported as `objectType: "nucleus"` with a `parent_id` link to the cell.
+
+### Implementation plan
+
+1. **Read physical pixel size** — helper `get_pixel_size(imagepath)` using `BioImage(...).physical_pixel_sizes`, returning µm/px (with a fallback path when absent).
+
+2. **New geometry function** — `expand_nuclei(nuclei_gdf, expansion_um, pixel_size_um) -> cell_gdf` (new module `cellsurvey/segmentation.py`; v1 `shapely.buffer`, v2 `sopa.shapes.expand.remove_overlap`).
+
+3. **New CLI flags** — `--cell-expansion` (µm, default `5.0`) and `--cluster-regions` (comma-separated region table keys, default `cell,nucleus`).
+
+4. **Insert after Stardist (stage 4), before aggregation (stage 5)** — build `cell_boundaries` and store it in `sdata.shapes` (keep `stardist_boundaries`).
+
+5. **Aggregate twice** — `sopa.aggregate` over `cell_boundaries` → `table`, and over `stardist_boundaries` → `nucleus`.
+
+6. **Thread the region through downstream** — replace the hardcoded `sdata.tables['table']` reads in `cli.py` and the `'stardist_boundaries'` defaults in `network_analysis.py`, `utils.py`, `export.py`, and `stability.py` with the selected cell/region layers (single source of truth for the shapes/table keys).
+
+### Future: Cellpose (proper cytoplasm segmentation)
+Integrate **Cellpose** for true whole-cell segmentation (cell + cytoplasm), replacing the nucleus-expansion approximation. Cellpose is the dominant pretrained whole-cell segmenter for fluorescent microscopy, and would also yield a genuine **cytoplasm** compartment (cell minus nucleus) — the piece this phase deliberately does not approximate. Note: Cellpose is PyTorch-based (see the TF/Torch co-existence note) — recommend a separate pixi environment or a deferred, opt-in `--segmenter cellpose` path. Recorded here for later; not in scope for the expansion work.
+
+### Open questions
+- **Primary `table` region**: whole cell (recommended) vs nucleus (current). Changing `table` to whole-cell alters existing results and makes prior `_seg.zarr` outputs non-comparable — acceptable if flagged as a breaking change.
+- **Always-on vs opt-in**: default `--cell-expansion 5.0` (on) vs `0` (off, nuclear-only). A non-zero default is the point of the feature, but changes results vs today.
+- **Fixed vs per-nucleus radius**: QuPath uses a fixed `cellExpansion`; a per-nucleus radius (scaled to nucleus area) is more accurate but adds a parameter.
+
+### Risks
+- v1 overlaps double-count pixels and inflate aggregated intensity; must be replaced by v2 (or overlap-resolved) before trusting whole-cell measurements.
+- Two tables and a region-selection flag widen the downstream surface (clustering, network, export, sweeps) — easy to miss a hardcoded `'stardist_boundaries'`/`'table'` reference; grep thoroughly.
+- Missing OME physical pixel size breaks µm conversion; need an explicit, well-documented fallback.
+
+## Planned: Normalisation (DAPI reference)
+
+**Status**: planned — not implemented.
+
+**Goal**: Correct for technical sources of variation — uneven illumination, stitching artefacts, inhomogeneous antibody labelling, tissue depth/exposure — by normalising each cell's marker measurements to that cell's **DAPI** signal. DAPI is a nuclear counterstain that stains nuclei roughly uniformly, so a cell's DAPI intensity is a proxy for the local technical bias at that location.
+
+### Why this matters
+- Raw mean intensities are confounded by illumination/stitching/depth gradients; marker differences can be artefact rather than biology.
+- Dividing by DAPI yields a *relative* intensity per cell that is far more comparable across the tissue.
+
+### Approach (simple ratio)
+For each cell and each marker channel:
+
+```
+x'_cell,marker = x_cell,marker / dapi_cell
+```
+
+where `dapi_cell` is that cell's DAPI mean intensity. Applied **after aggregation (stage 5), before clustering/network (stage 6)** — the normalised matrix feeds k-means and Louvain edge weights, while the raw matrix is retained for export/visualisation.
+
+### Implementation plan
+1. **CLI flags** — `--normalise-dapi` (off by default) and an optional `--dapi-channel <name>` override. Channel names are already read from the image metadata (OME-XML via `BioImage`/`sopa`), so the DAPI channel is **auto-detected by name** (substring `DAPI`, case-insensitive) by default; the flag only overrides this when the counterstain is named differently (Hoechst, Sytox, DRAQ5, etc.).
+2. **Identify the DAPI column** — after `remove_channel_suffix` + duplicate-drop, find the column matching the auto-detected / `--dapi-channel` name; error clearly if absent, and if the match is **ambiguous** (multiple channels contain the token).
+3. **Normalise** — divide every marker column by the DAPI column (skip the DAPI column itself). Guard against zero/near-zero DAPI (`max(dapi, eps)`, or skip + warn).
+4. **Feed downstream** — the normalised matrix becomes `intensity_df` for `cluster_data()` and `run_network_analysis()`; keep the raw matrix for `export_to_qupath()` and `cluster_intensity_heatmap.png`.
+
+### Interaction with cell segmentation
+- DAPI is nuclear, so the reference is the **nuclear** DAPI column regardless of which region(s) `--cluster-regions` selects. With the cell plan, normalisation divides every region's measurements by the same nuclear DAPI reference.
+- Composes cleanly with region concatenation: concatenate the selected regions first, then divide the whole matrix by the DAPI column.
+
+### Open questions
+- **Ratio vs log-ratio**: a plain ratio can be skewed when DAPI is low; a `log1p` of the ratio is a common follow-up. Keep a simple ratio for now, revisit if needed.
+- **What to export**: raw, normalised, or both? Recommend both, e.g. `Cell: <marker> mean` and `Cell: <marker> DAPI-normalised`.
+- **Zero/missing DAPI fallback**: error vs skip-cell vs clip — decide before implementation.
+
+### Risks
+- Normalisation amplifies noise in low-DAPI cells; the zero/epsilon guard is essential.
+- Changing the matrix changes clustering/community results, so existing `_seg.zarr` outputs become non-comparable once enabled (same breaking-change consideration as cell segmentation).
 
 ## Reference: PANORAMIC (plevritis-lab)
 
