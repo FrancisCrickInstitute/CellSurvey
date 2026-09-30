@@ -5,7 +5,10 @@ the input image's OME metadata so that cell expansion can be specified in micron
 rather than pixels.
 """
 
+import geopandas as gpd
+
 from bioio import BioImage
+from sopa.shapes.expand import remove_overlap
 
 
 def get_pixel_size(imagepath):
@@ -51,11 +54,12 @@ def get_pixel_size(imagepath):
 
 
 def expand_nuclei(nuclei_gdf, expansion_um, pixel_size_um):
-    """Expand nucleus polygons into approximate whole-cell boundaries (v1).
+    """Expand nucleus polygons into non-overlapping whole-cell boundaries (v2).
 
     Buffers each nucleus geometry outward by ``expansion_um`` (converted to
-    pixels via ``pixel_size_um``). This is the simple, overlap-permitting v1 of
-    the cell-expansion plan; upgrade to non-overlapping expansion later.
+    pixels via ``pixel_size_um``), then removes overlaps with a Voronoi-based
+    partition so adjacent cells stop where they meet (QuPath-style), via
+    ``sopa.shapes.expand.remove_overlap``.
 
     Parameters
     ----------
@@ -70,10 +74,17 @@ def expand_nuclei(nuclei_gdf, expansion_um, pixel_size_um):
     Returns
     -------
     geopandas.GeoDataFrame
-        A copy of ``nuclei_gdf`` with each geometry buffered outward by
-        ``expansion_um / pixel_size_um`` pixels. Index and columns are preserved.
+        A copy of ``nuclei_gdf`` with each geometry buffered outward and overlaps
+        removed. Index and columns are preserved.
     """
     expansion_px = expansion_um / pixel_size_um
     cell_gdf = nuclei_gdf.copy()
     cell_gdf["geometry"] = nuclei_gdf.geometry.buffer(expansion_px)
-    return cell_gdf
+
+    result = remove_overlap(cell_gdf)
+    # `remove_overlap` returns a GeoSeries (not a GeoDataFrame) when there is
+    # nothing to remove; normalise so we always return a GeoDataFrame.
+    if isinstance(result, gpd.GeoSeries):
+        cell_gdf["geometry"] = result
+        return cell_gdf
+    return result
