@@ -228,7 +228,7 @@ Phases 2–3 (stability metrics + consensus communities) are still TODO:
 
 ## Planned: Cell segmentation (nucleus expansion → whole cell)
 
-**Status**: in progress — **v1 + v2 (non-overlapping) implemented and wired**: `--cell-expansion` builds non-overlapping `cell_boundaries` (buffer + custom Voronoi clip) and aggregation targets them. **Pending**: the separate `nucleus` table and `--cluster-regions` downstream threading.
+**Status**: in progress — **v1 + v2 (non-overlapping) implemented and wired**: `--cell-expansion` builds non-overlapping `cell_boundaries` (buffer + custom Voronoi clip) and aggregation targets them. **v3 (marker-controlled watershed) planned** to replace the Voronoi clip (its boundaries are too severe). **Pending**: the separate `nucleus` table and `--cluster-regions` downstream threading.
 
 **Goal**: The pipeline currently segments **nuclei only** (Stardist → `stardist_boundaries`). Marker intensity and RNA spots are mostly cytoplasmic, so aggregating over nuclei misses the cytoplasm. Add a **whole-cell** boundary as an expanded version of each nucleus (QuPath-style). A distinct **cytoplasm** compartment is deferred to proper whole-cell segmentation later (Cellpose) — it is *not* approximated arithmetically in this phase.
 
@@ -264,6 +264,48 @@ Two implementation tiers:
 2. **v2 — non-overlapping (QuPath-faithful)**: clip each buffered cell to the Voronoi cell of its centroid so adjacent cells stop where they meet. **Implemented with our own `_resolve_overlap()`** (shapely `voronoi_polygons` + STRtree). **Note**: `sopa.shapes.expand.remove_overlap()` — and `sopa.aggregate(no_overlap=True)`, which calls it — were found to empty most cells on dense data (1742/2107 → NaN geometries), so they are **not** used.
 
 v1 + v2 are implemented and wired through `cli.py` (buffer + custom Voronoi clip).
+
+### v3 — marker-controlled watershed (planned)
+
+**Problem**: v2's Voronoi clip produces straight, "severe" boundaries between
+adjacent cells — Voronoi lines at the midpoint between centroids, which ignore
+cell morphology.
+
+**Reference**: QuPath's `WatershedCellDetection` (ImageJ-based; see
+[`qupath.imagej.detect.cells.WatershedCellDetection`](https://qupath.github.io/javadoc/docs/qupath/imagej/detect/cells/WatershedCellDetection.html)).
+The algorithm:
+1. Label the nuclei (integer markers).
+2. Compute the **Euclidean Distance Transform (EDT)** of the nucleus binary mask (distance to nearest background).
+3. **Negate** it (nucleus interiors become minima).
+4. Run a **marker-controlled watershed**, flood **capped at `cellExpansion`** (pixels whose distance ≥ `cellExpansion` are never flooded).
+5. Non-overlap is intrinsic (watershed ridges where two floods meet).
+
+**Python equivalent** (deps already present: `scipy`, `skimage`):
+```python
+edt = scipy.ndimage.distance_transform_edt(nucleus_mask)
+labels = skimage.segmentation.watershed(
+    -edt, markers=nucleus_labels,
+    mask=(edt <= cell_expansion_px), connectivity=1,
+)
+# then vectorize labels -> polygons
+```
+
+**Key change**: this is **raster-based** (rasterize nuclei → watershed →
+vectorize), unlike the current **vector-based** buffer → Voronoi clip. The
+watershed boundary follows the distance-transform ridges (curving with nucleus
+shape/size), much less severe than straight Voronoi lines — but still not
+membrane-aware.
+
+**Implementation plan**:
+1. Rasterize `stardist_boundaries` to a labeled nucleus image (markers) at image resolution.
+2. `distance_transform_edt` + `watershed` with the `cellExpansion` cap.
+3. Vectorize the labeled result back to `cell_boundaries` polygons (preserve `cell_id`).
+4. Replace `_resolve_overlap` (Voronoi) in `expand_nuclei` with the watershed.
+
+**Considerations / open questions**:
+- **Resolution**: watershed on the image raster gives boundaries at pixel resolution (good); µm/px is already known via `get_pixel_size`.
+- **Tiling**: large images need a tile-based watershed (with overlap, like Stardist patches) to bound memory.
+- **Watershed vs Cellpose**: watershed is deterministic, no training, no new heavy deps, and mirrors QuPath — a cheap immediate improvement. Cellpose learns *actual membranes* (better boundaries) but needs PyTorch + a pretrained model (see the TF/Torch note). Recommendation: do the watershed next, keep Cellpose as the longer-term goal.
 
 ### Aggregation & measurements (two tables)
 
