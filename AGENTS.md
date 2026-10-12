@@ -653,6 +653,26 @@ Segmented imaging (XY + markers)
 
 **Recommendation**: prefer a **separate pixi environment per DL framework** — run CellSurvey (TF) → write `AnnData`/`SpatialData` (`_seg.zarr`) → run the downstream tool (Torch) in its own env. This mirrors the Sopa→Novae modularity the authors themselves chose, and is especially cheap for zero-shot consumers like Novae. Only co-install if the tool becomes a first-class in-pipeline stage.
 
+## Reference: MDV — Multi-Dimensional Viewer (Taylor-CCB-Group)
+
+**Note (for future consideration):** [MDV](https://github.com/Taylor-CCB-Group/MDV) (Taylor-CCB-Group, University of Oxford; site [mdv.ndm.ox.ac.uk](https://mdv.ndm.ox.ac.uk/)) is an **open-source, web-based application for analyzing, annotating, and sharing multi-dimensional spatial/molecular datasets**. Not integrated into CellSurvey — retained as a potential **visualization/annotation alternative to QuPath** (CellSurvey's current GeoJSON export target).
+
+### What it does
+- Interactive, browser-based charts embeddable in a narrative "story": 2D/3D scatter, box/violin/heat/histogram/pie plots, annotation tools, and **interactive spatial-biology charts**.
+- Handles large datasets — up to **~10 million data items** — via web workers, shared array buffers, and native arrays; lazy-loads raw bytes (≥4 GB RAM recommended).
+- Multiple linked data tables (e.g. a gene-expression matrix referenced against cell/spatial coordinates); user-editable annotations; extensible data loaders.
+- Runs in-browser with no installation for upload/viewing; Docker/devcontainer + Makefile for deployment.
+
+### Relevance to CellSurvey
+- **Overlaps the visualization stage, not the analysis stage**: CellSurvey ends at GeoJSON export → QuPath. MDV is a web-native alternative for exploring the *same* cell × marker / cell × community data CellSurvey already produces, with linked spatial + expression views rather than QuPath's image-centric paradigm.
+- **Potential role**: a second export target (`export_to_qupath`-style writer emitting MDV's expected table/coordinate format) for interactive, shareable spatial results — useful for collaborators who want to explore communities/clusters without a pathology workstation.
+- **Complementary to QuPath**: MDV is table/spatial-chart-centric and web-shareable; QuPath is whole-slide-image-centric with deep pathology tooling. They answer different "what does the tissue look like" vs. "what do the cell populations look like" questions.
+
+### Caveats
+- **No explicit segmentation or multiplexed-imaging ingest** documented in the README (no OME-TIFF/AnnData naming); data formats are not enumerated — the exact table/link schema for CellSurvey's output would need reverse-engineering or adapter work.
+- GPL-3.0 (example data CC0); modest community traction (dozens of stars) but active (2000+ commits, CI, Playwright tests).
+- Browser-based — not a headless/CLI pipeline stage; a separate deployment concern from CellSurvey's pixi/Docker compute env.
+
 ## Reference: SmartHisto (Vijendran et al.)
 
 **Note (for future consideration):** [SmartHisto: Bayesian active learning for histology images](https://journals.plos.org/ploscompbiol/article?id=10.1371/journal.pcbi.1013611) (Vijendran, Arruda, Anderson, Eulenstein; *PLoS Comput Biol* 22(9):e1013611, 2026; code [github.com/flu-crew/histology_segmentation](https://github.com/flu-crew/histology_segmentation), pulmonary dataset doi:10.5281/zenodo.18421739, CC0) is a **Bayesian-active-learning framework for training semantic segmentation models with far less expert annotation**. Not integrated into CellSurvey — relevant only if CellSurvey ever adopts a trainable tissue-region segmenter (it currently uses Stardist, which is pretrained drop-in). Retained chiefly for its **uncertainty-decomposition methodology**, which is conceptually aligned with our Planned Stability Sweep.
