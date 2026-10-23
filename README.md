@@ -7,7 +7,7 @@ CellSurvey is a Python pipeline for image-based spatial biology/omics analysis b
 * Blampey, Q., Mulder, K., Gardet, M. et al. Sopa: a technology-invariant pipeline for analyses of image-based spatial omics. _Nat Commun_ 15, 4981 (2024).
 
 <p align="center">
-  <img height="400" alt="cluster hex map" src="./assets/cluster_hexmap.png" /> <img height="400" alt="cluster profiles" src="./assets/populations_cluster_profile.png" />
+  <img height="350" alt="cluster hex map" src="./assets/cluster_hexmap.png" /> <img height="350" alt="cluster profiles" src="./assets/populations_cluster_profile.png" />
 </p>
 
 # Documentation
