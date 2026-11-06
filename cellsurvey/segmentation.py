@@ -1,20 +1,118 @@
-"""Cell segmentation: nucleus expansion into whole-cell boundaries.
+"""Cell segmentation: segmenter runners and nucleus/cell boundary handling.
 
-Reads the physical pixel size (µm/px) from OME metadata and expands nuclei into
-approximate whole-cell boundaries via a marker-controlled watershed
-(QuPath-style, non-overlapping).
+Two segmenters are supported, each in its own pixi environment:
+
+- **Stardist** (``default`` env, TensorFlow): nuclei only, written to
+  ``stardist_boundaries``. Whole cells are approximated by expanding nuclei via
+  a marker-controlled watershed (QuPath-style, non-overlapping).
+- **InstanSeg** (``instanseg`` env, PyTorch): nuclei and whole cells, written to
+  ``nucleus_boundaries`` and ``cell_boundaries``.
+
+TensorFlow and InstanSeg are imported lazily inside their runners so that each
+environment only needs its own framework.
 """
 
 import numpy as np
 import pandas as pd
 import geopandas as gpd
 import shapely
+import sopa
 from scipy.ndimage import distance_transform_edt
 from skimage.segmentation import watershed
 from skimage.draw import polygon as _draw_polygon
 from skimage.measure import find_contours, regionprops
 
 from bioio import BioImage
+
+from cellsurvey.utils import STARDIST_NUCLEI_KEY, NUCLEI_KEY, CELLS_KEY
+
+
+def run_stardist(sdata, channel, use_gpu=False):
+    """Segment nuclei with Stardist (``2D_versatile_fluo``) into ``stardist_boundaries``."""
+    try:
+        import tensorflow as tf
+    except ImportError as e:
+        raise ImportError("Stardist needs TensorFlow, which is only in the default pixi "
+                          "environment: `pixi run python run.py ...`") from e
+
+    gpus = tf.config.list_physical_devices('GPU')
+    if gpus:
+        print(f"Found {len(gpus)} GPU(s), using GPU backend for Stardist")
+    elif use_gpu:
+        print("No GPU detected but --use-gpu specified, attempting GPU backend")
+    else:
+        print("WARNING: No GPU detected. Stardist segmentation will run on CPU and may be very slow.")
+    sopa.settings.parallelization_backend = None
+
+    print(f"Run stardist on channel {channel}...")
+    sopa.segmentation.stardist(sdata, model_type='2D_versatile_fluo', channels=channel)
+
+
+def run_instanseg(sdata, channels, pixel_size_um, model_type='fluorescence_nuclei_and_cells',
+                  use_gpu=False):
+    """Segment nuclei and whole cells with InstanSeg.
+
+    Sopa's wrapper returns one mask per call, so the model is run twice
+    (``target='nuclei'`` then ``target='cells'``), writing ``nucleus_boundaries``
+    and ``cell_boundaries``. Each cell is then linked to the nucleus it contains
+    via a ``nucleus_id`` column (see :func:`link_nuclei_to_cells`).
+    """
+    if not hasattr(sopa.segmentation, 'instanseg'):
+        raise ImportError("InstanSeg needs sopa>=2.3.0 and instanseg-torch, which are only in the "
+                          "instanseg pixi environment: `pixi run -e instanseg python run.py ...`")
+    try:
+        import torch
+        has_cuda = torch.cuda.is_available()
+    except ImportError as e:
+        raise ImportError("InstanSeg needs PyTorch: `pixi run -e instanseg python run.py ...`") from e
+
+    if has_cuda:
+        print("CUDA available, running InstanSeg on GPU")
+    elif use_gpu:
+        print("WARNING: --use-gpu specified but CUDA is not available to PyTorch; running on CPU")
+    else:
+        print("WARNING: No GPU detected. InstanSeg will run on CPU and may be slow.")
+    sopa.settings.parallelization_backend = None
+
+    if pixel_size_um is None:
+        print("WARNING: no pixel size for InstanSeg; the image is not rescaled to the model's "
+              "training resolution and it may find few or no cells. Pass --pixel-size.")
+
+    common = dict(model_type=model_type, channels=channels, pixel_size=pixel_size_um,
+                  device='cuda' if has_cuda else 'cpu')
+    print("Run InstanSeg (nuclei)...")
+    sopa.segmentation.instanseg(sdata, target='nuclei', key_added=NUCLEI_KEY, **common)
+    print("Run InstanSeg (cells)...")
+    sopa.segmentation.instanseg(sdata, target='cells', key_added=CELLS_KEY, **common)
+
+    linked = link_nuclei_to_cells(sdata.shapes[NUCLEI_KEY], sdata.shapes[CELLS_KEY])
+    sdata.shapes[CELLS_KEY]['nucleus_id'] = linked['nucleus_id'].values
+
+
+def link_nuclei_to_cells(nuclei_gdf, cells_gdf):
+    """Return a copy of ``cells_gdf`` with a ``nucleus_id`` column.
+
+    Each nucleus is assigned to the cell containing its representative point.
+    A cell containing several nuclei keeps the largest; a cell with none gets
+    NaN. Nuclei and cells come from separate InstanSeg passes, so their ids do
+    not correspond and must be matched spatially.
+    """
+    points = gpd.GeoDataFrame(
+        {'_nucleus_id': nuclei_gdf.index, '_area': nuclei_gdf.geometry.area.values},
+        geometry=nuclei_gdf.geometry.representative_point().values, crs=nuclei_gdf.crs)
+    cells = gpd.GeoDataFrame({'_cell_id': cells_gdf.index},
+                             geometry=cells_gdf.geometry.values, crs=cells_gdf.crs)
+    joined = gpd.sjoin(points, cells, how='inner', predicate='within')
+    primary = (joined.sort_values('_area', ascending=False)
+               .drop_duplicates(subset='_cell_id')
+               .set_index('_cell_id')['_nucleus_id'])
+
+    result = cells_gdf.copy()
+    result['nucleus_id'] = primary.reindex(result.index).values
+    n_linked = int(result['nucleus_id'].notna().sum())
+    print(f"Linked {n_linked} of {len(result)} cells to a nucleus "
+          f"({len(nuclei_gdf) - n_linked} nuclei unlinked)")
+    return result
 
 
 def get_pixel_size(imagepath):

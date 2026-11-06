@@ -12,8 +12,10 @@ shape overlays coloured by metadata columns.
 
 1. [Install Odon](https://github.com/alexcoulton/odon#installation).
 2. Open the segmented Zarr file (`*_seg.zarr`).
-3. The `stardist_boundaries` shape layer can be coloured by cluster or community
-   using the **"Color by"** dropdown.
+3. The `cell_boundaries` shape layer can be coloured by cluster or community
+   using the **"Color by"** dropdown. The nuclei layer (`stardist_boundaries`
+   or `nucleus_boundaries`) carries the same labels, if you prefer to view
+   nuclei.
 
 !!! note "Which columns appear"
     Only categorical columns with ≤24 distinct values appear in the dropdown.
@@ -73,7 +75,8 @@ Interactive(sdata).run()
 ```
 
 1. Select a coordinate system.
-2. Click `stardist_boundaries` to load the cell shapes.
+2. Click `cell_boundaries` to load the cell shapes (or the nuclei layer,
+   `stardist_boundaries` / `nucleus_boundaries`).
 3. Use the **View** widget (Plugins → napari-spatialdata → View) to colour cells
    by cluster, community, or any channel intensity column. Double-click any
    `obs` column to apply it as the face colour.

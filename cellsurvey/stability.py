@@ -27,7 +27,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
 
 from cellsurvey.network_analysis import compute_louvain_communities
-from cellsurvey.utils import remove_channel_suffix
+from cellsurvey.utils import remove_channel_suffix, resolve_shape_keys
 
 
 def _fmt(v):
@@ -43,14 +43,14 @@ def extract_intensity_matrix(sdata, table_key="table"):
     return df.loc[:, ~df.columns.duplicated(keep="first")]
 
 
-def extract_coords(sdata, cell_boundaries="cell_boundaries"):
-    boundaries = sdata.shapes[cell_boundaries]
+def extract_coords(sdata, cell_boundaries=None):
+    boundaries = sdata.shapes[cell_boundaries or resolve_shape_keys(sdata)[1]]
     centroids = boundaries.geometry.centroid
     return boundaries.index.values, np.column_stack([centroids.x.values, centroids.y.values])
 
 
 def run_stability_sweep(sdata, resolutions, max_edge_distances,
-                        cell_boundaries="cell_boundaries", seed=42):
+                        cell_boundaries=None, seed=42):
     """Recompute Louvain communities across a parameter grid.
 
     Returns a dict with keys ``cell_ids``, ``coords``, ``labels`` (an
@@ -112,15 +112,15 @@ def sweep_summary(result, output_path):
     pd.DataFrame(rows).to_csv(output_path, index=False)
 
 
-def _coords_for_cell_ids(sdata, cell_ids, cell_boundaries="cell_boundaries"):
+def _coords_for_cell_ids(sdata, cell_ids, cell_boundaries=None):
     """Return an (n, 2) array of centroids aligned to ``cell_ids``."""
-    boundaries = sdata.shapes[cell_boundaries]
+    boundaries = sdata.shapes[cell_boundaries or resolve_shape_keys(sdata)[1]]
     lookup = {cid: (g.centroid.x, g.centroid.y)
               for cid, g in zip(boundaries.index.values, boundaries.geometry)}
     return np.array([lookup.get(cid, (np.nan, np.nan)) for cid in cell_ids], dtype=float)
 
 
-def run_cluster_sweep(sdata, n_clusters_list, cell_boundaries="cell_boundaries", seed=42):
+def run_cluster_sweep(sdata, n_clusters_list, cell_boundaries=None, seed=42):
     """Recompute k-means clusters across a range of ``n_clusters``.
 
     Returns a dict with keys ``cell_ids``, ``coords``, ``labels`` (an
@@ -182,6 +182,8 @@ def main():
                         help="Max edge distances to sweep (community mode).")
     parser.add_argument("--n-clusters", default="5,8,10,12,15,20",
                         help="k-means k values to sweep (cluster mode).")
+    parser.add_argument("--cell-boundaries", default=None,
+                        help="Shape layer to sweep over (default: cell_boundaries if present, else the nuclei layer).")
     parser.add_argument("--output", default=None,
                         help="Output CSV for per-cell labels (default: <zarr_dir>/<mode>_sweep.csv).")
     parser.add_argument("--summary", default=None,
@@ -193,7 +195,7 @@ def main():
 
     if args.mode == "clusters":
         n_clusters_list = [int(x) for x in args.n_clusters.split(",")]
-        result = run_cluster_sweep(sdata, n_clusters_list)
+        result = run_cluster_sweep(sdata, n_clusters_list, cell_boundaries=args.cell_boundaries)
         output = args.output or os.path.join(zarr_dir, "cluster_sweep.csv")
         summary = args.summary or os.path.join(zarr_dir, "cluster_sweep_summary.csv")
         cluster_sweep_to_csv(result, output)
@@ -201,7 +203,8 @@ def main():
     else:
         resolutions = [float(x) for x in args.resolutions.split(",")]
         max_edge_distances = [float(x) for x in args.max_edge_distances.split(",")]
-        result = run_stability_sweep(sdata, resolutions, max_edge_distances)
+        result = run_stability_sweep(sdata, resolutions, max_edge_distances,
+                                     cell_boundaries=args.cell_boundaries)
         output = args.output or os.path.join(zarr_dir, "community_sweep.csv")
         summary = args.summary or os.path.join(zarr_dir, "community_sweep_summary.csv")
         sweep_to_csv(result, output)

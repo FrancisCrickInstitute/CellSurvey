@@ -2,7 +2,7 @@
 
 # Overview
 
-CellSurvey is a Python pipeline for image-based spatial biology/omics analysis built on [Sopa](https://gustaveroussy.github.io/sopa/). It processes multichannel microscopy images (OME-TIFF) into spatial data objects, segments nuclei with Stardist, detects RNA spots via blob detection, clusters cells with k-means, builds Delaunay networks via scipy, detects Louvain communities via networkx, and exports GeoJSON for QuPath visualization.
+CellSurvey is a Python pipeline for image-based spatial biology/omics analysis built on [Sopa](https://gustaveroussy.github.io/sopa/). It processes multichannel microscopy images (OME-TIFF) into spatial data objects, segments nuclei and whole cells with Stardist or InstanSeg, detects RNA spots via blob detection, clusters cells with k-means, builds Delaunay networks via scipy, detects Louvain communities via networkx, and exports GeoJSON for QuPath visualization.
 
 * Blampey, Q., Mulder, K., Gardet, M. et al. Sopa: a technology-invariant pipeline for analyses of image-based spatial omics. _Nat Commun_ 15, 4981 (2024).
 
@@ -19,7 +19,16 @@ Full documentation is available at **[cell-survey.readthedocs.io](https://cell-s
 CellSurvey uses **pixi** for environment management targeting Linux (64-bit) with GPU support.
 
 > [!NOTE]
-> CellSurvey depends on TensorFlow and while TensorFlow will run on all operating systems, support for GPU processing is generally only supported on Linux ,  see [here](https://www.tensorflow.org/install) for more information. Windows and macOS are not supported via pixi.
+> GPU processing is only supported on Linux (64-bit). Windows (64-bit) environments are CPU-only and intended for local testing; macOS is not supported via pixi. See [here](https://www.tensorflow.org/install) for more information on TensorFlow GPU support.
+
+Each segmenter has its own pixi environment, so TensorFlow and PyTorch are never installed together:
+
+| Environment | Segmenter | Framework |
+|---|---|---|
+| `default` (alias `spatial`) | Stardist (`--segmenter stardist`, the default) | TensorFlow |
+| `instanseg` | InstanSeg (`--segmenter instanseg`) | PyTorch |
+
+The project plans to migrate fully to InstanSeg and eventually drop Stardist.
 
 ## Pixi (recommended)
 
@@ -43,11 +52,25 @@ That's it ,  pixi reads `pixi.toml` and sets up everything. To run:
 pixi run python run.py -i <input_tiff> -o <output_zarr> -p <plot_dir>
 ```
 
+To use InstanSeg, install and run the `instanseg` environment instead:
+
+```bash
+pixi install -e instanseg
+pixi run -e instanseg python run.py -i <input_tiff> -o <output_zarr> -p <plot_dir> --segmenter instanseg
+```
+
 ## Docker
 
 ```bash
 docker build -t cellsurvey .
 docker run --gpus all -v /path/to/data:/data cellsurvey -i /data/input.tiff -o /data/output -p /data/plots
+```
+
+For InstanSeg, build with the `instanseg` environment:
+
+```bash
+docker build --build-arg PIXI_ENV=instanseg -t cellsurvey-instanseg .
+docker run --gpus all -v /path/to/data:/data cellsurvey-instanseg -i /data/input.tiff -o /data/output -p /data/plots --segmenter instanseg
 ```
 
 # Usage
@@ -67,6 +90,13 @@ three required arguments are:
 * `-i`, `--input_file`: Path to the input multichannel TIFF image (OME-TIFF recommended).
 * `-o`, `--output_file`: Path for the output Zarr (`.zarr` appended automatically).
 * `-p`, `--plot_dir`: Directory where output plots are saved.
+
+Key segmentation options:
+
+* `--segmenter {stardist,instanseg}`: Segmentation method (default `stardist`; `instanseg` needs the `instanseg` environment).
+* `--cell-expansion`: Stardist only — radius in µm to expand nuclei into whole cells (default `5.0`; `0` = nuclei only).
+* `--pixel-size`: Pixel size in µm/px, overriding the image metadata. Needed for cell expansion and InstanSeg if the image lacks it.
+* `--seg-channels`: Comma-separated channel indices to segment on (default `0` for Stardist, all channels for InstanSeg).
 
 ## Full Example
 
@@ -98,7 +128,8 @@ pixi run python -m cellsurvey.stability \
 ```
 
 Each writes per-cell labels (plus a summary CSV with the community count, or the
-k-means inertia) and leaves the Zarr untouched.
+k-means inertia) and leaves the Zarr untouched. Both use the `cell_boundaries`
+layer if present, else the nuclei layer; override with `--cell-boundaries <layer>`.
 
 # Visualising Results
 

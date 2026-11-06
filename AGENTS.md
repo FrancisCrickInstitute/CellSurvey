@@ -8,11 +8,18 @@ CellSurvey is a spatial biology/omics analysis pipeline built on [Sopa](https://
 
 ## Environment and package management
 
-This project uses **pixi** (via `pixi.toml`) for environment management targeting `linux-64` (GPU) and `win-64` (CPU-only, for local testing). The lockfile is `pixi.lock`.
+This project uses **pixi** (via `pixi.toml`) for environment management targeting `linux-64` (GPU) and `win-64` (CPU-only, for local testing). No `pixi.lock` is committed; pixi solves on first install.
+
+**One pixi environment per segmenter**, so TensorFlow and PyTorch are never co-installed:
+- `default` (alias `spatial`) — feature `stardist`: Stardist + TensorFlow + `tf_keras`.
+- `instanseg` — feature `instanseg`: `instanseg-torch` (PyTorch; PyPI torch wheels bundle CUDA on linux-64, CPU-only on win-64). No TensorFlow.
+- Shared deps (sopa, bioio, scipy, networkx, igraph, …) are in the top-level `[pypi-dependencies]`.
+- **Long-term aim**: migrate fully to InstanSeg and drop Stardist/TensorFlow. Keep TF imports lazy and Stardist-specific logic isolated in `segmentation.run_stardist` so it is easy to delete.
 
 Key dependency constraints:
-- **Python**: `>=3.12, <3.13` on `linux-64`
-- **TensorFlow**: `>=2.18` on `linux-64` (with `and-cuda` extras for GPU)
+- **Python**: `>=3.12, <3.13`
+- **Sopa**: `>=2.3.0` — the first release with `sopa.segmentation.instanseg`
+- **TensorFlow** (`stardist` feature only): `>=2.18` on `linux-64` (with `and-cuda` extras for GPU)
 - **CUDA/cuDNN**: TF >=2.18 bundles its own CUDA 12/cuDNN 9 libraries; no separate conda CUDA/cuDNN packages are needed
 - **`tf_keras`** is a required pypi dependency — TF >=2.16 defaults to Keras 3, but Stardist needs legacy Keras 2 API to avoid cuDNN autotuner failures on CUDA 12/cuDNN 9
 - **`scipy` (`>=1.14, <2`)** and **`networkx` (`>=3.4, <4`)** for Delaunay triangulation and Louvain community detection (replacing MuSpAn)
@@ -21,9 +28,9 @@ Key dependency constraints:
 - **Windows is CPU-only for local testing** via pixi (`win-64`, TensorFlow CPU wheel — no GPU, no `and-cuda`). **macOS is not supported** — only `linux-64` and `win-64` are in the platforms list.
 - **Sopa is a single-maintainer dependency risk**: Sopa is maintained almost entirely by one person (Quentin Blampey), who has left academia. CellSurvey currently uses Sopa for image reading, patching, the Stardist wrapper, aggregation, and spatial-neighbour analysis. **Strategic aim**: gradually reduce Sopa coupling — own the segmentation/aggregation/spatial steps directly where practical — while continuing to use it in the short term. The cell-segmentation work (and eventual Cellpose integration) is a natural seam to start decoupling.
 
-A **Dockerfile** is provided: Ubuntu 24.04 base, installs pixi, copies `pixi.toml`, sets `TF_USE_LEGACY_KERAS=1`, entrypoint is `pixi run python run.py`.
+A **Dockerfile** is provided: Ubuntu 24.04 base, installs pixi, installs the pixi env named by build arg `PIXI_ENV` (default `default`; `instanseg` for InstanSeg), copies `run.py` + `cellsurvey/`, sets `TF_USE_LEGACY_KERAS=1`, entrypoint is `pixi run -e $PIXI_ENV python run.py`.
 
-There is no Makefile, no CI/CD, and no tests. The source code is split across 6 files under the `cellsurvey/` package, with `run.py` as the entry-point shim.
+There is no Makefile, no CI/CD, and no tests. The source code is split across 7 modules (plus `__init__.py`) under the `cellsurvey/` package, with `run.py` as the entry-point shim.
 
 **TODO**: Set up linting and formatting (Ruff, mypy) with a `pyproject.toml` config and pre-commit hooks.
 
@@ -33,12 +40,14 @@ There is no Makefile, no CI/CD, and no tests. The source code is split across 6 
 
 **Development environment setup (pixi):**
 ```bash
-pixi install
+pixi install                  # default env (Stardist / TensorFlow)
+pixi install -e instanseg     # InstanSeg env (PyTorch)
 ```
 
 **Run the pipeline (pixi):**
 ```bash
 pixi run python run.py -i <input_tiff> -o <output_zarr_prefix> -p <plot_output_dir>
+pixi run -e instanseg python run.py --segmenter instanseg -i <input_tiff> -o <output_zarr_prefix> -p <plot_output_dir>
 ```
 
 **Run the pipeline (standalone):**
@@ -55,6 +64,9 @@ Three required arguments:
 ```bash
 docker build -t cellsurvey .
 docker run --gpus all -v /path/to/data:/data cellsurvey -i /data/input.tiff -o /data/output -p /data/plots
+
+docker build --build-arg PIXI_ENV=instanseg -t cellsurvey-instanseg .
+docker run --gpus all -v /path/to/data:/data cellsurvey-instanseg --segmenter instanseg -i /data/input.tiff -o /data/output -p /data/plots
 ```
 
 There is no build step, no test command, and no linting configured.
@@ -72,18 +84,20 @@ The pipeline is split into modules under the `cellsurvey/` package. `run.py` is 
 
 3. **Initial Zarr write** (`cli.py`): The dataset (with or without spots) is written to disk with try/except error handling.
 
-4. **Stardist segmentation** (`cli.py`): Reads back the Zarr (materialized checkpoint), creates image patches via `sopa.make_image_patches()`, detects GPU availability with `tf.config.list_physical_devices('GPU')` and warns if absent, renames channel coordinates to include `_ch_` suffixes (e.g., `DAPI_ch_0`), and runs `sopa.segmentation.stardist()` with the `2D_versatile_fluo` model. Only the first unique channel is passed to Stardist.
+4. **Segmentation** (`cli.py` → `segmentation.py`): Reads back the Zarr (materialized checkpoint), creates image patches via `sopa.make_image_patches()`, renames channel coordinates to include `_ch_` suffixes (e.g., `DAPI_ch_0`), then runs the segmenter chosen by `--segmenter` on the `--seg-channels`:
+   - **`stardist`** (default) → `run_stardist`: lazily imports TF, detects GPU via `tf.config.list_physical_devices('GPU')`, runs `sopa.segmentation.stardist()` (`2D_versatile_fluo`) on one channel (default index 0) → `stardist_boundaries` (nuclei).
+   - **`instanseg`** → `run_instanseg`: needs the `instanseg` pixi env. Runs `sopa.segmentation.instanseg()` (`--instanseg-model`, default `fluorescence_nuclei_and_cells`) **twice** — Sopa's wrapper returns one mask per call — with `target='nuclei'` → `nucleus_boundaries` and `target='cells'` → `cell_boundaries`. Default channels: all (InstanSeg is channel-invariant). Passes `pixel_size` so the image is rescaled to the model's training resolution. Then `link_nuclei_to_cells` adds `nucleus_id` to each cell (largest nucleus whose representative point it contains; NaN if none).
 
-   **Segmented Zarr reuse**: Only when `--resume-from` is specified, checks if `_seg.zarr` already exists before running Stardist:
-   - Has `tables['table']` → skips both Stardist and aggregation, jumps to clustering
-   - Has `stardist_boundaries` but no table → skips Stardist, re-runs aggregation only
-   - Missing or corrupt → full Stardist + aggregation
+   **Segmented Zarr reuse**: Only when `--resume-from` is specified, checks if `_seg.zarr` already exists before segmenting:
+   - Has `tables['table']` → skips segmentation and aggregation, jumps to clustering
+   - Has the chosen segmenter's layers (stardist: `stardist_boundaries`; instanseg: `nucleus_boundaries` **and** `cell_boundaries`) but no table → re-runs aggregation only
+   - Missing or corrupt → full segmentation + aggregation
 
-5. **Channel aggregation** (`cli.py`): Runs `sopa.aggregate()` to compute per-cell mean intensities for each channel (genes). If `"spots"` exists in the dataset points, passes `aggregate_genes=True`, `points_key='spots'`, and `gene_column='gene'` to assign spots to cells. Otherwise runs plain aggregation. Wraps the aggregation in `pd.option_context('future.infer_string', False)` to prevent ArrowStringArray errors on Zarr write. Writes segmented Zarr with try/except error handling. The segmented Zarr replaces `.zarr` with `_seg.zarr`.
+5. **Cell expansion + channel aggregation** (`cli.py`): For Stardist only, if `--cell-expansion` > 0 and a pixel size is known, `expand_nuclei` grows nuclei into non-overlapping `cell_boundaries` (marker-controlled watershed; records `nucleus_id`). Aggregation targets the cell layer from `resolve_shape_keys` (`cell_boundaries` if present, else nuclei). Runs `sopa.aggregate(shapes_key=...)` to compute per-cell mean intensities for each channel (genes). If `"spots"` exists in the dataset points, passes `aggregate_genes=True`, `points_key='spots'`, and `gene_column='gene'` to assign spots to cells. Otherwise runs plain aggregation. Wraps the aggregation in `pd.option_context('future.infer_string', False)` to prevent ArrowStringArray errors on Zarr write. Writes segmented Zarr with try/except error handling. The segmented Zarr replaces `.zarr` with `_seg.zarr`.
 
 6. **K-means clustering** (`cli.py` → `utils.py`): Extracts the intensity matrix from the AnnData table, standardizes with `StandardScaler`, runs k-means, and attaches cluster labels to `sdata.tables['table'].obs`.
 
-7. **Network analysis** (`cli.py` → `network_analysis.py`): Extracts centroids from the cell boundaries GeoDataFrame. Builds a `scipy.spatial.Delaunay` triangulation, filters edges by `max_edge_distance`. Constructs a `networkx.Graph` from the filtered edges; when an intensity matrix is supplied, edges are weighted by expression similarity (`1 + Pearson corr`). Runs `nx.community.louvain_communities()` with the `community_resolution` parameter and fixed seed 42. Returns a dict with `cell_ids`, `community_labels`, and `cluster_labels` arrays. Embeds `kmeans_cluster` and `community` labels into both the `stardist_boundaries` GeoDataFrame and the AnnData table obs, and writes `summary.json` (cell/cluster/community/edge counts) to `--plot_dir`. The segmented Zarr is written at this stage (single write after all labels are computed).
+7. **Network analysis** (`cli.py` → `network_analysis.py`): Extracts centroids from the cell boundaries GeoDataFrame. Builds a `scipy.spatial.Delaunay` triangulation, filters edges by `max_edge_distance`. Constructs a `networkx.Graph` from the filtered edges; when an intensity matrix is supplied, edges are weighted by expression similarity (`1 + Pearson corr`). Runs `nx.community.louvain_communities()` with the `community_resolution` parameter and fixed seed 42. Returns a dict with `cell_ids`, `community_labels`, and `cluster_labels` arrays. Embeds `kmeans_cluster` and `community` labels into the cell-layer GeoDataFrame and the AnnData table obs, and maps them onto the nuclei layer via `nucleus_id` (unlinked nuclei get -1), and writes `summary.json` (cell/cluster/community/edge counts) to `--plot_dir`. The segmented Zarr is written at this stage (single write after all labels are computed).
 
 8. **Spot-to-cell assignment** (`cli.py` → `utils.py`): Spatial join of spots to cell boundaries using GeoPandas (`gpd.sjoin` with `predicate='within'`). Returns `None` if no spots are present in the dataset (no guard needed in `cli.py` — `export_to_qupath` handles `None`).
 
@@ -101,7 +115,12 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 | `-o`, `--output_file` | *(required)* | Path to output Zarr (`.zarr` appended if missing) |
 | `-p`, `--plot_dir` | `.` | Output directory for plots |
 | `--detect-blobs` | — | Enable RNA spot blob detection on specified channels (default: off) |
-| `--use-gpu` | — | Force GPU usage for Stardist (auto-detected by default) |
+| `--segmenter` | `stardist` | `stardist` (default env) or `instanseg` (needs `pixi run -e instanseg`) |
+| `--seg-channels` | *(segmenter default)* | Comma-separated channel indices to segment on (stardist: `0`; instanseg: all) |
+| `--instanseg-model` | `fluorescence_nuclei_and_cells` | InstanSeg pretrained model name or path |
+| `--pixel-size` | *(from OME metadata)* | µm/px override; needed for `--cell-expansion` and InstanSeg rescaling |
+| `--use-gpu` | — | Request GPU segmentation (auto-detected by default) |
+| `--cell-expansion` | `5.0` | Stardist only: expand nuclei into cells by this radius (µm); `0` = nuclei only |
 | `--channels` | `9,10,11,12` | Comma-separated channel indices for blob detection |
 | `--thresholds` | `0.01,0.1,0.1,0.1` | Comma-separated blob detection thresholds (one per channel) |
 | `--tile-size` | `2048` | Tile size for blob detection |
@@ -124,9 +143,17 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 
 - **`TF_USE_LEGACY_KERAS='1'`**: Set in `run.py` before imports. TF >=2.16 defaults to Keras 3, which compiles Stardist's model with XLA JIT, triggering a cuDNN autotuner failure on 1x1 convolutions with CUDA 12/cuDNN 9. Legacy Keras 2 uses the non-XLA cuDNN path and retains GPU acceleration. Requires the `tf_keras` pip package.
 
-- **System-specific shared library**: `run.py` preloads the pixi environment's `libstdc++.so.6` (resolved relative to the script's `.pixi/` directory) to avoid ABI conflicts with the system library. If the file doesn't exist (e.g., on a non-pixi setup), it silently skips. Note: this preload code is duplicated in `cli.py` (lines 3-9) so that `cli.py` can also be run standalone via `python -m cellsurvey.cli`.
+- **System-specific shared library**: `run.py` preloads the active environment's `libstdc++.so.6` (`sys.prefix/lib`, so it works for any pixi env) to avoid ABI conflicts with the system library. If the file doesn't exist (e.g., Windows or a venv), it silently skips. Note: this preload code is duplicated at the top of `cli.py` so that `cli.py` can also be run standalone via `python -m cellsurvey.cli` — change both together.
 
-- **GPU detection and `--use-gpu` flag**: GPU is detected at runtime via `tf.config.list_physical_devices('GPU')`. If no GPU is found and `--use-gpu` is not set, a warning is printed but execution continues — Stardist will run on CPU and be very slow. The `--use-gpu` flag forces GPU backend even without auto-detection. Both paths set `sopa.settings.parallelization_backend = None`.
+- **TensorFlow is imported lazily**: only inside `segmentation.run_stardist`. Importing `cellsurvey` (or running the sweeps) must not import TF, otherwise the `instanseg` env breaks. Likewise `torch`/InstanSeg are imported only in `run_instanseg`.
+
+- **GPU detection and `--use-gpu` flag**: Stardist detects GPUs via `tf.config.list_physical_devices('GPU')`; InstanSeg via `torch.cuda.is_available()` (and passes `device='cuda'`/`'cpu'`). If no GPU is found a warning is printed but execution continues on CPU (slow). `--use-gpu` only changes the messages for Stardist; for InstanSeg it warns if CUDA is unavailable. Both set `sopa.settings.parallelization_backend = None`.
+
+- **Shape layers — never hard-code one key**: nuclei are `stardist_boundaries` (Stardist) or `nucleus_boundaries` (InstanSeg); whole cells are `cell_boundaries` (Stardist + watershed expansion, or InstanSeg cells). `utils.resolve_shape_keys(sdata)` returns `(nuclei_key, cells_key)`, with `cells_key` falling back to the nuclei layer for nuclei-only Zarrs (`--cell-expansion 0`, no pixel size, or older outputs). `run_network_analysis`, `assign_spots_to_cells`, `export_to_qupath`, and the sweeps all default to it.
+
+- **InstanSeg needs a pixel size**: without one (no OME metadata and no `--pixel-size`) the image is not rescaled to the model's training resolution and InstanSeg may find few or no cells — a warning is printed.
+
+- **InstanSeg nuclei and cells are separate passes**: their ids do not correspond, so they are matched spatially in `link_nuclei_to_cells`. In a multinucleate cell only the largest nucleus is linked; the others get cluster/community `-1`.
 
 - **Zarr write-then-read pattern**: The pipeline writes the initial Zarr to disk then immediately reads it back before continuing to segmentation. This is intentional — it materializes the spots-including dataset as a clean checkpoint.
 
@@ -154,7 +181,7 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 
 - **Channel subset loading**: The full multichannel image is not loaded into memory for blob detection. Only the channels specified by `--channels` are loaded via `dask_image.imread`, reducing memory footprint. The full image is available on disk via the Zarr for Stardist segmentation.
 
-- **AnnData `.X` can be sparse or dense**: `sopa.aggregate()` may produce either a scipy sparse matrix or a dense numpy array depending on the input data size and sopa version. The intensity extraction at `cli.py:238` handles both with `hasattr(measurements.X, 'toarray')`. Never assume `.X` is sparse.
+- **AnnData `.X` can be sparse or dense**: `sopa.aggregate()` may produce either a scipy sparse matrix or a dense numpy array depending on the input data size and sopa version. The intensity extraction in `cli.main()` (and `stability.extract_intensity_matrix`) handles both with `hasattr(measurements.X, 'toarray')`. Never assume `.X` is sparse.
 
 - **GeoJSON output path**: The QuPath GeoJSON path is configurable via `--geojson-path` (default `./qupath_export.geojson`). It is independent of `-o` and `-p`; all plot/PNG artifacts and `summary.json` go to `--plot_dir`.
 
@@ -178,7 +205,7 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 - `export_to_qupath` takes `cell_ids`, `community_labels`, `cluster_labels`, `sdata`, `intensity_df`, and `spots_with_cells` as explicit parameters (no implicit closure on module globals)
 - The pipeline writes Zarr files at two points: the initial Zarr after image loading (and optionally blob detection), and the segmented Zarr after Stardist + aggregation. Both writes are wrapped in try/except and exit with code 1 on failure.
 - The Zarr write-then-immediate-read pattern between stages 3 and 4 materializes a clean checkpoint. If segmented Zarr reuse kicks in (stage 4), the read of the initial Zarr is skipped entirely.
-- The `sopa.segmentation.stardist()` call passes only `unique_channels[0]` as the channels argument, not all channel names.
+- Segmentation channels come from `--seg-channels` (indices into `unique_channels`): Stardist takes exactly one (default `0`); InstanSeg defaults to all channels.
 - Dynamic imports inside except blocks: `import shutil` is imported inside the segmented Zarr corruption handler to avoid pulling it in unnecessarily.
 - `run_network_analysis()` in `network_analysis.py` returns a plain dict with keys `cell_ids`, `community_labels`, `cluster_labels`.
 - `run_network_analysis()` accepts `output_dir` parameter for plot output (set to `args.plot_dir` from `cli.py`).
@@ -252,7 +279,7 @@ Both share the same `cell_id` index, so their measurements are joinable. A third
 - `--cell-expansion` is expressed in **µm** (default `5.0`, matching QuPath's `cellExpansion`).
 - Physical pixel size (µm/px) is read from OME metadata via `BioImage(imagepath).physical_pixel_sizes` (bioio). For 2D images this is `(Y, X)`; guard for missing metadata.
 - Geometry operations run in pixel coordinates (as Stardist/SOPA produce), so the µm radius is converted to px internally: `expansion_px = expansion_um / pixel_size_um`.
-- If physical pixel size is unavailable, warn and fall back to an explicit `--cell-expansion-px` (or refuse with a clear error).
+- If physical pixel size is unavailable, a warning is printed and expansion is skipped (nuclei-only run); `--pixel-size` supplies it explicitly.
 - **Related cleanup (separate, deferred)**: the existing pixel-based params (`--max-edge-distance`, `--radius-min/max`) should eventually move to µm too, but that touches Delaunay/neighbour logic and existing outputs — keep it out of this change.
 
 ### Approach (QuPath-style expansion)
@@ -342,6 +369,9 @@ Each table's `.obs` index is the same `cell_id`, so `table` and `nucleus` join c
 5. **Aggregate over cells** — **partially done**: `sopa.aggregate` now targets `cell_boundaries` → `table` (whole-cell). The separate `stardist_boundaries` → `nucleus` table is **pending**.
 6. **Thread region through downstream** — **done**: `export.py`, `assign_spots_to_cells`, `network_analysis.py`, and `stability.py` now default to / are passed `cell_boundaries`; cluster/community are mapped onto `stardist_boundaries` via `nucleus_id`. `--cluster-regions` not added (single whole-cell table for now).
 
+### Done: InstanSeg (whole-cell segmentation)
+`--segmenter instanseg` (separate `instanseg` pixi env) segments nuclei **and** cells directly via `sopa.segmentation.instanseg` — no expansion approximation, and no whole-image watershed. This is the intended long-term replacement for Stardist + expansion; the Cellpose note below is superseded unless InstanSeg proves inadequate. A cytoplasm compartment (cell minus nucleus) is still not computed.
+
 ### Future: Cellpose (proper cytoplasm segmentation)
 Integrate **Cellpose** for true whole-cell segmentation (cell + cytoplasm), replacing the nucleus-expansion approximation. Cellpose is the dominant pretrained whole-cell segmenter for fluorescent microscopy, and would also yield a genuine **cytoplasm** compartment (cell minus nucleus) — the piece this phase deliberately does not approximate. Note: Cellpose is PyTorch-based (see the TF/Torch co-existence note) — recommend a separate pixi environment or a deferred, opt-in `--segmenter cellpose` path. Recorded here for later; not in scope for the expansion work.
 
@@ -351,7 +381,8 @@ Integrate **Cellpose** for true whole-cell segmentation (cell + cytoplasm), repl
 - **Fixed vs per-nucleus radius**: QuPath uses a fixed `cellExpansion`; a per-nucleus radius (scaled to nucleus area) is more accurate but adds a parameter.
 
 ### Risks
-- ~~v1 overlaps double-count pixels and inflate aggregated intensity~~ — resolved: v2 clips to a Voronoi tiling, so cells no longer overlap.
+- ~~v1 overlaps double-count pixels and inflate aggregated intensity~~ — resolved: the v3 watershed produces non-overlapping cells (only the buffered fallback for nuclei with no watershed cell can overlap).
+- **Watershed memory**: `_watershed_expand` rasterizes the whole image extent in one array (int32 labels + float64 EDT ≈ 12 bytes/px — ~30 GB for 50k×50k). Needs tiling for large images; InstanSeg (`--segmenter instanseg`) avoids it entirely.
 - Two tables and a region-selection flag widen the downstream surface (clustering, network, export, sweeps) — easy to miss a hardcoded `'stardist_boundaries'`/`'table'` reference; grep thoroughly.
 - Missing OME physical pixel size breaks µm conversion; need an explicit, well-documented fallback.
 
@@ -753,8 +784,9 @@ Ten tips spanning experimental design → platform selection → data structure 
 │   ├── blob_detection.py             # detect_blobs_in_tile, detect_blobs_tiled
 │   ├── network_analysis.py           # run_network_analysis + compute_louvain_communities (scipy Delaunay + networkx Louvain, expr-similarity weights, summary.json)
 │   ├── stability.py                  # run_stability_sweep (community) + run_cluster_sweep (k-means), read-only → CSV
+│   ├── segmentation.py               # run_stardist / run_instanseg, link_nuclei_to_cells, get_pixel_size, expand_nuclei (watershed)
 │   ├── export.py                     # export_to_qupath
-│   └── utils.py                      # remove_channel_suffix, cluster_data, assign_spots_to_cells, get_colors_for_communities
+│   └── utils.py                      # shape-layer keys + resolve_shape_keys, remove_channel_suffix, cluster_data, assign_spots_to_cells, get_colors_for_communities
 ├── docs/                             # MkDocs Material site (ReadTheDocs-hosted)
 │   ├── index.md                      # Landing / overview + pipeline diagram
 │   ├── installation.md               # pixi + Docker setup
@@ -764,9 +796,8 @@ Ten tips spanning experimental design → platform selection → data structure 
 │   ├── outputs.md                    # Every output file explained
 │   ├── visualization.md              # Odon / QuPath / TissUUmaps / napari
 │   └── faq.md                        # Question-phrased how-to + troubleshooting
-├── Dockerfile                        # Ubuntu 24.04 + pixi + GPU-ready container
-├── pixi.toml                         # Pixi environment config (linux-64 only)
-├── pixi.lock                         # Pixi lockfile (generated)
+├── Dockerfile                        # Ubuntu 24.04 + pixi + GPU-ready container (build arg PIXI_ENV)
+├── pixi.toml                         # Pixi config: linux-64 + win-64; envs default (Stardist/TF) and instanseg (Torch)
 ├── mkdocs.yml                        # MkDocs + Material config
 ├── .readthedocs.yaml                 # ReadTheDocs build config
 ├── requirements.txt                  # Minimal pip requirements (sopa)

@@ -16,22 +16,36 @@ python = ">=3.12, <3.13"
 [target.win-64.dependencies]
 python = ">=3.12, <3.13"
 
+# Segmenters live in separate environments so TensorFlow (Stardist) and
+# PyTorch (InstanSeg) are never co-installed:
+#   pixi run python run.py ...                          # Stardist (default)
+#   pixi run -e instanseg python run.py --segmenter instanseg ...
 [environments]
-spatial = ["default"]
+default = ["stardist"]
+spatial = ["stardist"]
+instanseg = ["instanseg"]
 
+# Shared by all environments
 [pypi-dependencies]
-stardist = ">=0.9.2, <0.10"
-sopa = ">=2.1.11, <3"
+sopa = ">=2.3.0, <3"
 bioio = ">=3.4.0, <4"
 bioio-ome-tiff = ">=1.4.0, <2"
 setuptools = ">=72.1.0,<82"
 python-igraph = "*"
-tf_keras = "*"
 scipy = ">=1.14, <2"
 networkx = ">=3.4, <4"
 
-[target.linux-64.pypi-dependencies]
+# Stardist (TensorFlow) — to be removed once fully migrated to InstanSeg
+[feature.stardist.pypi-dependencies]
+stardist = ">=0.9.2, <0.10"
+tf_keras = "*"
+
+[feature.stardist.target.linux-64.pypi-dependencies]
 tensorflow = { version = ">=2.18", extras = ["and-cuda"] }
 
-[target.win-64.pypi-dependencies]
+[feature.stardist.target.win-64.pypi-dependencies]
 tensorflow = ">=2.18"
+
+# InstanSeg (PyTorch). PyPI torch wheels bundle CUDA on linux-64; win-64 is CPU-only.
+[feature.instanseg.pypi-dependencies]
+instanseg-torch = ">=0.1.1"

@@ -17,7 +17,7 @@ flowchart TD
     C -- "yes (--detect-blobs)" --> D["2. Spot detection<br>(tiled LoG)"]
     C -- "no" --> E["3. Initial Zarr<br>checkpoint"]
     D --> E
-    E --> F["4. Stardist segmentation<br>(nuclei)"]
+    E --> F["4. Segmentation<br>(Stardist or InstanSeg)"]
     F --> G["5. Aggregation<br>(per-cell intensity)"]
     G --> H["6. K-means clustering"]
     H --> I["7. Network analysis<br>(Delaunay + Louvain)"]
@@ -82,20 +82,35 @@ This checkpoint is intentional: the pipeline writes it, then immediately reads
 it back before segmentation, so the spots-including dataset is materialised as a
 clean state.
 
-## 4. Stardist segmentation
+## 4. Segmentation
 
-Segments cell nuclei.
+Segments nuclei and whole cells, with one of two segmenters chosen by
+`--segmenter`.
 
-- **What it does**: detects a GPU (with `--use-gpu` forcing it if auto-detection
-  fails), makes image patches, then runs `sopa.segmentation.stardist()` with the
-  `2D_versatile_fluo` model on the first channel.
+- **What it does**: detects a GPU (with `--use-gpu` requesting it if
+  auto-detection fails), makes image patches, then runs the chosen segmenter on
+  the `--seg-channels`.
 - **Input**: the initial Zarr (`<output>.zarr`).
-- **Output**: `stardist_boundaries` shapes (cell polygons).
-- **Where**: `cellsurvey/cli.py`.
+- **Output**: nucleus and cell shape layers (see below).
+- **Where**: `cellsurvey/segmentation.py` (`run_stardist`, `run_instanseg`).
+
+| | Stardist (default) | InstanSeg |
+|---|---|---|
+| Environment | `default` (TensorFlow) | `instanseg` (PyTorch) |
+| Model | `2D_versatile_fluo` | `fluorescence_nuclei_and_cells` (`--instanseg-model`) |
+| Channels | One (`--seg-channels`, default `0`) | All by default (channel-invariant) |
+| Nuclei layer | `stardist_boundaries` | `nucleus_boundaries` |
+| Cell layer | `cell_boundaries`, by expanding nuclei (stage 5) | `cell_boundaries`, segmented directly |
+
+**InstanSeg** runs twice — once for nuclei and once for cells — and then links
+each cell to the largest nucleus it contains (matched on a point inside each
+nucleus), recorded in a `nucleus_id` column. Cells with no nucleus get an empty `nucleus_id`. It uses the
+pixel size (from the metadata or `--pixel-size`) to rescale the image to the
+model's training resolution; without it, it may find few or no cells.
 
 !!! warning "CPU fallback"
-    If no GPU is found and `--use-gpu` is not set, Stardist runs on CPU — this
-    works but is very slow. See [FAQ](faq.md).
+    If no GPU is found, segmentation runs on CPU — this works but is very slow.
+    See [FAQ](faq.md).
 
 ### Resume / crash recovery
 
@@ -104,20 +119,39 @@ When `--resume-from` is set, the pipeline first checks whether a segmented Zarr
 
 | Existing `*_seg.zarr` state | What happens |
 |---|---|
-| Has a table | Skips Stardist **and** aggregation, jumps straight to clustering. |
-| Has boundaries but no table | Skips Stardist, re-runs aggregation only. |
+| Has a table | Skips segmentation **and** aggregation, jumps straight to clustering. |
+| Has the chosen segmenter's layers but no table | Skips segmentation, re-runs aggregation only. |
 | Missing or unreadable | Deletes it and re-runs the full segmentation + aggregation. |
+
+The "segmenter's layers" are `stardist_boundaries` for Stardist, and both
+`nucleus_boundaries` and `cell_boundaries` for InstanSeg.
 
 ## 5. Channel aggregation
 
 Measures the mean intensity of every channel inside every cell.
 
-- **What it does**: runs `sopa.aggregate()` to compute per-cell mean intensities.
+- **What it does**: for Stardist, first expands each nucleus into a whole cell
+  (see below). Then runs `sopa.aggregate()` to compute per-cell mean intensities
+  over `cell_boundaries`, or over the nuclei layer if there is no cell layer.
   If a `spots` layer is present, it also assigns spots to cells
   (`aggregate_genes=True`).
 - **Input**: the segmented dataset.
 - **Output**: an AnnData table (`table`) of cells × markers.
 - **Where**: `cellsurvey/cli.py`.
+
+### Cell expansion (Stardist only)
+
+Stardist finds nuclei only, so whole cells are approximated by growing each
+nucleus outward by `--cell-expansion` µm (default `5.0`). The growth is a
+marker-controlled watershed, so neighbouring cells stop where they meet instead
+of overlapping — the same approach as QuPath's cell detection. The result is
+written to `cell_boundaries`, with a `nucleus_id` column pointing back to the
+nucleus each cell grew from.
+
+Expansion is skipped — and the analysis runs on nuclei alone — when
+`--cell-expansion 0` is set, or when the image has no pixel size and
+`--pixel-size` is not given. InstanSeg segments cells directly, so
+`--cell-expansion` is ignored for it.
 
 ## 6. K-means clustering
 
@@ -139,6 +173,11 @@ Builds a spatial network of neighbouring cells and detects communities.
 - **Output**: `kmeans_cluster` and `community` labels, plus `summary.json`
   (cell / cluster / community / edge counts).
 - **Where**: `cellsurvey/network_analysis.py` (`run_network_analysis`).
+
+The network, and all later stages, use `cell_boundaries` when present, else the
+nuclei layer. The labels are written to the cell layer, and copied to the nuclei
+layer through each cell's `nucleus_id`. Nuclei not linked to a cell (for
+example, the extra nuclei of a multinucleate InstanSeg cell) get `-1`.
 
 !!! info "Deterministic"
     Both k-means and Louvain use a fixed random seed (42), so the same input and

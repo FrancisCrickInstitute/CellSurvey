@@ -48,7 +48,8 @@ all plots in `~/results/plots/`.
 When you run the command, CellSurvey works through its stages in order:
 
 1. **Load** the image and detect channels.
-2. **Segment** cell nuclei with Stardist (GPU-accelerated).
+2. **Segment** cell nuclei with Stardist (GPU-accelerated), and expand each
+   nucleus into a whole cell.
 3. **Measure** the intensity of each marker channel inside every cell.
 4. **Cluster** cells by their expression profile (k-means).
 5. **Build a spatial network** and find communities (Delaunay + Louvain).
@@ -59,15 +60,38 @@ like:
 
 ```
 Found 1 GPU(s), using GPU backend for Stardist
-Run stardist...
-Aggregating...
+Run stardist on channel DAPI_ch_0...
+Expanded 12345 nuclei into cell boundaries (--cell-expansion=5.0 µm)
+Aggregating over cell_boundaries...
 Performing k-means clustering...
 Found 10 communities
 ```
 
 !!! note "Segmentation can take a while"
-    Stardist segmentation is the slowest stage. For large images it can take
+    Segmentation is the slowest stage. For large images it can take
     minutes to tens of minutes. This is expected.
+
+!!! tip "Whole cells need a pixel size"
+    Nuclei are expanded into cells by `--cell-expansion` µm (default `5.0`),
+    which needs the image's physical pixel size. If the OME metadata doesn't
+    include it, you'll see a warning and the run continues with nuclei only —
+    pass `--pixel-size` (µm/px) to fix this.
+
+## Using InstanSeg instead of Stardist
+
+InstanSeg segments nuclei and whole cells directly, rather than expanding
+nuclei. It runs in its own pixi environment (see
+[Installation](installation.md)):
+
+```bash
+pixi run -e instanseg python run.py \
+  -i ~/data/sample.ome.tiff \
+  -o ~/results/output \
+  -p ~/results/plots \
+  --segmenter instanseg
+```
+
+See [Parameters](parameters.md#segmentation) for the segmentation options.
 
 ## What you get
 

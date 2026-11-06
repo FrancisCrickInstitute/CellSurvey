@@ -71,14 +71,44 @@ passed, and detects RNA spots on the channels you specify.
 These set the radius band used for the mean-hop-distance heatmap between
 clusters (`cell_type_to_cell_type.png`).
 
-## GPU and Stardist segmentation
+## Segmentation
 
 | Flag | Default | What it controls |
 |---|---|---|
-| `--use-gpu` | off | Force GPU for Stardist even if auto-detection fails. |
+| `--segmenter` | `stardist` | Segmentation method: `stardist` or `instanseg`. |
+| `--seg-channels` | `0` (Stardist) / all channels (InstanSeg) | Comma-separated channel indices to segment on. Stardist takes exactly one. |
+| `--cell-expansion` | `5.0` | **Stardist only.** Radius in µm to grow each nucleus into a whole cell; `0` = nuclei only. Ignored for InstanSeg. |
+| `--instanseg-model` | `fluorescence_nuclei_and_cells` | **InstanSeg only.** Pretrained model name, or a path to a model. |
+| `--pixel-size` | *(from image metadata)* | Pixel size in µm/px, overriding the OME metadata. |
+| `--use-gpu` | off | Request GPU segmentation (both segmenters). The GPU is auto-detected and used when available. |
 
-By default the GPU is auto-detected. Use `--use-gpu` when detection fails but a
-GPU is present. Without a GPU, Stardist runs on CPU and is very slow.
+!!! info "Stardist vs InstanSeg"
+    - **Stardist** (default) segments **nuclei** only, on a single channel. Whole
+      cells are then approximated by expanding each nucleus outward by
+      `--cell-expansion` µm with a watershed, so neighbouring cells stop where
+      they meet (as in QuPath's cell detection).
+    - **InstanSeg** segments **nuclei and whole cells** directly. It is
+      channel-invariant, so by default it uses every channel. It needs the
+      separate `instanseg` pixi environment — see
+      [Installation](installation.md):
+
+    ```bash
+    pixi run -e instanseg python run.py -i <image> -o <output> -p <plots> \
+      --segmenter instanseg
+    ```
+
+    The project plans to migrate fully to InstanSeg and eventually drop Stardist.
+
+!!! warning "Pixel size matters"
+    The pixel size is read from the OME-TIFF metadata. If the image has none,
+    pass `--pixel-size`. Without it, Stardist cannot expand nuclei into cells
+    (the run continues with nuclei only), and InstanSeg cannot rescale the image
+    to its training resolution, so it may find few or no cells.
+
+By default the GPU is auto-detected. With Stardist, `--use-gpu` tells the
+pipeline to attempt the GPU backend when detection fails but a GPU is present.
+InstanSeg always uses the GPU when PyTorch can see CUDA. If it can't, `--use-gpu`
+only adds a warning. Without a GPU, segmentation runs on CPU and is very slow.
 
 ## Crash recovery
 
@@ -87,7 +117,7 @@ GPU is present. Without a GPU, Stardist runs on CPU and is very slow.
 | `--resume-from` | *(none)* | Path to an existing Zarr to resume from. |
 
 `--resume-from` skips image loading and spot detection, resuming directly at
-Stardist segmentation. Combined with the segmented-Zarr reuse (see
+segmentation. Combined with the segmented-Zarr reuse (see
 [Pipeline](pipeline.md)), it provides two levels of checkpoint restart.
 
 ## Output and visualisation
@@ -136,6 +166,12 @@ pixi run python -m cellsurvey.stability \
 
 This writes `cluster_sweep.csv` (a `cluster_k<k>` column per value) and
 `cluster_sweep_summary.csv` (the k-means inertia per `k`, for an elbow plot).
+
+### Which shapes are swept
+
+Both modes use the `cell_boundaries` layer when the Zarr has one, otherwise the
+nuclei layer (`stardist_boundaries` or `nucleus_boundaries`), so nuclei-only
+Zarrs work too. Override it with `--cell-boundaries <layer>`.
 
 !!! note "Clusters are independent of communities"
     `--n-clusters` does **not** affect the communities: Louvain weights its graph

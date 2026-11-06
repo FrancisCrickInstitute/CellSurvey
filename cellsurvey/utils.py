@@ -7,6 +7,31 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
 
 
+# Shape layer names. Stardist writes nuclei to ``stardist_boundaries``;
+# InstanSeg writes nuclei to ``nucleus_boundaries``. Whole cells always live in
+# ``cell_boundaries`` (InstanSeg cells, or Stardist nuclei expanded by watershed).
+STARDIST_NUCLEI_KEY = 'stardist_boundaries'
+NUCLEI_KEY = 'nucleus_boundaries'
+CELLS_KEY = 'cell_boundaries'
+_NUCLEI_KEYS = (NUCLEI_KEY, STARDIST_NUCLEI_KEY)
+
+
+def resolve_shape_keys(sdata):
+    """Return ``(nuclei_key, cells_key)`` for the segmentation layers in ``sdata``.
+
+    ``cells_key`` is ``cell_boundaries`` when present, otherwise it falls back to
+    the nuclei layer (nuclei-only runs: ``--cell-expansion 0``, missing pixel
+    size, or a ``_seg.zarr`` written before whole-cell support). ``nuclei_key``
+    is ``None`` if there is no nuclei layer.
+    """
+    nuclei_key = next((k for k in _NUCLEI_KEYS if k in sdata.shapes), None)
+    cells_key = CELLS_KEY if CELLS_KEY in sdata.shapes else nuclei_key
+    if cells_key is None:
+        raise KeyError(f"No segmentation boundaries found; expected one of "
+                       f"{[CELLS_KEY, *_NUCLEI_KEYS]}, got {list(sdata.shapes.keys())}")
+    return nuclei_key, cells_key
+
+
 def remove_channel_suffix(name):
     return re.sub(r'_ch_\d+$', '', name)
 
@@ -31,10 +56,13 @@ def cluster_data(data, n_clusters=10, random_seed=42):
     return cluster_labels, distances
 
 
-def assign_spots_to_cells(spatial_data, spots_key='spots', cell_boundaries='cell_boundaries'):
+def assign_spots_to_cells(spatial_data, spots_key='spots', cell_boundaries=None):
     if spots_key not in spatial_data.points:
         print("No spots found, skipping spot-to-cell assignment")
         return None
+
+    if cell_boundaries is None:
+        cell_boundaries = resolve_shape_keys(spatial_data)[1]
 
     print("Computing spot-to-cell assignments...")
 

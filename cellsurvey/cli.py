@@ -1,16 +1,16 @@
 import ctypes.util
 import pathlib as _pl
+import sys
 
-# Preload the pixi environment's libstdc++ to avoid ABI conflicts with the
-# system library. Locate it relative to this script's pixi env directory.
-_pixi_env_lib = _pl.Path(__file__).resolve().parent.parent / ".pixi" / "envs" / "default" / "lib"
-_libstdcpp = _pixi_env_lib / "libstdc++.so.6"
+# Preload the active environment's libstdc++ (e.g. .pixi/envs/<env>/lib) to
+# avoid ABI conflicts with the system library. sys.prefix is the running env,
+# so this works for both the default (Stardist) and instanseg pixi envs.
+_libstdcpp = _pl.Path(sys.prefix) / "lib" / "libstdc++.so.6"
 if _libstdcpp.exists():
     ctypes.CDLL(str(_libstdcpp))
 
 import argparse
 import os
-import sys
 import numpy as np
 import pandas as pd
 import matplotlib
@@ -20,16 +20,16 @@ import seaborn as sns
 import scanpy as sc
 import spatialdata
 import sopa
-import tensorflow as tf
 from bioio import BioImage
 from dask_image.imread import imread
 from spatialdata.models import PointsModel
 from spatialdata.transformations import Identity
 
-from cellsurvey.utils import remove_channel_suffix, cluster_data, assign_spots_to_cells
+from cellsurvey.utils import (remove_channel_suffix, cluster_data, assign_spots_to_cells,
+                              resolve_shape_keys, STARDIST_NUCLEI_KEY, NUCLEI_KEY, CELLS_KEY)
 from cellsurvey.blob_detection import detect_blobs_tiled
 from cellsurvey.network_analysis import run_network_analysis
-from cellsurvey.segmentation import get_pixel_size, expand_nuclei
+from cellsurvey.segmentation import get_pixel_size, expand_nuclei, run_stardist, run_instanseg
 from cellsurvey.export import export_to_qupath
 
 
@@ -40,10 +40,21 @@ def main():
     parser.add_argument('-p', '--plot_dir', help='Output directory for data plots', default='.')
     parser.add_argument('--detect-blobs', action='store_true',
                         help='Enable RNA spot blob detection on the specified channels')
+    parser.add_argument('--segmenter', choices=['stardist', 'instanseg'], default='stardist',
+                        help='Segmentation method (default: stardist). instanseg needs the instanseg '
+                             'pixi environment: pixi run -e instanseg python run.py ...')
+    parser.add_argument('--seg-channels', default=None,
+                        help='Comma-separated channel indices to segment on '
+                             '(default: 0 for stardist, all channels for instanseg)')
+    parser.add_argument('--instanseg-model', default='fluorescence_nuclei_and_cells',
+                        help='InstanSeg pretrained model name or path (default: fluorescence_nuclei_and_cells)')
+    parser.add_argument('--pixel-size', type=float, default=None,
+                        help='Pixel size in µm/px, overriding the image metadata')
     parser.add_argument('--use-gpu', action='store_true',
-                        help='Force GPU usage for Stardist segmentation (auto-detected if not specified)')
+                        help='Request GPU segmentation (auto-detected if not specified)')
     parser.add_argument('--cell-expansion', type=float, default=5.0,
-                        help='Cell expansion radius in microns (default: 5.0)')
+                        help='Stardist only: expand nuclei into cells by this radius in µm; 0 = nuclei only '
+                             '(default: 5.0). Ignored for instanseg, which segments cells directly')
     parser.add_argument('--channels', help='Comma-separated channel indices for blob detection',
                         default='9,10,11,12')
     parser.add_argument('--thresholds', help='Comma-separated blob detection thresholds (one per channel)',
@@ -87,11 +98,23 @@ def main():
 
     imagepath = args.input_file
 
-    pixel_size_um = get_pixel_size(imagepath)
-    if pixel_size_um is None:
-        print("WARNING: no physical pixel size in image metadata (cell expansion in µm unavailable)")
+    if args.pixel_size is not None:
+        if args.pixel_size <= 0:
+            parser.error("--pixel-size must be positive")
+        pixel_size_um = args.pixel_size
+        print(f"Physical pixel size (from --pixel-size): {pixel_size_um:.4f} µm/px")
     else:
-        print(f"Physical pixel size: {pixel_size_um:.4f} µm/px")
+        pixel_size_um = get_pixel_size(imagepath)
+        if pixel_size_um is None:
+            print("WARNING: no physical pixel size in image metadata; pass --pixel-size "
+                  "(needed for --cell-expansion and InstanSeg rescaling)")
+        else:
+            print(f"Physical pixel size: {pixel_size_um:.4f} µm/px")
+
+    # Shape layers the chosen segmenter writes; used to decide whether a resumed
+    # _seg.zarr already holds this segmenter's output. (cell_boundaries alone is
+    # not enough for InstanSeg: Stardist + expansion also writes it.)
+    seg_layers = [STARDIST_NUCLEI_KEY] if args.segmenter == 'stardist' else [NUCLEI_KEY, CELLS_KEY]
 
     zarr_path = args.output_file
     if not zarr_path.endswith('.zarr'):
@@ -167,7 +190,7 @@ def main():
         print("Done")
 
     seg_zarr_path = zarr_path.replace('.zarr', '_seg.zarr')
-    needs_stardist = True
+    needs_segmentation = True
     needs_aggregation = True
 
     if args.resume_from and os.path.exists(seg_zarr_path):
@@ -175,17 +198,17 @@ def main():
             dataset = spatialdata.read_zarr(seg_zarr_path)
             if 'table' in dataset.tables and dataset.tables['table'] is not None:
                 print(f"Segmented Zarr with table found, skipping to clustering: {seg_zarr_path}")
-                needs_stardist = False
+                needs_segmentation = False
                 needs_aggregation = False
                 sdata = dataset
-            elif 'stardist_boundaries' in dataset.shapes:
-                print(f"Segmented Zarr has boundaries but no table, re-running aggregation only")
-                needs_stardist = False
+            elif all(k in dataset.shapes for k in seg_layers):
+                print(f"Segmented Zarr has {', '.join(seg_layers)} but no table, re-running aggregation only")
+                needs_segmentation = False
         except Exception:
             import shutil
             shutil.rmtree(seg_zarr_path, ignore_errors=True)
 
-    if needs_stardist:
+    if needs_segmentation:
         print("Loading Zarr...")
 
         dataset = spatialdata.read_zarr(zarr_path)
@@ -195,19 +218,6 @@ def main():
         print("Make image patches...")
 
         sopa.make_image_patches(dataset)
-
-        print("Set backend to None (will use GPU)...")
-
-        gpus = tf.config.list_physical_devices('GPU')
-        if args.use_gpu or gpus:
-            if gpus:
-                print(f"Found {len(gpus)} GPU(s), using GPU backend for Stardist")
-            else:
-                print("No GPU detected but --use-gpu specified, attempting GPU backend")
-            sopa.settings.parallelization_backend = None
-        else:
-            print("WARNING: No GPU detected. Stardist segmentation will run on CPU and may be very slow.")
-            sopa.settings.parallelization_backend = None
 
         print("Get channel names...")
 
@@ -222,23 +232,41 @@ def main():
             scale_node = dataset.images[image_name][scale_name]
             scale_node.ds = scale_node.ds.assign_coords(c=unique_channels)
 
-        print("Run stardist...")
+        if args.seg_channels is not None:
+            try:
+                seg_channels = [unique_channels[int(i)] for i in args.seg_channels.split(',')]
+            except (ValueError, IndexError):
+                parser.error(f"--seg-channels must be comma-separated indices in 0..{len(unique_channels) - 1}")
+        elif args.segmenter == 'stardist':
+            seg_channels = [unique_channels[0]]
+        else:
+            seg_channels = unique_channels
 
-        sopa.segmentation.stardist(dataset, model_type='2D_versatile_fluo', channels=unique_channels[0])
+        if args.segmenter == 'stardist':
+            if len(seg_channels) != 1:
+                parser.error("Stardist segments a single channel; pass one index to --seg-channels")
+            run_stardist(dataset, seg_channels[0], use_gpu=args.use_gpu)
+        else:
+            run_instanseg(dataset, seg_channels, pixel_size_um,
+                          model_type=args.instanseg_model, use_gpu=args.use_gpu)
 
     if needs_aggregation:
-        if args.cell_expansion > 0:
-            if 'stardist_boundaries' not in dataset.shapes:
-                print("WARNING: no stardist_boundaries to expand; skipping cell expansion")
+        # Stardist gives nuclei only; approximate whole cells by watershed expansion.
+        # InstanSeg already produced cell_boundaries.
+        if args.segmenter == 'stardist' and args.cell_expansion > 0:
+            if STARDIST_NUCLEI_KEY not in dataset.shapes:
+                print(f"WARNING: no {STARDIST_NUCLEI_KEY} to expand; skipping cell expansion")
             elif pixel_size_um is None:
                 print("WARNING: no physical pixel size available; cannot expand cells in µm; skipping")
             else:
-                nuclei = dataset.shapes['stardist_boundaries']
-                dataset["cell_boundaries"] = expand_nuclei(nuclei, args.cell_expansion, pixel_size_um)
+                nuclei = dataset.shapes[STARDIST_NUCLEI_KEY]
+                dataset[CELLS_KEY] = expand_nuclei(nuclei, args.cell_expansion, pixel_size_um)
                 print(f"Expanded {len(nuclei)} nuclei into cell boundaries (--cell-expansion={args.cell_expansion} µm)")
+        elif args.segmenter == 'instanseg' and args.cell_expansion != 5.0:
+            print("NOTE: --cell-expansion is ignored for instanseg (cells are segmented directly)")
 
-        # Aggregate over whole cells when cell expansion produced them, else nuclei.
-        agg_shapes_key = 'cell_boundaries' if 'cell_boundaries' in dataset.shapes else 'stardist_boundaries'
+        # Aggregate over whole cells when available, else nuclei.
+        agg_shapes_key = resolve_shape_keys(dataset)[1]
         print(f"Aggregating over {agg_shapes_key}...")
 
         # Force pandas to use plain object dtype for strings, not ArrowStringArray,
@@ -289,7 +317,7 @@ def main():
 
     # Build the network on the cell layer (not the nuclei), so cell ids match the
     # table produced by aggregation over that layer.
-    network_shapes_key = 'cell_boundaries' if 'cell_boundaries' in sdata.shapes else 'stardist_boundaries'
+    nuclei_key, network_shapes_key = resolve_shape_keys(sdata)
     result = run_network_analysis(sdata, intensity_matrix=intensity_df,
                                 cell_boundaries=network_shapes_key,
                                 comm_detect_res=args.community_resolution,
@@ -315,13 +343,17 @@ def main():
     sdata.shapes[network_shapes_key]['community'] = result['community_labels']
     sdata.tables['table'].obs['community'] = pd.Categorical(result['community_labels'])
 
-    # Also attach cluster/community to the nuclei (stardist_boundaries) via the
-    # nucleus_id recorded before sopa.aggregate re-indexed the cells.
-    if 'nucleus_id' in sdata.shapes[network_shapes_key].columns:
+    # Also attach cluster/community to the nuclei layer via the nucleus_id
+    # recorded on each cell (survives sopa.aggregate's re-indexing). Nuclei not
+    # linked to a cell get -1.
+    if nuclei_key is not None and nuclei_key != network_shapes_key \
+            and 'nucleus_id' in sdata.shapes[network_shapes_key].columns:
         cell_gdf = sdata.shapes[network_shapes_key]
-        nucleus_to_cluster = dict(zip(cell_gdf['nucleus_id'], result['cluster_labels']))
-        nucleus_to_community = dict(zip(cell_gdf['nucleus_id'], result['community_labels']))
-        nuclei = sdata.shapes['stardist_boundaries']
+        linked = cell_gdf['nucleus_id'].notna().to_numpy()
+        nucleus_ids = cell_gdf['nucleus_id'].to_numpy()[linked]
+        nucleus_to_cluster = dict(zip(nucleus_ids, np.asarray(result['cluster_labels'])[linked]))
+        nucleus_to_community = dict(zip(nucleus_ids, np.asarray(result['community_labels'])[linked]))
+        nuclei = sdata.shapes[nuclei_key]
         nuclei['kmeans_cluster'] = [nucleus_to_cluster.get(cid, -1) for cid in nuclei.index]
         nuclei['community'] = [nucleus_to_community.get(cid, -1) for cid in nuclei.index]
     print(f'Saving Zarr to {seg_zarr_path}')
@@ -374,8 +406,8 @@ def main():
     obs = sdata.tables['table'].obs
     obs_ids = [str(cid) for cid in obs.index]
 
-    # Cell centroids aligned to the table (a filtered subset of cell_boundaries).
-    cell_gdf = sdata.shapes.get('cell_boundaries', sdata.shapes['stardist_boundaries'])
+    # Cell centroids aligned to the table (a filtered subset of the cell layer).
+    cell_gdf = sdata.shapes[network_shapes_key]
     centroid_map = {str(cid): (geom.centroid.x, geom.centroid.y)
                     for cid, geom in zip(cell_gdf.index, cell_gdf.geometry)}
     x = np.array([centroid_map.get(cid, (np.nan, np.nan))[0] for cid in obs_ids])

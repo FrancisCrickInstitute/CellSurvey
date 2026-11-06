@@ -8,7 +8,7 @@ clusters and communities, and exports the result for interactive viewing.
 <!-- prettier-ignore -->
 ```mermaid
 flowchart LR
-    A["OME-TIFF image"] --> B["Segment nuclei<br>(Stardist)"]
+    A["OME-TIFF image"] --> B["Segment nuclei + cells<br>(Stardist or InstanSeg)"]
     B --> C["Measure markers<br>per cell (aggregation)"]
     C --> D["Group cells<br>(k-means)"]
     D --> E["Build spatial network<br>(Delaunay + Louvain)"]
@@ -25,7 +25,10 @@ command takes you from raw image to labelled cells and communities.
 
 The pipeline automates these steps:
 
-1. **Segment** cell nuclei with [Stardist](https://github.com/stardist/stardist).
+1. **Segment** nuclei and whole cells, with
+   [Stardist](https://github.com/stardist/stardist) (nuclei, expanded into
+   cells) or [InstanSeg](https://github.com/instanseg/instanseg) (nuclei and
+   cells directly).
 2. **Measure** the intensity of every marker channel within each cell.
 3. **Cluster** cells into expression-based groups (k-means).
 4. **Build a spatial network** of neighbouring cells and detect communities
@@ -45,6 +48,14 @@ pixi run python run.py \
   -i path/to/image.ome.tiff \
   -o path/to/output \
   -p path/to/plots
+
+# Or, with InstanSeg (separate environment)
+pixi install -e instanseg
+pixi run -e instanseg python run.py \
+  -i path/to/image.ome.tiff \
+  -o path/to/output \
+  -p path/to/plots \
+  --segmenter instanseg
 ```
 
 The output is a SpatialData Zarr store (`output_seg.zarr`) plus a

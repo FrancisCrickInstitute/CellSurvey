@@ -20,10 +20,21 @@ contains, and how to open it.
 Both are [SpatialData](https://www.nature.com/articles/s41592-024-02212-x) Zarr
 stores. The segmented store contains:
 
-- `stardist_boundaries` — cell polygon shapes, with `kmeans_cluster` and
-  `community` labels attached.
-- `table` — an AnnData table of cells × markers (per-cell mean intensities).
+- `cell_boundaries` — whole-cell polygons, with `kmeans_cluster` and
+  `community` labels and a `nucleus_id` column linking each cell to its nucleus.
+  With Stardist these are nuclei expanded by `--cell-expansion`; with InstanSeg
+  they are segmented directly.
+- A nuclei layer — `stardist_boundaries` (Stardist) or `nucleus_boundaries`
+  (InstanSeg) — with the same `kmeans_cluster` and `community` labels, copied
+  from each nucleus's cell. Nuclei not linked to a cell get `-1`.
+- `table` — an AnnData table of cells × markers (per-cell mean intensities),
+  measured over `cell_boundaries`.
 - `spots` — detected RNA spots (only if `--detect-blobs` was used).
+
+!!! note "Nuclei-only runs"
+    When there is no `cell_boundaries` layer (Stardist with
+    `--cell-expansion 0`, or no pixel size available), the nuclei layer is the
+    cell layer: the table, labels, network, and GeoJSON all use it instead.
 
 Open them with any SpatialData-aware viewer (see
 [Visualising results](visualization.md)).
@@ -69,7 +80,8 @@ All plots are PNG files written to `--plot_dir`.
 
 The GeoJSON contains:
 
-- **Cell boundaries** as annotations, coloured by community, with cluster and
+- **Cell boundaries** (from `cell_boundaries`, or the nuclei layer in a
+  nuclei-only run) as annotations, coloured by community, with cluster and
   per-marker mean-intensity measurements attached.
 - **RNA spots** as detection objects (only when `--detect-blobs` was used),
   linked to their parent cell where assignment succeeded.
