@@ -48,6 +48,8 @@ def main():
                              '(default: 0 for stardist, all channels for instanseg)')
     parser.add_argument('--instanseg-model', default='fluorescence_nuclei_and_cells',
                         help='InstanSeg pretrained model name or path (default: fluorescence_nuclei_and_cells)')
+    parser.add_argument('--keep-unnucleated', action='store_true',
+                        help='InstanSeg only: keep cells that contain no nucleus (dropped by default)')
     parser.add_argument('--pixel-size', type=float, default=None,
                         help='Pixel size in µm/px, overriding the image metadata')
     parser.add_argument('--use-gpu', action='store_true',
@@ -248,7 +250,8 @@ def main():
             run_stardist(dataset, seg_channels[0], use_gpu=args.use_gpu)
         else:
             run_instanseg(dataset, seg_channels, pixel_size_um,
-                          model_type=args.instanseg_model, use_gpu=args.use_gpu)
+                          model_type=args.instanseg_model, use_gpu=args.use_gpu,
+                          keep_unnucleated=args.keep_unnucleated)
 
     if needs_aggregation:
         # Stardist gives nuclei only; approximate whole cells by watershed expansion.

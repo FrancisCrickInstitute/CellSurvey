@@ -86,7 +86,7 @@ The pipeline is split into modules under the `cellsurvey/` package. `run.py` is 
 
 4. **Segmentation** (`cli.py` → `segmentation.py`): Reads back the Zarr (materialized checkpoint), creates image patches via `sopa.make_image_patches()`, renames channel coordinates to include `_ch_` suffixes (e.g., `DAPI_ch_0`), then runs the segmenter chosen by `--segmenter` on the `--seg-channels`:
    - **`stardist`** (default) → `run_stardist`: lazily imports TF, detects GPU via `tf.config.list_physical_devices('GPU')`, runs `sopa.segmentation.stardist()` (`2D_versatile_fluo`) on one channel (default index 0) → `stardist_boundaries` (nuclei).
-   - **`instanseg`** → `run_instanseg`: needs the `instanseg` pixi env. Runs `sopa.segmentation.instanseg()` (`--instanseg-model`, default `fluorescence_nuclei_and_cells`) **twice** — Sopa's wrapper returns one mask per call — with `target='nuclei'` → `nucleus_boundaries` and `target='cells'` → `cell_boundaries`. Default channels: all (InstanSeg is channel-invariant). Passes `pixel_size` so the image is rescaled to the model's training resolution. Then `link_nuclei_to_cells` adds `nucleus_id` to each cell (largest nucleus whose representative point it contains; NaN if none).
+   - **`instanseg`** → `run_instanseg`: needs the `instanseg` pixi env. Runs InstanSeg (`--instanseg-model`, default `fluorescence_nuclei_and_cells`) through `sopa.segmentation.custom_staining_based` with our own per-patch callable `_instanseg_paired_patch`. That callable runs `eval_small_image(target='all_outputs')`, so InstanSeg pairs nuclei with cells, and returns one channel. It runs **twice** because Sopa stitches one mask per run: once returning nuclei → `nucleus_boundaries`, once returning cells → `cell_boundaries`. Default channels: all (InstanSeg is channel-invariant). Passes `pixel_size` so the image is rescaled to the model's training resolution. Then `link_nuclei_to_cells` adds `nucleus_id` to each cell (largest nucleus whose representative point it contains; NaN if none), and cells with no nucleus are dropped unless `--keep-unnucleated` is set.
 
    **Segmented Zarr reuse**: Only when `--resume-from` is specified, checks if `_seg.zarr` already exists before segmenting:
    - Has `tables['table']` → skips segmentation and aggregation, jumps to clustering
@@ -118,6 +118,7 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 | `--segmenter` | `stardist` | `stardist` (default env) or `instanseg` (needs `pixi run -e instanseg`) |
 | `--seg-channels` | *(segmenter default)* | Comma-separated channel indices to segment on (stardist: `0`; instanseg: all) |
 | `--instanseg-model` | `fluorescence_nuclei_and_cells` | InstanSeg pretrained model name or path |
+| `--keep-unnucleated` | — | InstanSeg only: keep cells containing no nucleus (dropped by default) |
 | `--pixel-size` | *(from OME metadata)* | µm/px override; needed for `--cell-expansion` and InstanSeg rescaling |
 | `--use-gpu` | — | Request GPU segmentation (auto-detected by default) |
 | `--cell-expansion` | `5.0` | Stardist only: expand nuclei into cells by this radius (µm); `0` = nuclei only |
@@ -153,7 +154,7 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 
 - **InstanSeg needs a pixel size**: without one (no OME metadata and no `--pixel-size`) the image is not rescaled to the model's training resolution and InstanSeg may find few or no cells — a warning is printed.
 
-- **InstanSeg nuclei and cells are separate passes**: their ids do not correspond, so they are matched spatially in `link_nuclei_to_cells`. In a multinucleate cell only the largest nucleus is linked; the others get cluster/community `-1`.
+- **InstanSeg must be run with `target='all_outputs'`, not via `sopa.segmentation.instanseg`**: InstanSeg only pairs nuclei with cells (`resolve_cell_and_nucleus_boundaries`) when both outputs are requested in one call. Sopa's wrapper asks for one target per call, which skips the pairing. On a 29-plex COMET image that left about 25% of cells touching no nucleus and 19k nuclei in no cell. Hence our own per-patch callable `_instanseg_paired_patch`. Sopa still stitches each layer separately and the polygon ids do not correspond, so nuclei and cells are matched spatially in `link_nuclei_to_cells`. In a multinucleate cell only the largest nucleus is linked; the others get cluster/community `-1`. Pass `clip_limit=0, gaussian_sigma=0` to `custom_staining_based`; its defaults apply CLAHE and smoothing, which `sopa.segmentation.instanseg` does not.
 
 - **Zarr write-then-read pattern**: The pipeline writes the initial Zarr to disk then immediately reads it back before continuing to segmentation. This is intentional — it materializes the spots-including dataset as a clean checkpoint.
 

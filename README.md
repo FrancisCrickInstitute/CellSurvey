@@ -97,6 +97,7 @@ Key segmentation options:
 * `--cell-expansion`: Stardist only — radius in µm to expand nuclei into whole cells (default `5.0`; `0` = nuclei only).
 * `--pixel-size`: Pixel size in µm/px, overriding the image metadata. Needed for cell expansion and InstanSeg if the image lacks it.
 * `--seg-channels`: Comma-separated channel indices to segment on (default `0` for Stardist, all channels for InstanSeg).
+* `--keep-unnucleated`: InstanSeg only. Keep cells that contain no nucleus (dropped by default).
 
 ## Full Example
 

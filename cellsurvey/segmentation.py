@@ -48,14 +48,45 @@ def run_stardist(sdata, channel, use_gpu=False):
     sopa.segmentation.stardist(sdata, model_type='2D_versatile_fluo', channels=channel)
 
 
+def _instanseg_paired_patch(model_type, pixel_size_um, device, output):
+    """Return a Sopa per-patch callable giving InstanSeg's paired nucleus or cell mask.
+
+    InstanSeg only pairs nuclei with cells (``resolve_cell_and_nucleus_boundaries``:
+    each cell matched to its largest nucleus, nucleus pixels placed inside that
+    cell, a cell created for every unmatched nucleus) when both outputs are
+    requested together (``target='all_outputs'``). ``sopa.segmentation.instanseg``
+    asks for one target per call, which skips that step and leaves the two layers
+    unpaired. So every patch is segmented with both outputs and one channel is
+    returned (0 = nuclei, 1 = cells). The model is deterministic, so the nuclei
+    and cells passes see identical, paired masks.
+    """
+    channel = {'nuclei': 0, 'cells': 1}[output]
+    model = None
+
+    def segment(patch):
+        nonlocal model
+        if model is None:
+            from instanseg import InstanSeg
+            model = InstanSeg(model_type, device=device, verbosity=0)
+        labels = model.eval_small_image(patch, pixel_size=pixel_size_um, target='all_outputs',
+                                        return_image_tensor=False, resolve_cell_and_nucleus=True)
+        if labels.shape[1] < 2:
+            raise ValueError(f"InstanSeg model '{model_type}' does not output both nuclei and cells")
+        return labels[0, channel].numpy(force=True).astype(np.int32)
+
+    return segment
+
+
 def run_instanseg(sdata, channels, pixel_size_um, model_type='fluorescence_nuclei_and_cells',
-                  use_gpu=False):
+                  use_gpu=False, keep_unnucleated=False):
     """Segment nuclei and whole cells with InstanSeg.
 
-    Sopa's wrapper returns one mask per call, so the model is run twice
-    (``target='nuclei'`` then ``target='cells'``), writing ``nucleus_boundaries``
-    and ``cell_boundaries``. Each cell is then linked to the nucleus it contains
-    via a ``nucleus_id`` column (see :func:`link_nuclei_to_cells`).
+    Writes ``nucleus_boundaries`` and ``cell_boundaries`` from InstanSeg's paired
+    output (see :func:`_instanseg_paired_patch`). Sopa stitches one mask per run,
+    so InstanSeg runs twice, once per layer. Each cell is then linked to the
+    nucleus it contains via a ``nucleus_id`` column (see
+    :func:`link_nuclei_to_cells`). Cells with no nucleus, which are mostly
+    cytoplasm fragments, are dropped unless ``keep_unnucleated`` is set.
     """
     if not hasattr(sopa.segmentation, 'instanseg'):
         raise ImportError("InstanSeg needs sopa>=2.3.0 and instanseg-torch, which are only in the "
@@ -78,15 +109,26 @@ def run_instanseg(sdata, channels, pixel_size_um, model_type='fluorescence_nucle
         print("WARNING: no pixel size for InstanSeg; the image is not rescaled to the model's "
               "training resolution and it may find few or no cells. Pass --pixel-size.")
 
-    common = dict(model_type=model_type, channels=channels, pixel_size=pixel_size_um,
-                  device='cuda' if has_cuda else 'cpu')
-    print("Run InstanSeg (nuclei)...")
-    sopa.segmentation.instanseg(sdata, target='nuclei', key_added=NUCLEI_KEY, **common)
-    print("Run InstanSeg (cells)...")
-    sopa.segmentation.instanseg(sdata, target='cells', key_added=CELLS_KEY, **common)
+    device = 'cuda' if has_cuda else 'cpu'
+    for output, key in (('nuclei', NUCLEI_KEY), ('cells', CELLS_KEY)):
+        print(f"Run InstanSeg ({output})...")
+        # clip_limit/gaussian_sigma = 0 match sopa.segmentation.instanseg (no
+        # CLAHE or smoothing); custom_staining_based's defaults would apply both.
+        sopa.segmentation.custom_staining_based(
+            sdata, _instanseg_paired_patch(model_type, pixel_size_um, device, output), channels,
+            clip_limit=0, gaussian_sigma=0, cache_dir_name=key, key_added=key)
 
-    linked = link_nuclei_to_cells(sdata.shapes[NUCLEI_KEY], sdata.shapes[CELLS_KEY])
-    sdata.shapes[CELLS_KEY]['nucleus_id'] = linked['nucleus_id'].values
+    cells = sdata.shapes[CELLS_KEY]
+    linked = link_nuclei_to_cells(sdata.shapes[NUCLEI_KEY], cells)
+    cells['nucleus_id'] = linked['nucleus_id'].values
+
+    unnucleated = cells['nucleus_id'].isna()
+    if unnucleated.any() and not keep_unnucleated:
+        kept = cells[~unnucleated].copy()
+        kept.attrs = dict(cells.attrs)
+        sdata.shapes[CELLS_KEY] = kept
+        print(f"Dropped {int(unnucleated.sum())} cells with no nucleus "
+              f"({len(kept)} remain; pass --keep-unnucleated to keep them)")
 
 
 def link_nuclei_to_cells(nuclei_gdf, cells_gdf):

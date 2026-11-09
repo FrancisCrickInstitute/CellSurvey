@@ -78,7 +78,8 @@ clusters (`cell_type_to_cell_type.png`).
 | `--segmenter` | `stardist` | Segmentation method: `stardist` or `instanseg`. |
 | `--seg-channels` | `0` (Stardist) / all channels (InstanSeg) | Comma-separated channel indices to segment on. Stardist takes exactly one. |
 | `--cell-expansion` | `5.0` | **Stardist only.** Radius in µm to grow each nucleus into a whole cell; `0` = nuclei only. Ignored for InstanSeg. |
-| `--instanseg-model` | `fluorescence_nuclei_and_cells` | **InstanSeg only.** Pretrained model name, or a path to a model. |
+| `--instanseg-model` | `fluorescence_nuclei_and_cells` | **InstanSeg only.** Pretrained model name, or a path to a model. It must segment both nuclei and cells. |
+| `--keep-unnucleated` | off | **InstanSeg only.** Keep cells that contain no nucleus. By default they are dropped. |
 | `--pixel-size` | *(from image metadata)* | Pixel size in µm/px, overriding the OME metadata. |
 | `--use-gpu` | off | Request GPU segmentation (both segmenters). The GPU is auto-detected and used when available. |
 

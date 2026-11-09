@@ -102,9 +102,11 @@ Segments nuclei and whole cells, with one of two segmenters chosen by
 | Nuclei layer | `stardist_boundaries` | `nucleus_boundaries` |
 | Cell layer | `cell_boundaries`, by expanding nuclei (stage 5) | `cell_boundaries`, segmented directly |
 
-**InstanSeg** runs twice — once for nuclei and once for cells — and then links
-each cell to the largest nucleus it contains (matched on a point inside each
-nucleus), recorded in a `nucleus_id` column. Cells with no nucleus get an empty `nucleus_id`. It uses the
+**InstanSeg** segments nuclei and cells together, so each nucleus lies inside
+its own cell. Each cell is then linked to the largest nucleus it contains
+(matched on a point inside each nucleus), recorded in a `nucleus_id` column.
+Cells with no nucleus, which are mostly fragments of cytoplasm, are dropped
+unless you pass `--keep-unnucleated`. In that case they get an empty `nucleus_id`. It uses the
 pixel size (from the metadata or `--pixel-size`) to rescale the image to the
 model's training resolution; without it, it may find few or no cells.
 
