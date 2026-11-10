@@ -18,7 +18,7 @@ This project uses **pixi** (via `pixi.toml`) for environment management targetin
 
 Key dependency constraints:
 - **Python**: `>=3.12, <3.13`
-- **Sopa**: `>=2.3.0` — the first release with `sopa.segmentation.instanseg`
+- **Sopa**: `>=2.3.0` — the version InstanSeg support was developed against. The InstanSeg path only uses `sopa.segmentation.custom_staining_based` (not `sopa.segmentation.instanseg`), which earlier 2.x releases also have, so the pin could be relaxed if needed
 - **TensorFlow** (`stardist` feature only): `>=2.18` on `linux-64` (with `and-cuda` extras for GPU)
 - **CUDA/cuDNN**: TF >=2.18 bundles its own CUDA 12/cuDNN 9 libraries; no separate conda CUDA/cuDNN packages are needed
 - **`tf_keras`** is a required pypi dependency — TF >=2.16 defaults to Keras 3, but Stardist needs legacy Keras 2 API to avoid cuDNN autotuner failures on CUDA 12/cuDNN 9
@@ -371,7 +371,7 @@ Each table's `.obs` index is the same `cell_id`, so `table` and `nucleus` join c
 6. **Thread region through downstream** — **done**: `export.py`, `assign_spots_to_cells`, `network_analysis.py`, and `stability.py` now default to / are passed `cell_boundaries`; cluster/community are mapped onto `stardist_boundaries` via `nucleus_id`. `--cluster-regions` not added (single whole-cell table for now).
 
 ### Done: InstanSeg (whole-cell segmentation)
-`--segmenter instanseg` (separate `instanseg` pixi env) segments nuclei **and** cells directly via `sopa.segmentation.instanseg` — no expansion approximation, and no whole-image watershed. This is the intended long-term replacement for Stardist + expansion; the Cellpose note below is superseded unless InstanSeg proves inadequate. A cytoplasm compartment (cell minus nucleus) is still not computed.
+`--segmenter instanseg` (separate `instanseg` pixi env) segments nuclei **and** cells directly — InstanSeg run with `target='all_outputs'` through `sopa.segmentation.custom_staining_based` and our `_instanseg_paired_patch` (see the InstanSeg gotcha above for why not `sopa.segmentation.instanseg`) — no expansion approximation, and no whole-image watershed. This is the intended long-term replacement for Stardist + expansion; the Cellpose note below is superseded unless InstanSeg proves inadequate. A cytoplasm compartment (cell minus nucleus) is still not computed.
 
 ### Future: Cellpose (proper cytoplasm segmentation)
 Integrate **Cellpose** for true whole-cell segmentation (cell + cytoplasm), replacing the nucleus-expansion approximation. Cellpose is the dominant pretrained whole-cell segmenter for fluorescent microscopy, and would also yield a genuine **cytoplasm** compartment (cell minus nucleus) — the piece this phase deliberately does not approximate. Note: Cellpose is PyTorch-based (see the TF/Torch co-existence note) — recommend a separate pixi environment or a deferred, opt-in `--segmenter cellpose` path. Recorded here for later; not in scope for the expansion work.

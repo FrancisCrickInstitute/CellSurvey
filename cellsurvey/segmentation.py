@@ -57,8 +57,13 @@ def _instanseg_paired_patch(model_type, pixel_size_um, device, output):
     requested together (``target='all_outputs'``). ``sopa.segmentation.instanseg``
     asks for one target per call, which skips that step and leaves the two layers
     unpaired. So every patch is segmented with both outputs and one channel is
-    returned (0 = nuclei, 1 = cells). The model is deterministic, so the nuclei
-    and cells passes see identical, paired masks.
+    returned (0 = nuclei, 1 = cells).
+
+    Within a patch the two masks are paired, but the stitched layers are not
+    guaranteed to be: Sopa resolves patch-overlap conflicts separately for each
+    layer, and GPU mixed precision (autocast) can make the two passes differ
+    slightly. Cells are therefore re-linked to nuclei spatially afterwards
+    (:func:`link_nuclei_to_cells`).
     """
     channel = {'nuclei': 0, 'cells': 1}[output]
     model = None
@@ -88,14 +93,15 @@ def run_instanseg(sdata, channels, pixel_size_um, model_type='fluorescence_nucle
     :func:`link_nuclei_to_cells`). Cells with no nucleus, which are mostly
     cytoplasm fragments, are dropped unless ``keep_unnucleated`` is set.
     """
-    if not hasattr(sopa.segmentation, 'instanseg'):
-        raise ImportError("InstanSeg needs sopa>=2.3.0 and instanseg-torch, which are only in the "
-                          "instanseg pixi environment: `pixi run -e instanseg python run.py ...`")
+    # Check the real dependencies up front; instanseg itself is otherwise only
+    # imported inside the first patch, after patching has started.
     try:
         import torch
-        has_cuda = torch.cuda.is_available()
+        import instanseg  # noqa: F401
     except ImportError as e:
-        raise ImportError("InstanSeg needs PyTorch: `pixi run -e instanseg python run.py ...`") from e
+        raise ImportError("InstanSeg needs instanseg-torch and PyTorch, which are only in the "
+                          "instanseg pixi environment: `pixi run -e instanseg python run.py ...`") from e
+    has_cuda = torch.cuda.is_available()
 
     if has_cuda:
         print("CUDA available, running InstanSeg on GPU")
