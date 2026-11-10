@@ -151,8 +151,9 @@ written to `cell_boundaries`, with a `nucleus_id` column pointing back to the
 nucleus each cell grew from.
 
 Expansion is skipped — and the analysis runs on nuclei alone — when
-`--cell-expansion 0` is set, or when the image has no pixel size and
-`--pixel-size` is not given. InstanSeg segments cells directly, so
+`--cell-expansion 0` is set. (A pixel size is always available: the run stops at
+startup if the image has none and `--pixel-size` is not given.) InstanSeg
+segments cells directly, so
 `--cell-expansion` is ignored for it.
 
 ## 6. K-means clustering
@@ -169,7 +170,8 @@ Groups cells by their expression profile.
 Builds a spatial network of neighbouring cells and detects communities.
 
 - **What it does**: extracts cell centroids, builds a `scipy.spatial.Delaunay`
-  triangulation, filters edges longer than `--max-edge-distance`, weights the
+  triangulation, filters edges longer than `--max-edge-distance` (µm, converted
+  to pixels with the image's pixel size), weights the
   remaining edges by expression similarity (`1 + Pearson correlation`), and runs
   Louvain community detection (`networkx`) at `--community-resolution`.
 - **Output**: `kmeans_cluster` and `community` labels, plus `summary.json`

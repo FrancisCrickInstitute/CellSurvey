@@ -50,7 +50,7 @@ passed, and detects RNA spots on the channels you specify.
 |---|---|---|
 | `--n-clusters` | `10` | Number of k-means clusters. |
 | `--community-resolution` | `0.1` | Louvain community resolution. |
-| `--max-edge-distance` | `1000` | Max edge length for the Delaunay network. |
+| `--max-edge-distance` | `50` | Max edge length in **µm** for the Delaunay network. |
 
 !!! tip "Tuning clustering and communities"
     - `--n-clusters` is the k-means **k** — there is no automatic selection, so
@@ -59,14 +59,20 @@ passed, and detects RNA spots on the channels you specify.
       more, smaller communities; lower values give fewer, larger ones.
     - `--max-edge-distance` controls **network density**: larger values connect
       more distant cells (a denser graph), smaller values keep only close
-      neighbours.
+      neighbours. Each edge joins the centroids of neighbouring cells, so it
+      should sit well above the typical neighbour spacing. On a dense 29-plex
+      COMET image the median edge was 9 µm and the 90th percentile 48 µm; the
+      50 µm default cuts roughly the longest 10% of edges (across tissue gaps
+      and the outer boundary). Much smaller values disconnect cells in sparse
+      tissue, which then become single-cell communities. Use the
+      [community sweep](#community-sweep) to check how sensitive your data is.
 
 ## Spatial analysis
 
 | Flag | Default | What it controls |
 |---|---|---|
-| `--radius-min` | `0` | Inner radius of the spatial-neighbours band. |
-| `--radius-max` | `1000` | Outer radius of the spatial-neighbours band. |
+| `--radius-min` | `0` | Inner radius in **µm** of the spatial-neighbours band. |
+| `--radius-max` | `280` | Outer radius in **µm** of the spatial-neighbours band. |
 
 These set the radius band used for the mean-hop-distance heatmap between
 clusters (`cell_type_to_cell_type.png`).
@@ -100,11 +106,12 @@ clusters (`cell_type_to_cell_type.png`).
 
     The project plans to migrate fully to InstanSeg and eventually drop Stardist.
 
-!!! warning "Pixel size matters"
-    The pixel size is read from the OME-TIFF metadata. If the image has none,
-    pass `--pixel-size`. Without it, Stardist cannot expand nuclei into cells
-    (the run continues with nuclei only), and InstanSeg cannot rescale the image
-    to its training resolution, so it may find few or no cells.
+!!! warning "A pixel size is required"
+    All distance flags (`--max-edge-distance`, `--radius-min`/`--radius-max`,
+    `--cell-expansion`) are in µm, while cell coordinates are in pixels. The
+    pixel size is read from the OME-TIFF metadata; if the image has none, the
+    run stops at startup and asks for `--pixel-size` (µm/px). InstanSeg also
+    uses it to rescale the image to its training resolution.
 
 By default the GPU is auto-detected. With Stardist, `--use-gpu` tells the
 pipeline to attempt the GPU backend when detection fails but a GPU is present.
@@ -148,11 +155,15 @@ Sweep the Louvain resolution (and Delaunay edge distance):
 pixi run python -m cellsurvey.stability \
   --zarr <output>_seg.zarr \
   --resolutions 0.1,0.05,0.02,0.01 \
-  --max-edge-distances 1000
+  --max-edge-distances 25,50,100
 ```
 
+Edge distances are in µm (default `50`). The sweep reads the pixel size the
+pipeline stored in the Zarr; for a `_seg.zarr` written before pixel sizes were
+stored, pass `--pixel-size`.
+
 This writes `community_sweep.csv` (one column per combination,
-`community_r<res>_d<dist>`, plus `cell_id`/`x`/`y`) and
+`community_r<res>_d<dist>` with the distance in µm, plus `cell_id`/`x`/`y`) and
 `community_sweep_summary.csv` (community count per combination).
 
 ### Cluster sweep

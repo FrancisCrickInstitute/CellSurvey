@@ -26,7 +26,8 @@ from spatialdata.models import PointsModel
 from spatialdata.transformations import Identity
 
 from cellsurvey.utils import (remove_channel_suffix, cluster_data, assign_spots_to_cells,
-                              resolve_shape_keys, STARDIST_NUCLEI_KEY, NUCLEI_KEY, CELLS_KEY)
+                              resolve_shape_keys, store_pixel_size,
+                              STARDIST_NUCLEI_KEY, NUCLEI_KEY, CELLS_KEY)
 from cellsurvey.blob_detection import detect_blobs_tiled
 from cellsurvey.network_analysis import run_network_analysis
 from cellsurvey.segmentation import get_pixel_size, expand_nuclei, run_stardist, run_instanseg
@@ -77,12 +78,12 @@ def main():
                         help='Number of clusters for k-means (default: 10)')
     parser.add_argument('--community-resolution', type=float, default=0.1,
                         help='Resolution for Louvain community detection (default: 0.1)')
-    parser.add_argument('--max-edge-distance', type=float, default=1000,
-                        help='Max edge distance for Delaunay network (default: 1000)')
+    parser.add_argument('--max-edge-distance', type=float, default=50,
+                        help='Max edge length in µm for the Delaunay network (default: 50)')
     parser.add_argument('--radius-min', type=float, default=0,
-                        help='Min radius for spatial neighbors graph (default: 0)')
-    parser.add_argument('--radius-max', type=float, default=1000,
-                        help='Max radius for spatial neighbors graph (default: 1000)')
+                        help='Min radius in µm for the spatial neighbors graph (default: 0)')
+    parser.add_argument('--radius-max', type=float, default=280,
+                        help='Max radius in µm for the spatial neighbors graph (default: 280)')
     parser.add_argument('--resume-from',
                         help='Path to existing Zarr to resume from (skips image loading and spot detection)')
     parser.add_argument('--geojson-path', default='./qupath_export.geojson',
@@ -108,10 +109,11 @@ def main():
     else:
         pixel_size_um = get_pixel_size(imagepath)
         if pixel_size_um is None:
-            print("WARNING: no physical pixel size in image metadata; pass --pixel-size "
-                  "(needed for --cell-expansion and InstanSeg rescaling)")
-        else:
-            print(f"Physical pixel size: {pixel_size_um:.4f} µm/px")
+            # Fail before any loading/segmentation: every distance parameter is in µm.
+            parser.error("No physical pixel size in the image metadata; pass --pixel-size (µm/px). "
+                         "It is needed because --max-edge-distance, --radius-min/--radius-max and "
+                         "--cell-expansion are in µm.")
+        print(f"Physical pixel size: {pixel_size_um:.4f} µm/px")
 
     # Shape layers the chosen segmenter writes; used to decide whether a resumed
     # _seg.zarr already holds this segmenter's output. (cell_boundaries alone is
@@ -259,8 +261,6 @@ def main():
         if args.segmenter == 'stardist' and args.cell_expansion > 0:
             if STARDIST_NUCLEI_KEY not in dataset.shapes:
                 print(f"WARNING: no {STARDIST_NUCLEI_KEY} to expand; skipping cell expansion")
-            elif pixel_size_um is None:
-                print("WARNING: no physical pixel size available; cannot expand cells in µm; skipping")
             else:
                 nuclei = dataset.shapes[STARDIST_NUCLEI_KEY]
                 dataset[CELLS_KEY] = expand_nuclei(nuclei, args.cell_expansion, pixel_size_um)
@@ -325,6 +325,7 @@ def main():
                                 cell_boundaries=network_shapes_key,
                                 comm_detect_res=args.community_resolution,
                                 max_edge_distance=args.max_edge_distance,
+                                pixel_size_um=pixel_size_um,
                                 output_dir=args.plot_dir)
 
     spots_with_cells = assign_spots_to_cells(sdata, cell_boundaries=network_shapes_key)
@@ -345,6 +346,8 @@ def main():
     sdata.shapes[network_shapes_key]['kmeans_cluster'] = result['cluster_labels']
     sdata.shapes[network_shapes_key]['community'] = result['community_labels']
     sdata.tables['table'].obs['community'] = pd.Categorical(result['community_labels'])
+    # Persist the pixel size so read-only consumers (stability sweep) can convert µm params.
+    store_pixel_size(sdata, pixel_size_um)
 
     # Also attach cluster/community to the nuclei layer via the nucleus_id
     # recorded on each cell (survives sopa.aggregate's re-indexing). Nuclei not
@@ -374,7 +377,9 @@ def main():
     print("Done")
 
     adata = sdata.tables['table']
-    sopa.spatial.spatial_neighbors(adata, radius=(args.radius_min, args.radius_max))
+    # Radius flags are in µm; cell coordinates (obsm['spatial']) are in pixels.
+    sopa.spatial.spatial_neighbors(adata, radius=(args.radius_min / pixel_size_um,
+                                                  args.radius_max / pixel_size_um))
     cell_type_to_cell_type = sopa.spatial.mean_distance(adata, "kmeans_cluster", "kmeans_cluster")
     plt.rcParams['font.size'] = 10
     plt.rcParams['axes.linewidth'] = 2

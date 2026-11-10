@@ -95,7 +95,7 @@ Key segmentation options:
 
 * `--segmenter {stardist,instanseg}`: Segmentation method (default `stardist`; `instanseg` needs the `instanseg` environment).
 * `--cell-expansion`: Stardist only — radius in µm to expand nuclei into whole cells (default `5.0`; `0` = nuclei only).
-* `--pixel-size`: Pixel size in µm/px, overriding the image metadata. Needed for cell expansion and InstanSeg if the image lacks it.
+* `--pixel-size`: Pixel size in µm/px, overriding the image metadata. Required if the image lacks it, because all distance flags (`--max-edge-distance`, `--radius-min`/`--radius-max`, `--cell-expansion`) are in µm.
 * `--seg-channels`: Comma-separated channel indices to segment on (default `0` for Stardist, all channels for InstanSeg).
 * `--keep-unnucleated`: InstanSeg only. Keep cells that contain no nucleus (dropped by default).
 
@@ -111,14 +111,16 @@ To explore how clustering responds to its parameters without re-running the
 expensive segmentation, use the read-only sweep over an existing segmented Zarr.
 Results are written to CSVs in the same directory as the Zarr.
 
-Sweep the Louvain resolution (and Delaunay edge distance) for communities:
+Sweep the Louvain resolution (and Delaunay edge distance, in µm) for communities:
 
 ```bash
 pixi run python -m cellsurvey.stability \
   --zarr <output>_seg.zarr \
   --resolutions 0.1,0.05,0.02,0.01 \
-  --max-edge-distances 1000
+  --max-edge-distances 25,50,100
 ```
+
+For a `_seg.zarr` written before pixel sizes were stored in it, add `--pixel-size <µm/px>`.
 
 Or sweep the k-means `k` (defaults to `5,8,10,12,15,20`):
 

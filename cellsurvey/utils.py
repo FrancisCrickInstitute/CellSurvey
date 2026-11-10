@@ -32,6 +32,36 @@ def resolve_shape_keys(sdata):
     return nuclei_key, cells_key
 
 
+# Pixel size is stored in the table's .uns so read-only consumers of _seg.zarr
+# (e.g. the stability sweep) can convert µm parameters to pixel coordinates.
+_UNS_KEY = 'cellsurvey'
+
+
+def store_pixel_size(sdata, pixel_size_um, table_key='table'):
+    """Record ``pixel_size_um`` (µm/px) in ``sdata.tables[table_key].uns``."""
+    uns = sdata.tables[table_key].uns
+    meta = dict(uns.get(_UNS_KEY, {}))
+    meta['pixel_size_um'] = float(pixel_size_um)
+    uns[_UNS_KEY] = meta
+
+
+def resolve_pixel_size(sdata, pixel_size_um=None, table_key='table'):
+    """Return ``pixel_size_um`` if given, else the value stored by :func:`store_pixel_size`.
+
+    Raises ``ValueError`` if neither is available. Cell coordinates are in
+    pixels, so µm distance parameters cannot be applied without it.
+    """
+    if pixel_size_um is not None:
+        return float(pixel_size_um)
+    stored = None
+    if table_key in sdata.tables:
+        stored = sdata.tables[table_key].uns.get(_UNS_KEY, {}).get('pixel_size_um')
+    if stored is None:
+        raise ValueError("No pixel size available: this _seg.zarr predates stored pixel sizes. "
+                         "Pass the image's pixel size (µm/px), e.g. --pixel-size 0.28.")
+    return float(stored)
+
+
 def remove_channel_suffix(name):
     return re.sub(r'_ch_\d+$', '', name)
 

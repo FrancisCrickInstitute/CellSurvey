@@ -44,8 +44,8 @@ See [Pipeline](pipeline.md) for how the two differ.
 Both segmenters produce a `cell_boundaries` layer by default, and the
 measurements, clusters, and communities are computed over it. With Stardist,
 cell size is set by `--cell-expansion` (µm, default `5.0`); use
-`--cell-expansion 0` to analyse nuclei only. Expansion needs the image's pixel
-size — if the OME metadata lacks it, pass `--pixel-size`.
+`--cell-expansion 0` to analyse nuclei only. Expansion is in µm, so it uses the
+image's pixel size — if the OME metadata lacks it, pass `--pixel-size`.
 
 ## Do I need a GPU?
 
@@ -110,7 +110,7 @@ For a first run, none — the defaults are sensible. When you want to tune:
 
 - `--n-clusters` — the k-means resolution (there is no automatic selection).
 - `--community-resolution` — higher → more, smaller communities.
-- `--max-edge-distance` — how dense the spatial network is.
+- `--max-edge-distance` — how dense the spatial network is (µm, default `50`).
 - `--thresholds` (with `--detect-blobs`) — spot-detection sensitivity.
 
 See [Parameters](parameters.md) for full guidance.
@@ -128,9 +128,9 @@ contained image edges with no nuclei. Check that:
 - the input image actually contains nuclei on the channel being segmented
   (`--seg-channels`),
 - the image isn't blank or mislabelled, and
-- for InstanSeg, the pixel size is known — from the OME metadata or
-  `--pixel-size`. Without it the image isn't rescaled to the model's training
-  resolution, and InstanSeg may find few or no cells.
+- for InstanSeg, the pixel size is correct — from the OME metadata or
+  `--pixel-size`. InstanSeg rescales the image to its training resolution with
+  it, so a wrong value can make it find few or no cells.
 
 ## Why do I get an error saying InstanSeg needs the `instanseg` environment?
 

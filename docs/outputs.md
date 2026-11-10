@@ -33,7 +33,7 @@ stores. The segmented store contains:
 
 !!! note "Nuclei-only runs"
     When there is no `cell_boundaries` layer (Stardist with
-    `--cell-expansion 0`, or no pixel size available), the nuclei layer is the
+    `--cell-expansion 0`, or a Zarr from an older nuclei-only run), the nuclei layer is the
     cell layer: the table, labels, network, and GeoJSON all use it instead.
 
 Open them with any SpatialData-aware viewer (see
@@ -48,8 +48,10 @@ Written to `--plot_dir`. A small JSON summary of the network analysis:
   "n_cells": 12345,
   "n_clusters": 10,
   "n_communities": 7,
-  "n_edges": 48210,
-  "max_edge_distance": 1000,
+  "n_edges": 36950,
+  "max_edge_distance_um": 50,
+  "max_edge_distance_px": 178.57,
+  "pixel_size_um": 0.28,
   "community_resolution": 0.1,
   "cluster_sizes": { "0": 1204, "1": 980, "...": "..." },
   "community_sizes": { "0": 2100, "1": 1550, "...": "..." }
@@ -57,7 +59,10 @@ Written to `--plot_dir`. A small JSON summary of the network analysis:
 ```
 
 Useful for a quick sanity check of how many cells, clusters, and communities
-were found.
+were found. `n_edges` counts unique Delaunay edges after the distance filter (at
+most about 3× `n_cells`). The pixel size is also stored in the segmented Zarr
+(`table.uns['cellsurvey']['pixel_size_um']`) so the stability sweep can convert
+µm distances.
 
 ## Plots
 

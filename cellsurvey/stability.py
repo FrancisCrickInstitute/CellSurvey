@@ -27,7 +27,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
 
 from cellsurvey.network_analysis import compute_louvain_communities
-from cellsurvey.utils import remove_channel_suffix, resolve_shape_keys
+from cellsurvey.utils import remove_channel_suffix, resolve_shape_keys, resolve_pixel_size
 
 
 def _fmt(v):
@@ -50,14 +50,18 @@ def extract_coords(sdata, cell_boundaries=None):
 
 
 def run_stability_sweep(sdata, resolutions, max_edge_distances,
-                        cell_boundaries=None, seed=42):
+                        cell_boundaries=None, seed=42, pixel_size_um=None):
     """Recompute Louvain communities across a parameter grid.
+
+    ``max_edge_distances`` are in µm, converted to pixels with ``pixel_size_um``
+    (µm/px) or, if that is None, the pixel size stored in the table's ``.uns``.
 
     Returns a dict with keys ``cell_ids``, ``coords``, ``labels`` (an
     ``(n_cells, n_sweeps)`` int array, one column per parameter combo), and
-    ``params`` (the list of ``(resolution, max_edge_distance)`` tuples matching
-    the columns).
+    ``params`` (the list of ``(resolution, max_edge_distance_um)`` tuples
+    matching the columns).
     """
+    pixel_size_um = resolve_pixel_size(sdata, pixel_size_um)
     cell_ids, coords = extract_coords(sdata, cell_boundaries)
     intensity_df = extract_intensity_matrix(sdata)
 
@@ -71,9 +75,9 @@ def run_stability_sweep(sdata, resolutions, max_edge_distances,
         for resolution in resolutions:
             community_labels, n_edges = compute_louvain_communities(
                 coords, imat, comm_detect_res=resolution,
-                max_edge_distance=max_edge_distance, seed=seed)
+                max_edge_distance=max_edge_distance / pixel_size_um, seed=seed)
             n_comm = len(set(community_labels)) - (1 if -1 in community_labels else 0)
-            print(f"resolution={resolution}, max_edge_distance={max_edge_distance}: "
+            print(f"resolution={resolution}, max_edge_distance={max_edge_distance} µm: "
                   f"{n_edges} edges, {n_comm} communities")
             labels.append(community_labels)
             params.append((resolution, max_edge_distance))
@@ -87,7 +91,7 @@ def run_stability_sweep(sdata, resolutions, max_edge_distances,
 
 
 def sweep_to_csv(result, output_path):
-    """Write one row per cell, with a ``community_r<res>_d<dist>`` column per sweep."""
+    """Write one row per cell, with a ``community_r<res>_d<dist_um>`` column per sweep."""
     df = pd.DataFrame({
         "cell_id": result["cell_ids"],
         "x": result["coords"][:, 0],
@@ -106,7 +110,7 @@ def sweep_summary(result, output_path):
         n_comm = len(set(col)) - (1 if -1 in col else 0)
         rows.append({
             "resolution": resolution,
-            "max_edge_distance": max_edge_distance,
+            "max_edge_distance_um": max_edge_distance,
             "n_communities": n_comm,
         })
     pd.DataFrame(rows).to_csv(output_path, index=False)
@@ -178,8 +182,11 @@ def main():
                         help="Which sweep to run (default: communities).")
     parser.add_argument("--resolutions", default="0.1,0.05,0.02,0.01",
                         help="Louvain resolutions to sweep (community mode).")
-    parser.add_argument("--max-edge-distances", default="1000",
-                        help="Max edge distances to sweep (community mode).")
+    parser.add_argument("--max-edge-distances", default="50",
+                        help="Max edge distances in µm to sweep (community mode).")
+    parser.add_argument("--pixel-size", type=float, default=None,
+                        help="Pixel size in µm/px (default: the value stored in the Zarr by the pipeline; "
+                             "required for Zarrs written before pixel sizes were stored).")
     parser.add_argument("--n-clusters", default="5,8,10,12,15,20",
                         help="k-means k values to sweep (cluster mode).")
     parser.add_argument("--cell-boundaries", default=None,
@@ -203,8 +210,13 @@ def main():
     else:
         resolutions = [float(x) for x in args.resolutions.split(",")]
         max_edge_distances = [float(x) for x in args.max_edge_distances.split(",")]
+        try:
+            pixel_size_um = resolve_pixel_size(sdata, args.pixel_size)
+        except ValueError as e:
+            parser.error(str(e))
         result = run_stability_sweep(sdata, resolutions, max_edge_distances,
-                                     cell_boundaries=args.cell_boundaries)
+                                     cell_boundaries=args.cell_boundaries,
+                                     pixel_size_um=pixel_size_um)
         output = args.output or os.path.join(zarr_dir, "community_sweep.csv")
         summary = args.summary or os.path.join(zarr_dir, "community_sweep_summary.csv")
         sweep_to_csv(result, output)

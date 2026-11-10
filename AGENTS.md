@@ -119,7 +119,7 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 | `--seg-channels` | *(segmenter default)* | Comma-separated channel indices to segment on (stardist: `0`; instanseg: all) |
 | `--instanseg-model` | `fluorescence_nuclei_and_cells` | InstanSeg pretrained model name or path |
 | `--keep-unnucleated` | — | InstanSeg only: keep cells containing no nucleus (dropped by default) |
-| `--pixel-size` | *(from OME metadata)* | µm/px override; needed for `--cell-expansion` and InstanSeg rescaling |
+| `--pixel-size` | *(from OME metadata)* | µm/px override; **required** if the image has none (run stops at startup) — all distance flags are in µm |
 | `--use-gpu` | — | Request GPU segmentation (auto-detected by default) |
 | `--cell-expansion` | `5.0` | Stardist only: expand nuclei into cells by this radius (µm); `0` = nuclei only |
 | `--channels` | `9,10,11,12` | Comma-separated channel indices for blob detection |
@@ -132,9 +132,9 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 | `--num-sigma` | `5` | Number of sigma steps for blob detection |
 | `--n-clusters` | `10` | Number of k-means clusters |
 | `--community-resolution` | `0.1` | Louvain community detection resolution |
-| `--max-edge-distance` | `1000` | Max edge distance for Delaunay network |
-| `--radius-min` | `0` | Min radius for spatial neighbors graph |
-| `--radius-max` | `1000` | Max radius for spatial neighbors graph |
+| `--max-edge-distance` | `50` | Max edge length (µm) for the Delaunay network |
+| `--radius-min` | `0` | Min radius (µm) for spatial neighbors graph |
+| `--radius-max` | `280` | Max radius (µm) for spatial neighbors graph |
 | `--resume-from` | — | Path to existing Zarr to resume from (skips image loading and spot detection) |
 | `--geojson-path` | `./qupath_export.geojson` | Output path for QuPath GeoJSON |
 | `--font-size` | `20` | Font size for plots |
@@ -152,7 +152,11 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 
 - **Shape layers — never hard-code one key**: nuclei are `stardist_boundaries` (Stardist) or `nucleus_boundaries` (InstanSeg); whole cells are `cell_boundaries` (Stardist + watershed expansion, or InstanSeg cells). `utils.resolve_shape_keys(sdata)` returns `(nuclei_key, cells_key)`, with `cells_key` falling back to the nuclei layer for nuclei-only Zarrs (`--cell-expansion 0`, no pixel size, or older outputs). `run_network_analysis`, `assign_spots_to_cells`, `export_to_qupath`, and the sweeps all default to it.
 
-- **InstanSeg needs a pixel size**: without one (no OME metadata and no `--pixel-size`) the image is not rescaled to the model's training resolution and InstanSeg may find few or no cells — a warning is printed.
+- **Distances are in µm; coordinates are in pixels**: Sopa's OME-TIFF reader uses an identity transform, so all shape/centroid coordinates are pixels. `--max-edge-distance`, `--radius-min/max` and `--cell-expansion` are µm and are converted at the point of use (`value_um / pixel_size_um`). The pixel size comes from `get_pixel_size` (OME metadata) or `--pixel-size`; `cli.main()` calls `parser.error` at startup if neither exists. It is also stored in `table.uns['cellsurvey']['pixel_size_um']` (`utils.store_pixel_size`) so read-only consumers like the stability sweep can convert µm parameters; `utils.resolve_pixel_size` reads it (explicit value wins) and raises for older Zarrs, which need `--pixel-size`. `run_network_analysis(max_edge_distance=µm)` converts internally; `compute_louvain_communities`/`delaunay_edges` take the threshold in coordinate units (pixels).
+
+- **Delaunay edges are deduplicated**: `delaunay_edges` sorts each pair so an edge shared by two triangles is counted once (`n_edges` ≈ 3× cells at most). Before this, `(a, b)`/`(b, a)` duplicates inflated `n_edges` in `summary.json` by ~⅓ and computed each correlation twice (networkx had already merged them, so communities were unaffected).
+
+- **InstanSeg needs a correct pixel size**: it rescales the image to the model's training resolution; a wrong value can make it find few or no cells.
 
 - **InstanSeg must be run with `target='all_outputs'`, not via `sopa.segmentation.instanseg`**: InstanSeg only pairs nuclei with cells (`resolve_cell_and_nucleus_boundaries`) when both outputs are requested in one call. Sopa's wrapper asks for one target per call, which skips the pairing. On a 29-plex COMET image that left about 25% of cells touching no nucleus and 19k nuclei in no cell. Hence our own per-patch callable `_instanseg_paired_patch`. Sopa still stitches each layer separately and the polygon ids do not correspond, so nuclei and cells are matched spatially in `link_nuclei_to_cells`. In a multinucleate cell only the largest nucleus is linked; the others get cluster/community `-1`. Pass `clip_limit=0, gaussian_sigma=0` to `custom_staining_based`; its defaults apply CLAHE and smoothing, which `sopa.segmentation.instanseg` does not.
 
@@ -219,7 +223,7 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 | Parameter | Range | Rationale |
 |---|---|---|
 | `community_resolution` (Louvain) | 0.05–1.0 | Directly controls community granularity |
-| `max_edge_distance` | 500–2000 | Changes which cells are neighbors in the Delaunay graph |
+| `max_edge_distance` | 25–100 µm | Changes which cells are neighbors in the Delaunay graph |
 
 > **`n_clusters` is NOT part of the community sweep.** k-means clustering and
 > Louvain community detection are independent: Louvain weights its Delaunay edges
@@ -280,8 +284,8 @@ Both share the same `cell_id` index, so their measurements are joinable. A third
 - `--cell-expansion` is expressed in **µm** (default `5.0`, matching QuPath's `cellExpansion`).
 - Physical pixel size (µm/px) is read from OME metadata via `BioImage(imagepath).physical_pixel_sizes` (bioio). For 2D images this is `(Y, X)`; guard for missing metadata.
 - Geometry operations run in pixel coordinates (as Stardist/SOPA produce), so the µm radius is converted to px internally: `expansion_px = expansion_um / pixel_size_um`.
-- If physical pixel size is unavailable, a warning is printed and expansion is skipped (nuclei-only run); `--pixel-size` supplies it explicitly.
-- **Related cleanup (separate, deferred)**: the existing pixel-based params (`--max-edge-distance`, `--radius-min/max`) should eventually move to µm too, but that touches Delaunay/neighbour logic and existing outputs — keep it out of this change.
+- If physical pixel size is unavailable and `--pixel-size` isn't given, the run stops at startup (all distance flags are µm).
+- **Related cleanup — done**: `--max-edge-distance` (default 50 µm, ≈ p90 of Delaunay edge lengths on a dense COMET image: median 9 µm, p90 48 µm, p99 110 µm) and `--radius-min/max` (default 0–280 µm, equivalent to the old 0–1000 px at 0.28 µm/px) are now in µm.
 
 ### Approach (QuPath-style expansion)
 QuPath detects nuclei, then dilates each nucleus by a `cellExpansion` distance, using a distance-transform/watershed expansion so neighbouring cells stop where they meet (no overlap).
@@ -385,7 +389,7 @@ Integrate **Cellpose** for true whole-cell segmentation (cell + cytoplasm), repl
 - ~~v1 overlaps double-count pixels and inflate aggregated intensity~~ — resolved: the v3 watershed produces non-overlapping cells (only the buffered fallback for nuclei with no watershed cell can overlap).
 - **Watershed memory**: `_watershed_expand` rasterizes the whole image extent in one array (int32 labels + float64 EDT ≈ 12 bytes/px — ~30 GB for 50k×50k). Needs tiling for large images; InstanSeg (`--segmenter instanseg`) avoids it entirely.
 - Two tables and a region-selection flag widen the downstream surface (clustering, network, export, sweeps) — easy to miss a hardcoded `'stardist_boundaries'`/`'table'` reference; grep thoroughly.
-- Missing OME physical pixel size breaks µm conversion; need an explicit, well-documented fallback.
+- ~~Missing OME physical pixel size breaks µm conversion~~ — resolved: the run stops at startup and asks for `--pixel-size`.
 
 ## Planned: Normalisation (DAPI reference)
 
@@ -783,7 +787,7 @@ Ten tips spanning experimental design → platform selection → data structure 
 │   ├── __init__.py                   # Re-exports all public symbols
 │   ├── cli.py                        # main() with argparse and pipeline orchestration
 │   ├── blob_detection.py             # detect_blobs_in_tile, detect_blobs_tiled
-│   ├── network_analysis.py           # run_network_analysis + compute_louvain_communities (scipy Delaunay + networkx Louvain, expr-similarity weights, summary.json)
+│   ├── network_analysis.py           # run_network_analysis (µm → px) + compute_louvain_communities + delaunay_edges (scipy Delaunay + networkx Louvain, expr-similarity weights, summary.json)
 │   ├── stability.py                  # run_stability_sweep (community) + run_cluster_sweep (k-means), read-only → CSV
 │   ├── segmentation.py               # run_stardist / run_instanseg, link_nuclei_to_cells, get_pixel_size, expand_nuclei (watershed)
 │   ├── export.py                     # export_to_qupath

@@ -71,11 +71,11 @@ Found 10 communities
     Segmentation is the slowest stage. For large images it can take
     minutes to tens of minutes. This is expected.
 
-!!! tip "Whole cells need a pixel size"
-    Nuclei are expanded into cells by `--cell-expansion` µm (default `5.0`),
-    which needs the image's physical pixel size. If the OME metadata doesn't
-    include it, you'll see a warning and the run continues with nuclei only —
-    pass `--pixel-size` (µm/px) to fix this.
+!!! tip "The pipeline needs a pixel size"
+    Distances such as `--cell-expansion` (default `5.0`) and
+    `--max-edge-distance` (default `50`) are in µm, so the pipeline needs the
+    image's physical pixel size. If the OME metadata doesn't include it, the run
+    stops straight away and asks you to pass `--pixel-size` (µm/px).
 
 ## Using InstanSeg instead of Stardist
 
