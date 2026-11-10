@@ -477,7 +477,9 @@ def main():
         fig = plt.figure(figsize=(max(8, n_morph * 4), 6))
         for i, col in enumerate(morph_cols):
             ax = fig.add_subplot(1, n_morph, i + 1)
-            sns.swarmplot(data=obs_df, x='kmeans_cluster', y=col, ax=ax, size=1)
+            # Violin, not swarm: swarmplot places every point individually and
+            # takes many hours at whole-slide scale (100k+ cells per cluster).
+            sns.violinplot(data=obs_df, x='kmeans_cluster', y=col, ax=ax, cut=0, inner='quartile')
             ax.set_title(f'{col} by cluster')
             ax.set_xlabel('Cluster')
         plt.tight_layout()
