@@ -215,6 +215,25 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 - `run_network_analysis()` in `network_analysis.py` returns a plain dict with keys `cell_ids`, `community_labels`, `cluster_labels`.
 - `run_network_analysis()` accepts `output_dir` parameter for plot output (set to `args.plot_dir` from `cli.py`).
 
+## Known issues (code review, 2026-11-11, untested)
+
+Open:
+
+- **Misleading cluster intensity heatmap** (`cli.py`, `cluster_intensity_heatmap.png`): plots raw per-cluster mean intensities of `intensity_df`, but the colour bar says "z-score" and it uses a diverging `RdBu_r` map centred on 0. Either z-score the means per channel (columns), or use a sequential colormap with the label "Mean intensity".
+- **Slow edge weighting** (`network_analysis.compute_louvain_communities`): calls `np.corrcoef` once per edge in a Python loop (~3 edges per cell, so millions of calls on whole slides). The stability sweep repeats this for every parameter combination. Fix: z-score each row of `imat` once, then compute `(z[a] * z[b]).mean(axis=1)` over the edge arrays.
+- **Slow per-cell lookups**: `run_network_analysis` (cluster labels and `imat`) and `stability.run_stability_sweep` (`imat`) do one `.loc[...]` per cell. Replace with `intensity_matrix.reindex(boundaries.index).fillna(0).to_numpy()` and the same for `obs['kmeans_cluster']`.
+- **Sweep `--pixel-size` not validated** (`stability.py`): `0` causes a divide-by-zero error and negatives give nonsense results. Add the same positive check as `cli.py`.
+- **Unreachable InstanSeg warning** (`segmentation.run_instanseg`): the CLI now stops if there is no pixel size, so the `pixel_size_um is None` warning only matters for library callers. Make it a `ValueError`, or remove it.
+- **Pixel size can change on resume** (`cli.py`): `--resume-from` re-reads the pixel size from the image or `--pixel-size` and overwrites `uns['cellsurvey']['pixel_size_um']`, even though segmentation and cell expansion used the old value. Warn when the stored and current values differ.
+- **Delaunay on too few cells**: `delaunay_edges` raises a Qhull error with fewer than 3 cells, or when all cells lie on a line. Return no edges in that case.
+
+Checked and resolved / not a bug:
+
+- ~~Cell ids may not match between shapes and table~~: `sopa.aggregate` → `parse_table` sets the table's `obs_names` and the cell layer's index to the same string ids (`str_cell_id`, sopa 2.3.0), so `cell_id in table.obs.index` matches. This could only break if the shapes were re-indexed after aggregation.
+- ~~Fallback layer looked up eagerly (`shapes.get('cell_boundaries', shapes['stardist_boundaries'])`)~~: replaced by `resolve_shape_keys`.
+- ~~`n_edges` inflated by double-counted Delaunay edges~~: `delaunay_edges` sorts and de-duplicates pairs.
+- ~~Mixed units (`--max-edge-distance`, `--radius-*` in px)~~: all distance flags are now in µm.
+
 ## Planned: Parameter Stability Sweep
 
 **Goal**: Quantify how robust community assignments are under parameter variation, producing per-cell confidence scores and consensus niches.
