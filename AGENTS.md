@@ -492,12 +492,28 @@ Implementation notes for option 1 (not yet built):
   - **Channel names are real marker names** (`select lc.name from Channel c join c.logicalChannel lc where c.pixels.image.id = …`): `DAPI, CNPASE, PSYN, GFAP, PTAU, IBA1, MAP2, AF`. They can be used directly as intensity column names; DAPI is channel 0 (works with `--seg-channels 0` and the planned DAPI normalisation's name lookup). `AF` (autofluorescence) is included by InstanSeg's all-channels default and is aggregated like a marker, so consider excluding it from segmentation/clustering.
   - **The pyramid is not split into separate Images.** Fileset 244467 holds 4 Images: series 0 `[resolution #1]` (the full-resolution scan, 602778; pyramid levels are internal to it), plus `[thumbnail]`, `[Overview]` (macro photo) and `[Label]` (slide-label photo). So one slide = one useful Image ID. The reader should check the fileset and **stop if the given Image is not the largest in its fileset**, suggesting the right ID ("did you mean Image:602778?"), so a user can't accidentally segment the Overview/Label photo.
   - The image lives in group **Lab-Gandhi** while the session's group was STP-CALM, which confirms the cross-group lookup is required.
+- **Throughput is fine — option 1 is viable** (tile-read test on Image 602778 from an HPC compute node, 30 s per config, random channel/position tiles from the full-resolution level, one `RawPixelsStore` per worker on a shared session):
+
+  | workers | tile | MB/s | median ms/tile | full 36.6 GB image |
+  |---|---|---|---|---|
+  | 1 | 512 | 11.5* | 36 | 53 min |
+  | 4 | 512 | 62.0 | 23 | 9.8 min |
+  | 8 | 512 | 196.1 | 14 | 3.1 min |
+  | 1 | 1024 | 49.5 | 40 | 12.3 min |
+  | 4 | 1024 | 180.9 | 42 | 3.4 min |
+  | 8 | 1024 | 314.0 | 50 | 1.9 min |
+  | 1 | 2048 | 58.2 | 146 | 10.5 min |
+  | 4 | 2048 | 219.5 | 151 | 2.8 min |
+  | 8 | 2048 | 319.9 | 201 | 1.9 min |
+
+  \*First config run, likely connection warm-up. **Take-aways**: throughput scales with parallel readers, which is what matters most; ~300+ MB/s at 8 workers is likely near the network/server limit (16 workers untested). Use **1024 px tiles** (a multiple of the server's native 512 px tile; same throughput as 2048 at a quarter of the latency and memory per request) and **~8 parallel readers**. That's ~2 min for a 36.6 GB slide, negligible next to segmentation. Caveat: configs ran back-to-back on one file (~40 GB of reads), so later ones may have been helped by the server's file cache; a cold first read may be slower. Re-time a full read of an untouched slide once the reader exists.
+- **Pyramid levels**: `RawPixelsStore` numbers resolution levels **smallest = 0 → largest = n−1** (602778: 6 levels, full resolution = level 5); `getResolutionDescriptions()` lists them largest first. The reader must `setResolutionLevel(n-1)` and should verify it by checking the level size equals `sizeX × sizeY`. Non-pyramidal images have a single level.
 - **Design note**: because stage 1 copies the image to `<prefix>.zarr` immediately, OMERO is only contacted at the start of a run. The 100 min idle timeout only matters if the session is created long before the job starts (e.g. queue wait). Log in inside the job or refresh the session.
 
 ### Open questions (to test on the HPC / with the facility)
 - ~~Does `omero-py` install on Python 3.12?~~ Yes, from conda-forge (see Findings). **Still open**: does it solve alongside TF ≥2.18 (default env) and Torch (instanseg env)?
 - **Auth from compute nodes**: login and session reuse work interactively on the HPC. Is the saved session in `~/.omero` visible from a compute node? What is the cleanest way to log in non-interactively inside a batch job (env vars vs. session key)?
-- **Throughput (key risk for option 1)**: how long does reading a full 29-plex COMET slide via BlitzGateway tiles take? What tile size and parallelism work best? Is the HPC→OMERO network a bottleneck? If it's too slow, fall back to reading in-place OME-TIFFs from Nemo.
+- ~~**Throughput**~~: resolved — ~300 MB/s with 8 readers × 1024 px tiles (~2 min per 36.6 GB slide; see Findings). Remaining: confirm a cold full read, and whether 16 readers helps.
 - ~~**Metadata**: are channel names and physical pixel sizes populated?~~ Yes on a PhenoImager `.qptiff` (see Findings). Still worth one check on a **COMET** OME-TIFF in OMERO before relying on it.
 - (Lower priority now) Does the server publish OME-Zarr over HTTP (option 3)?
 
