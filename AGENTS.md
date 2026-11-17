@@ -472,7 +472,14 @@ Stage 1 is the only place the source image is read. It loads the image and immed
    - Costs two steps and a temporary full-size copy on disk.
 3. **Read server-published OME-Zarr over HTTP** (as IDR does), if the facility's OMERO exposes it. This would be the best of both, but it depends entirely on server setup. The OME-Zarr reader from option 2 would mostly cover it.
 
-**Current recommendation**: build the reader seam plus OME-Zarr input first (option 2: low risk, no Ice dependency, works with any OMERO via export). Then add direct reading (option 1) in its own pixi feature once omero-py is confirmed to install cleanly from conda-forge in both envs. Revisit if option 3 turns out to be available.
+**Decision (2026-11)**: go with **option 1 — read pixels and metadata through the OMERO API**. OMERO has already decoded every format with Bio-Formats (VSI, CZI, ND2, multi-series files…) and holds the channel names and physical pixel sizes. Using it means CellSurvey gets every format for free instead of building its own readers. Option 2 (export → OME-Zarr) and reading in-place originals from Nemo are deprioritised; they remain fallbacks if API throughput proves too slow. Option 3 is worth adopting if the server ever publishes OME-Zarr.
+
+Implementation notes for option 1 (not yet built):
+- **Reader**: `omero.gateway.BlitzGateway` → `conn.getObject("Image", id)`. Pixels come from `image.getPrimaryPixels()` via **tiled reads** (`getTiles` / a `RawPixelsStore` per worker), wrapped as a lazy `dask.array` of `(C, Y, X)` at full resolution (Z=0, T=0). Never load a whole slide into memory (e.g. `ezomero.get_image` returns a full numpy array, which is unsuitable for whole slides).
+- **Metadata**: channel names from `image.getChannelLabels()`; pixel size from `image.getPixelSizeX(units="MICROMETER")`/`getPixelSizeY` (feeds `pixel_size_um`; still stop at startup if absent and no `--pixel-size`); dtype from `getPixelsType()`.
+- **CLI**: e.g. `-i omero://omero-prod.camp.thecrick.org/Image:1234` (or `--omero-image-id` + `--omero-host`), plus `--omero-group` if needed (the user's default group may not hold the image). Auth: reuse an existing `omero login` session or environment variables; never a password on the command line.
+- **Environment**: put `omero-py` (conda-forge) in its own pixi feature and test co-installing it into both the `default` (TF) and `instanseg` (Torch) envs. Import it lazily, like TF/Torch, so `cellsurvey` imports without it.
+- **Read once**: stage 1 writes `<prefix>.zarr` straight away, so OMERO is only contacted at the start. `--resume-from` never touches OMERO. Record the source (`host`, `Image ID`) in the Zarr/table `.uns` for provenance.
 
 ### Findings so far (Crick, 2026-11)
 - **Server**: `omero-prod.camp.thecrick.org`, port **4064** (standard Ice port), reachable from the HPC. Sessions have a **100 min idle timeout**. A user's default group may differ from where images live (e.g. `STP-CALM`).
@@ -483,11 +490,11 @@ Stage 1 is the only place the source image is read. It loads the image and immed
 - **Design note**: because stage 1 copies the image to `<prefix>.zarr` immediately, OMERO is only contacted at the start of a run. The 100 min idle timeout only matters if the session is created long before the job starts (e.g. queue wait). Log in inside the job or refresh the session.
 
 ### Open questions (to test on the HPC / with the facility)
-- Does our OMERO server publish images as **OME-Zarr** over HTTP (option 3)? Is **`omero zarr export`** permitted/practical for whole-slide COMET images (time, disk)?
-- **Auth from the HPC**: is an existing `omero login` session usable from compute nodes (session timeout vs. multi-hour jobs), or will it be username/password via environment variables?
-- **Dependency check**: do `omero-py` + `zeroc-ice` from conda-forge solve in a pixi env with Python 3.12 alongside TF ≥2.18 and alongside Torch?
-- **Throughput**: how long does reading a full 29-plex COMET slide via BlitzGateway tiles take compared with export? Is the HPC→OMERO network a bottleneck?
-- **Metadata**: are channel names and physical pixel sizes populated on our OMERO images? Both are required: channel names for the intensity columns, and pixel size because every distance flag is in µm.
+- ~~Does `omero-py` install on Python 3.12?~~ Yes, from conda-forge (see Findings). **Still open**: does it solve alongside TF ≥2.18 (default env) and Torch (instanseg env)?
+- **Auth from compute nodes**: login and session reuse work interactively on the HPC. Is the saved session in `~/.omero` visible from a compute node? What is the cleanest way to log in non-interactively inside a batch job (env vars vs. session key)?
+- **Throughput (key risk for option 1)**: how long does reading a full 29-plex COMET slide via BlitzGateway tiles take? What tile size and parallelism work best? Is the HPC→OMERO network a bottleneck? If it's too slow, fall back to reading in-place OME-TIFFs from Nemo.
+- **Metadata**: are channel names and physical pixel sizes populated on our OMERO images (check `omero obj get Image:<id>` on a COMET slide)? Both are required: channel names for the intensity columns, and pixel size because every distance flag is in µm.
+- (Lower priority now) Does the server publish OME-Zarr over HTTP (option 3)?
 
 ## Reference: PANORAMIC (plevritis-lab)
 
