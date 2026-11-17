@@ -21,9 +21,9 @@ python = ">=3.12, <3.13"
 #   pixi run python run.py ...                          # Stardist (default)
 #   pixi run -e instanseg python run.py --segmenter instanseg ...
 [environments]
-default = ["stardist"]
-spatial = ["stardist"]
-instanseg = ["instanseg"]
+default = ["stardist", "omero"]
+spatial = ["stardist", "omero"]
+instanseg = ["instanseg", "omero"]
 
 # Shared by all environments
 [pypi-dependencies]
@@ -49,3 +49,22 @@ tensorflow = ">=2.18"
 # InstanSeg (PyTorch). PyPI torch wheels bundle CUDA on linux-64; win-64 is CPU-only.
 [feature.instanseg.pypi-dependencies]
 instanseg-torch = ">=0.1.1"
+
+# OMERO input (omero-py + ZeroC Ice 3.6). From conda-forge: PyPI has no usable
+# zeroc-ice wheel for Python 3.12.
+[feature.omero.dependencies]
+omero-py = "*"
+# omero-py brings these in from conda, and pixi locks conda packages before the
+# PyPI solve, so they must stay compatible with our PyPI stack:
+# - python-dateutil: via omero-py -> matplotlib-base; conda picks 4.x, but every
+#   botocore/aiobotocore (s3fs <- fsspec[s3] <- ome-zarr <- spatialdata) needs <3.
+python-dateutil = ">=2.8,<3"
+# - numpy: omero-py allows >=2,<3 and conda picks the newest (2.5.x), but numba
+#   and scipy (via scanpy/sopa) need numpy<2.5.
+numpy = ">=2,<2.5"
+
+# Keep s3fs modern. Otherwise a conflict above makes the PyPI resolver backtrack
+# to s3fs 0.3.5 (2019 sdist), which fails to build on Python 3.12 and hides the
+# real conflict behind a SafeConfigParser error.
+[feature.omero.pypi-dependencies]
+s3fs = ">=2024.1"
