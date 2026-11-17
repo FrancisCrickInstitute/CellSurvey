@@ -775,6 +775,35 @@ Ten tips spanning experimental design → platform selection → data structure 
 - Focused on ST proper (Visium/Xenium/MERFISH etc.); CellSurvey is multiplexed-antibody OME-TIFF + blob-detected transcripts, so platform-specific specifics transfer only loosely, but the analysis/statistical principles transfer directly.
 - Balanced platform-neutral framing means it favors generality over CellSurvey-specific prescriptiveness.
 
+## Reference: PIPEX (CellProfiling)
+
+**Note (for future consideration):** [PIPEX](https://github.com/CellProfiling/pipex) (CellProfiling; MIT) is a Python pipeline for **multiplexed imaging (built for CODEX)** that goes from images to per-cell tables, clusters, spatial analysis and viewer exports. It is a close sibling of CellSurvey (StarDist + expansion → per-cell measurement → k-means/Leiden → spatial analysis → QuPath/TissUUmaps export). It is not integrated and not worth adopting as a dependency. Several of its **per-cell measurement and annotation ideas** are worth borrowing.
+
+### What it does
+- **Input**: a flat folder of single-channel images named by marker (e.g. `DAPI.tif`), in any libvips-readable format, plus optional custom masks. It does *not* take a multichannel OME-TIFF. It is driven by a batch command file or a GUI.
+- **Segmentation**: StarDist on DAPI (`nuclei_diameter`, `nuclei_definition`, `nuclei_closeness`, `nuclei_area_limit`) → non-overlapping expansion by `nuclei_expansion` **pixels** → optional **membrane-marker watershed** refinement (`membrane_diameter`, `membrane_compactness`, `membrane_keep`, `membrane_min_growth=0.05`). The refinement reshapes an expanded nucleus only if the watershed cell grows beyond the nucleus by more than that fraction. Watershed segments sharing a nucleus are merged.
+- **Per-cell marker scores** (beyond the mean intensity in `cell_data.csv`): `_local_90` (90th-percentile intensity), `_ratio_pixels` (fraction of pixels above Otsu), `_otsu3`/`_triangle_score` (signed distance from a threshold), and `_gmm_prob` (2-component GMM posterior; NaN when `gmm_min_separation` < 0.5). `use_bin` clusters on these scores instead of raw intensities.
+- **Image preprocessing**: threshold removal, top-hat background subtraction (`tophat_radius`), light-gradient reduction, tile balancing, stitch smoothing and exposure adjustment.
+- **Normalisation / batch correction**: `log_norm`, `z_norm`, `minmax_norm`, `quantile_norm`, and ComBat (`batch_corr`). The README itself warns that ComBat may over-correct per-cell imaging data and produce negative values.
+- **Clustering and annotation**: Leiden (`leiden_res=0.5`), k-means (`k_clusters=10`), and `k_estimation` (elbow/inertia/silhouette for k=1–19). Rule-based **cell-type annotation** comes from `cell_types.csv`: high/medium/low marker rules are matched against each cluster's ranked markers (`rank_filter`, `min_confidence`).
+- **Spatial analysis**: **k-NN neighbourhood composition** (fraction of each cell type among the k nearest neighbours, `neigh_k_values=1,5,10`) and **DBSCAN per cell type** (scattered vs clustered, `neigh_density_threshold=0.05`).
+- **Outputs**: label mask TIFF, `cell_data*.csv`, `anndata.h5ad` (+ a TissUUmaps variant), GeoJSON plus compressed **`.pbf`** for QuPath/TissUUmaps, a TissUUmaps web export, and Leica **laser-microdissection** XML.
+- **Scale**: `max_res` downscaling and temporary swap space; quoted at ~16 GB RAM for 12k-pixel images. Large whole-slide images are not its target.
+
+### Relevance to CellSurvey
+- **Highest value — per-cell marker scores**: CellSurvey clusters only on `sopa.aggregate` mean intensity. With InstanSeg whole cells, a cell-wide mean dilutes membrane/punctate markers (CD3, CD8, PD-1), so `_local_90`, `_ratio_pixels` and `_gmm_prob` are more robust positivity measures and better clustering inputs. Computing them means owning aggregation instead of calling `sopa.aggregate`, which fits the **reduce-Sopa-coupling** aim. `_gmm_prob` is the same per-marker GMM idea as CELESTA's first step.
+- **Normalisation menu** feeds the Planned Normalisation (DAPI) section and any future multi-sample mode (with the ComBat over-correction caveat).
+- **Choosing k**: the cluster sweep (`run_cluster_sweep`) already records inertia. A **silhouette score on a random subsample** (O(n²) on all ~270k cells is infeasible) would cheaply mirror `k_estimation`.
+- **Rule-based cluster naming** via a marker-rule CSV is a lightweight step towards cell-type labels (much simpler than CELESTA; no spatial prior).
+- **k-NN neighbourhood composition** is the standard CODEX "cellular neighbourhoods" method and a complementary alternative to our Delaunay + Louvain communities. It is cheap with `scipy.spatial.cKDTree`.
+- **Compressed `.pbf` export** addresses GeoJSON size at whole-slide scale (a 270k-cell `qupath_export.geojson`).
+- **Low value**: the membrane-guided watershed refines StarDist + expansion, which InstanSeg already supersedes (and Stardist is being retired). The image-preprocessing steps (tile balancing, stitch smoothing) might matter only if stitched COMET images show tile artefacts. LMD export is niche.
+
+### Caveats
+- Small project (≈19 stars, no releases) with no paper cited in the README.
+- Single-channel-folder input and pixel-unit parameters: not interoperable with CellSurvey's OME-TIFF/SpatialData/µm conventions. Borrow algorithms, not code paths.
+- TensorFlow/StarDist stack. Its memory guidance targets ≤12k-pixel images, not whole slides.
+
 ## Shortlist: additional candidates (not yet deep-dived)
 
 **Note:** flagged as future candidates from a library scan; full deep-dive analyses deferred.
