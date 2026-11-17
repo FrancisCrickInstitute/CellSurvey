@@ -448,6 +448,39 @@ where `dapi_cell` is that cell's DAPI mean intensity. Applied **after aggregatio
 - Normalisation amplifies noise in low-DAPI cells; the zero/epsilon guard is essential.
 - Changing the matrix changes clustering/community results, so existing `_seg.zarr` outputs become non-comparable once enabled (same breaking-change consideration as cell segmentation).
 
+## Planned: OMERO input
+
+**Status**: planning only — nothing implemented and no branch yet. Blocked on the HPC/server tests listed under *Open questions*.
+
+**Goal**: read the input image directly from an OMERO server instead of requiring a local OME-TIFF.
+
+### Why it fits the current design
+Stage 1 is the only place the source image is read. It loads the image and immediately writes `<prefix>.zarr`, and every later stage (including `--resume-from`) works from that local copy. So OMERO support only needs to replace image loading: produce a `(C, Y, X)` dask array, the channel names and the pixel size (µm/px), and build the SpatialData image from them. Nothing downstream needs to know the source.
+
+### Proposed structure
+- Add an **image-reader seam**: one function per source (local TIFF via `sopa.io.ome_tif`/`BioImage` as now, OMERO, and later OME-Zarr), each returning `(dask array, channel_names, pixel_size_um)`. This also covers the existing *broaden input support* aim (see the input-format gotcha).
+- **Branch**: create a new feature branch from `feature/instanseg`, not `main`. The reader touches the same stage-1 code in `cli.py` that `feature/instanseg` changed (pixel-size handling). `feature/instanseg` will fast-forward into `main`, so the new branch will sit cleanly on `main` afterwards.
+
+### Options
+1. **Direct read from the server** via [omero-py](https://pypi.org/project/omero-py/) BlitzGateway or [ezomero](https://pypi.org/project/ezomero/), fetching tiles into dask on demand (e.g. `-i omero://host/Image:1234`).
+   - Simplest for users, with no intermediate copy.
+   - The main risk is the dependency: omero-py needs **ZeroC Ice 3.6**. There is no usable PyPI wheel (ezomero recommends Glencoe's wheels), and omero-py's Python 3.12 support was only "preliminary". conda-forge carries `omero-py`/`zeroc-ice`, which is the best route for pixi. It must be verified to install alongside TF (default env) and Torch (instanseg env). Put it in its own pixi feature.
+   - Tile streaming a whole multiplexed slide may be slow.
+   - Needs non-interactive auth on the HPC: reuse an `omero login` session or environment variables, **never a password on the command line**.
+2. **Export, then read**: `omero zarr export Image:1234` ([omero-cli-zarr](https://pypi.org/project/omero-cli-zarr/)) → local `.ome.zarr` → CellSurvey reads OME-Zarr (SpatialData is Zarr-native; [bioio-ome-zarr](https://pypi.org/project/bioio-ome-zarr/) is an alternative).
+   - The pipeline needs no OMERO dependencies (those stay in a small separate env), and OME-Zarr input is useful on its own.
+   - Costs two steps and a temporary full-size copy on disk.
+3. **Read server-published OME-Zarr over HTTP** (as IDR does), if the facility's OMERO exposes it. This would be the best of both, but it depends entirely on server setup. The OME-Zarr reader from option 2 would mostly cover it.
+
+**Current recommendation**: build the reader seam plus OME-Zarr input first (option 2: low risk, no Ice dependency, works with any OMERO via export). Then add direct reading (option 1) in its own pixi feature once omero-py is confirmed to install cleanly from conda-forge in both envs. Revisit if option 3 turns out to be available.
+
+### Open questions (to test on the HPC / with the facility)
+- Does our OMERO server publish images as **OME-Zarr** over HTTP (option 3)? Is **`omero zarr export`** permitted/practical for whole-slide COMET images (time, disk)?
+- **Auth from the HPC**: is an existing `omero login` session usable from compute nodes (session timeout vs. multi-hour jobs), or will it be username/password via environment variables?
+- **Dependency check**: do `omero-py` + `zeroc-ice` from conda-forge solve in a pixi env with Python 3.12 alongside TF ≥2.18 and alongside Torch?
+- **Throughput**: how long does reading a full 29-plex COMET slide via BlitzGateway tiles take compared with export? Is the HPC→OMERO network a bottleneck?
+- **Metadata**: are channel names and physical pixel sizes populated on our OMERO images? Both are required: channel names for the intensity columns, and pixel size because every distance flag is in µm.
+
 ## Reference: PANORAMIC (plevritis-lab)
 
 **Note (for future consideration):** [PANORAMIC](https://github.com/plevritis-lab/panoramic) is an R/Bioconductor package for **multi-sample meta-analysis of spatial colocalization**. It is NOT integrated into CellSurvey yet — this section records the concepts worth borrowing or adopting downstream.
