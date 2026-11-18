@@ -140,7 +140,8 @@ with `pixi run -e instanseg ...`, and Stardist with plain `pixi run ...`.
 
 ## My GeoJSON ended up in the wrong place — how do I control that?
 
-The QuPath GeoJSON defaults to `./qupath_export.geojson`. Change it with
+The QuPath GeoJSON is written next to the Zarr stores and named after `-o`
+(e.g. `-o results/sample1` gives `results/sample1.geojson`). Change it with
 `--geojson-path`:
 
 ```bash

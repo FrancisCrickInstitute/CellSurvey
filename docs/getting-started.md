@@ -101,13 +101,13 @@ When the run finishes, you'll have:
 |---|---|---|
 | Initial Zarr | `~/results/output.zarr` | The image converted to SpatialData format |
 | Segmented Zarr | `~/results/output_seg.zarr` | Cells, boundaries, and per-cell measurements |
-| QuPath GeoJSON | `./qupath_export.geojson` | Cell boundaries + clusters + communities |
+| QuPath GeoJSON | `~/results/output.geojson` | Cell boundaries + clusters + communities |
 | Summary | `~/results/plots/summary.json` | Counts of cells, clusters, communities |
 | Plots | `~/results/plots/*.png` | Density maps, UMAP, heatmaps |
 
 !!! note "GeoJSON location"
-    The QuPath GeoJSON defaults to `./qupath_export.geojson` in the current
-    directory. Change it with `--geojson-path` if you want it elsewhere.
+    The QuPath GeoJSON is written next to the Zarr stores, named after `-o`
+    (`<output>.geojson`). Change it with `--geojson-path` if you want it elsewhere.
 
 The **segmented Zarr** (`*_seg.zarr`) is the main result — it contains
 everything downstream analysis and visualisation need.

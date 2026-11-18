@@ -132,13 +132,13 @@ segmentation. Combined with the segmented-Zarr reuse (see
 
 | Flag | Default | What it controls |
 |---|---|---|
-| `--geojson-path` | `./qupath_export.geojson` | Output path for the QuPath GeoJSON. |
+| `--geojson-path` | `<output>.geojson` | Output path for the QuPath GeoJSON (default: next to the Zarr stores, named after `-o`). |
 | `--font-size` | `20` | Font size for plots. |
 | `--axes-linewidth` | `3` | Axes line width for plots. |
 
 !!! note "Where things go"
-    Plots and `summary.json` are written to `--plot_dir`; the GeoJSON goes to
-    `--geojson-path` (independent of `-o` and `-p`).
+    Plots and `summary.json` are written to `--plot_dir`; the GeoJSON goes next
+    to the Zarr stores as `<output>.geojson`, unless `--geojson-path` is given.
 
 ## Parameter sweeps
 

@@ -216,7 +216,7 @@ Exports everything for viewing in QuPath.
 
 - **What it does**: writes cell boundaries and (optional) spots as GeoJSON
   features, coloured by community, with cluster and per-marker measurements.
-- **Output**: the file at `--geojson-path` (default `./qupath_export.geojson`).
+- **Output**: the file at `--geojson-path` (default `<output>.geojson`, next to the Zarr stores).
 - **Where**: `cellsurvey/export.py` (`export_to_qupath`).
 
 ## 10. Spatial neighbourhood and visualisation

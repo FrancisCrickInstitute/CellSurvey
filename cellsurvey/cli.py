@@ -86,8 +86,9 @@ def main():
                         help='Max radius in µm for the spatial neighbors graph (default: 280)')
     parser.add_argument('--resume-from',
                         help='Path to existing Zarr to resume from (skips image loading and spot detection)')
-    parser.add_argument('--geojson-path', default='./qupath_export.geojson',
-                        help='Output path for QuPath GeoJSON (default: ./qupath_export.geojson)')
+    parser.add_argument('--geojson-path', default=None,
+                        help='Output path for QuPath GeoJSON (default: <output_file>.geojson, '
+                             'next to the Zarr outputs)')
     parser.add_argument('--font-size', type=int, default=20,
                         help='Font size for plots (default: 20)')
     parser.add_argument('--axes-linewidth', type=int, default=3,
@@ -123,6 +124,10 @@ def main():
     zarr_path = args.output_file
     if not zarr_path.endswith('.zarr'):
         zarr_path += '.zarr'
+    # Default the GeoJSON to sit beside the Zarrs (from -o, even when resuming),
+    # so runs with different -o don't overwrite each other's export.
+    if args.geojson_path is None:
+        args.geojson_path = zarr_path[:-len('.zarr')] + '.geojson'
 
     if args.resume_from:
         zarr_path = args.resume_from

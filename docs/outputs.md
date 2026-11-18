@@ -8,7 +8,8 @@ contains, and how to open it.
     - Zarr stores go next to `--output_file` (the segmented store replaces
       `.zarr` with `_seg.zarr`).
     - Plots and `summary.json` go in `--plot_dir`.
-    - The GeoJSON goes to `--geojson-path` (default `./qupath_export.geojson`).
+    - The GeoJSON goes next to the Zarr stores as `<output>.geojson` (or to
+      `--geojson-path`).
 
 ## Zarr stores
 
@@ -81,7 +82,7 @@ All plots are PNG files written to `--plot_dir`.
 
 | File | What it is |
 |---|---|
-| `qupath_export.geojson` (or `--geojson-path`) | Cell boundaries + spots for QuPath. |
+| `<output>.geojson` (or `--geojson-path`) | Cell boundaries + spots for QuPath. |
 
 The GeoJSON contains:
 

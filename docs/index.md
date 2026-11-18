@@ -59,7 +59,7 @@ pixi run -e instanseg python run.py \
 ```
 
 The output is a SpatialData Zarr store (`output_seg.zarr`) plus a
-`qupath_export.geojson` file and a directory of plots.
+QuPath GeoJSON file (`output.geojson`) and a directory of plots.
 
 !!! tip "Continue reading"
     Start with the [Installation](installation.md) guide, then follow
@@ -72,7 +72,7 @@ After a run you get:
 | Output | What it is |
 |---|---|
 | `*_seg.zarr` | SpatialData store: cells, boundaries, and per-cell measurements |
-| `qupath_export.geojson` | Cell boundaries + clusters + communities for QuPath |
+| `*.geojson` | Cell boundaries + clusters + communities for QuPath |
 | `summary.json` | Counts of cells, clusters, communities, and network edges |
 | `*.png` plots | Density maps, UMAP embeddings, heatmaps |
 

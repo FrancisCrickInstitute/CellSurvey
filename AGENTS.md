@@ -101,7 +101,7 @@ The pipeline is split into modules under the `cellsurvey/` package. `run.py` is 
 
 8. **Spot-to-cell assignment** (`cli.py` → `utils.py`): Spatial join of spots to cell boundaries using GeoPandas (`gpd.sjoin` with `predicate='within'`). Returns `None` if no spots are present in the dataset (no guard needed in `cli.py` — `export_to_qupath` handles `None`).
 
-9. **QuPath GeoJSON export** (`cli.py` → `export.py`): Exports cell boundaries and spot detections as GeoJSON features with community/cluster assignments and intensity measurements for QuPath visualization. Takes `cell_ids`, `community_labels`, and `cluster_labels` as direct arrays. Output path is `--geojson-path` (default `./qupath_export.geojson`).
+9. **QuPath GeoJSON export** (`cli.py` → `export.py`): Exports cell boundaries and spot detections as GeoJSON features with community/cluster assignments and intensity measurements for QuPath visualization. Takes `cell_ids`, `community_labels`, and `cluster_labels` as direct arrays. Output path is `--geojson-path` (default `<output_file>.geojson`, i.e. beside the Zarrs; derived from `-o` even when resuming).
 
 10. **Spatial neighborhood analysis** (`cli.py`): Computes spatial neighbors radius graph, mean hop distance heatmap between clusters (`cell_type_to_cell_type.png`), UMAP embedding with k-means coloring (`umap_kmeans_cluster.png`), and Leiden clustering with `igraph` backend (`umap_leiden.png`). Also emits per-cluster/per-community density maps (`cell_density.png`), a mean channel-intensity heatmap per cluster (`cluster_intensity_heatmap.png`), and a morphology-by-cluster plot (`morphology_by_cluster.png`, only if an `area` column is present). All plots are saved to `--plot_dir`.
 
@@ -136,7 +136,7 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 | `--radius-min` | `0` | Min radius (µm) for spatial neighbors graph |
 | `--radius-max` | `280` | Max radius (µm) for spatial neighbors graph |
 | `--resume-from` | — | Path to existing Zarr to resume from (skips image loading and spot detection) |
-| `--geojson-path` | `./qupath_export.geojson` | Output path for QuPath GeoJSON |
+| `--geojson-path` | `<output_file>.geojson` | Output path for QuPath GeoJSON |
 | `--font-size` | `20` | Font size for plots |
 | `--axes-linewidth` | `3` | Axes line width for plots |
 
@@ -190,7 +190,7 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 
 - **AnnData `.X` can be sparse or dense**: `sopa.aggregate()` may produce either a scipy sparse matrix or a dense numpy array depending on the input data size and sopa version. The intensity extraction in `cli.main()` (and `stability.extract_intensity_matrix`) handles both with `hasattr(measurements.X, 'toarray')`. Never assume `.X` is sparse.
 
-- **GeoJSON output path**: The QuPath GeoJSON path is configurable via `--geojson-path` (default `./qupath_export.geojson`). It is independent of `-o` and `-p`; all plot/PNG artifacts and `summary.json` go to `--plot_dir`.
+- **GeoJSON output path**: The QuPath GeoJSON path is configurable via `--geojson-path`. By default it is `<output_file>.geojson` (`.zarr` stripped from `-o`), next to the Zarrs, so runs with different `-o` don't overwrite each other. All plot/PNG artifacts and `summary.json` go to `--plot_dir`.
 
 - **Matplotlib rcParams are set twice**: Global `font.size=20` and `axes.linewidth=3` at the start of `main()`, then overridden to `font.size=10` and `axes.linewidth=2` before the heatmap/UMAP plots. The `Agg` non-interactive backend is set at import time (`matplotlib.use('Agg')` before `import matplotlib.pyplot as plt`) to prevent plot windows from appearing on headless systems.
 
@@ -227,12 +227,12 @@ Open:
 - **Sweep `--pixel-size` not validated** (`stability.py`): `0` causes a divide-by-zero error and negatives give nonsense results. Add the same positive check as `cli.py`.
 - **Unreachable InstanSeg warning** (`segmentation.run_instanseg`): the CLI now stops if there is no pixel size, so the `pixel_size_um is None` warning only matters for library callers. Make it a `ValueError`, or remove it.
 - **Pixel size can change on resume** (`cli.py`): `--resume-from` re-reads the pixel size from the image or `--pixel-size` and overwrites `uns['cellsurvey']['pixel_size_um']`, even though segmentation and cell expansion used the old value. Warn when the stored and current values differ.
-- **GeoJSON default path ignores `-o`** (`cli.py`, `--geojson-path` default `./qupath_export.geojson`): every run writes to the current directory, so consecutive runs (e.g. Stardist then InstanSeg) silently overwrite each other's export. Default it to `<output_prefix>.geojson`, or put it in `-p`.
 - **k-means makes near-empty clusters and is unstable** (`utils.cluster_data`, k=10 on standardised raw mean intensities): on `test_crop` the GPU and CPU Stardist runs differed by only 2 cells, yet the cluster sizes reshuffled substantially and one cluster held a single cell. The InstanSeg run had two clusters of 2 cells each. Outlier cells are getting their own clusters. Relevant to the Planned Normalisation, the `--mode clusters` sweep, and PIPEX-style robust marker scores. Consider clipping/log-transforming intensities, or a minimum cluster size.
 - **Delaunay on too few cells**: `delaunay_edges` raises a Qhull error with fewer than 3 cells, or when all cells lie on a line. Return no edges in that case.
 
 Checked and resolved / not a bug:
 
+- ~~GeoJSON default path ignored `-o`~~: the default is now `<output_file>.geojson`, so consecutive runs no longer overwrite `./qupath_export.geojson`.
 - ~~Cell ids may not match between shapes and table~~: `sopa.aggregate` → `parse_table` sets the table's `obs_names` and the cell layer's index to the same string ids (`str_cell_id`, sopa 2.3.0), so `cell_id in table.obs.index` matches. This could only break if the shapes were re-indexed after aggregation.
 - ~~Fallback layer looked up eagerly (`shapes.get('cell_boundaries', shapes['stardist_boundaries'])`)~~: replaced by `resolve_shape_keys`.
 - ~~`n_edges` inflated by double-counted Delaunay edges~~: `delaunay_edges` sorts and de-duplicates pairs.

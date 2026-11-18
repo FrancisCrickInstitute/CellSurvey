@@ -28,7 +28,7 @@ shape overlays coloured by metadata columns.
 For traditional pathology workflows, open the exported GeoJSON in
 [QuPath](https://qupath.github.io/):
 
-1. **File → Import → GeoJSON**, then select `qupath_export.geojson`.
+1. **File → Import → GeoJSON**, then select `<output>.geojson` (written next to the Zarr stores).
 2. Cell boundaries appear as annotations coloured by community.
 3. RNA spots (when `--detect-blobs` was used) appear as detection objects.
 
