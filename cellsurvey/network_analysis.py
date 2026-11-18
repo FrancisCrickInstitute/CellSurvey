@@ -1,10 +1,22 @@
 import os
 import json
 import numpy as np
-from scipy.spatial import Delaunay
+from scipy.spatial import Delaunay, QhullError
 import networkx as nx
 
 from cellsurvey.utils import resolve_shape_keys, resolve_pixel_size
+
+
+def _collinear_edges(coords):
+    """Edges joining consecutive points along their main axis.
+
+    This is the Delaunay graph's limit for collinear points (and for two
+    points), where Qhull cannot triangulate.
+    """
+    centred = coords - coords.mean(axis=0)
+    axis = np.linalg.svd(centred, full_matrices=False)[2][0]
+    order = np.argsort(centred @ axis, kind='stable')
+    return np.column_stack([order[:-1], order[1:]])
 
 
 def delaunay_edges(coords, max_edge_distance):
@@ -12,10 +24,20 @@ def delaunay_edges(coords, max_edge_distance):
 
     ``max_edge_distance`` is in the same units as ``coords``. Each edge appears
     once as ``(a, b)`` with ``a < b``; an edge is shared by two triangles, so
-    without sorting it would be counted twice.
+    without sorting it would be counted twice. Degenerate inputs don't raise:
+    fewer than 2 points give no edges, and 2 or more collinear points are joined
+    in order along their line.
     """
-    simplices = Delaunay(coords).simplices
-    pairs = np.vstack([simplices[:, [0, 1]], simplices[:, [1, 2]], simplices[:, [0, 2]]])
+    coords = np.asarray(coords, dtype=float)
+    if len(coords) < 2:
+        return np.empty((0, 2), dtype=int)
+    try:
+        if len(coords) < 3:
+            raise QhullError("fewer than 3 points")
+        simplices = Delaunay(coords).simplices
+        pairs = np.vstack([simplices[:, [0, 1]], simplices[:, [1, 2]], simplices[:, [0, 2]]])
+    except QhullError:
+        pairs = _collinear_edges(coords)
     pairs = np.unique(np.sort(pairs, axis=1), axis=0)
     lengths = np.linalg.norm(coords[pairs[:, 0]] - coords[pairs[:, 1]], axis=1)
     return pairs[lengths <= max_edge_distance]
