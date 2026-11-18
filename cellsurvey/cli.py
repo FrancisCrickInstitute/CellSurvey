@@ -103,7 +103,7 @@ def main():
     imagepath = args.input_file
 
     if args.pixel_size is not None:
-        if args.pixel_size <= 0:
+        if not args.pixel_size > 0:  # also rejects NaN
             parser.error("--pixel-size must be positive")
         pixel_size_um = args.pixel_size
         print(f"Physical pixel size (from --pixel-size): {pixel_size_um:.4f} µm/px")

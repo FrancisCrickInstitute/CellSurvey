@@ -223,7 +223,6 @@ Open:
 
 - **Slow edge weighting** (`network_analysis.compute_louvain_communities`): calls `np.corrcoef` once per edge in a Python loop (~3 edges per cell, so millions of calls on whole slides). The stability sweep repeats this for every parameter combination. Fix: z-score each row of `imat` once, then compute `(z[a] * z[b]).mean(axis=1)` over the edge arrays.
 - **Slow per-cell lookups**: `run_network_analysis` (cluster labels and `imat`) and `stability.run_stability_sweep` (`imat`) do one `.loc[...]` per cell. Replace with `intensity_matrix.reindex(boundaries.index).fillna(0).to_numpy()` and the same for `obs['kmeans_cluster']`.
-- **Sweep `--pixel-size` not validated** (`stability.py`): `0` causes a divide-by-zero error and negatives give nonsense results. Add the same positive check as `cli.py`.
 - **Unreachable InstanSeg warning** (`segmentation.run_instanseg`): the CLI now stops if there is no pixel size, so the `pixel_size_um is None` warning only matters for library callers. Make it a `ValueError`, or remove it.
 - **Pixel size can change on resume** (`cli.py`): `--resume-from` re-reads the pixel size from the image or `--pixel-size` and overwrites `uns['cellsurvey']['pixel_size_um']`, even though segmentation and cell expansion used the old value. Warn when the stored and current values differ.
 - **k-means makes near-empty clusters and is unstable** (`utils.cluster_data`, k=10 on standardised raw mean intensities): on `test_crop` the GPU and CPU Stardist runs differed by only 2 cells, yet the cluster sizes reshuffled substantially and one cluster held a single cell. The InstanSeg run had two clusters of 2 cells each. Outlier cells are getting their own clusters. Relevant to the Planned Normalisation, the `--mode clusters` sweep, and PIPEX-style robust marker scores. Consider clipping/log-transforming intensities, or a minimum cluster size.
@@ -231,6 +230,7 @@ Open:
 
 Checked and resolved / not a bug:
 
+- ~~Sweep `--pixel-size` not validated~~: `utils.resolve_pixel_size` now raises `ValueError` for zero, negative or NaN values, whether passed in or stored in the Zarr. The sweep reports it via `parser.error`. `cli.py`'s own check also rejects NaN.
 - ~~Misleading cluster intensity heatmap~~: `cluster_intensity_heatmap.png` now z-scores each channel across all cells (as k-means sees it), then averages per cluster, so the "z-score" label and the diverging map centred on 0 are correct.
 - ~~GeoJSON default path ignored `-o`~~: the default is now `<output_file>.geojson`, so consecutive runs no longer overwrite `./qupath_export.geojson`.
 - ~~Cell ids may not match between shapes and table~~: `sopa.aggregate` → `parse_table` sets the table's `obs_names` and the cell layer's index to the same string ids (`str_cell_id`, sopa 2.3.0), so `cell_id in table.obs.index` matches. This could only break if the shapes were re-indexed after aggregation.

@@ -48,18 +48,25 @@ def store_pixel_size(sdata, pixel_size_um, table_key='table'):
 def resolve_pixel_size(sdata, pixel_size_um=None, table_key='table'):
     """Return ``pixel_size_um`` if given, else the value stored by :func:`store_pixel_size`.
 
-    Raises ``ValueError`` if neither is available. Cell coordinates are in
-    pixels, so µm distance parameters cannot be applied without it.
+    Raises ``ValueError`` if neither is available, or if the value is not a
+    positive number. Cell coordinates are in pixels, so µm distance parameters
+    cannot be applied without it.
     """
     if pixel_size_um is not None:
-        return float(pixel_size_um)
-    stored = None
-    if table_key in sdata.tables:
-        stored = sdata.tables[table_key].uns.get(_UNS_KEY, {}).get('pixel_size_um')
-    if stored is None:
-        raise ValueError("No pixel size available: this _seg.zarr predates stored pixel sizes. "
-                         "Pass the image's pixel size (µm/px), e.g. --pixel-size 0.28.")
-    return float(stored)
+        value, source = pixel_size_um, "--pixel-size"
+    else:
+        stored = None
+        if table_key in sdata.tables:
+            stored = sdata.tables[table_key].uns.get(_UNS_KEY, {}).get('pixel_size_um')
+        if stored is None:
+            raise ValueError("No pixel size available: this _seg.zarr predates stored pixel sizes. "
+                             "Pass the image's pixel size (µm/px), e.g. --pixel-size 0.28.")
+        value, source = stored, "stored pixel size"
+    value = float(value)
+    # `not value > 0` also rejects NaN.
+    if not value > 0:
+        raise ValueError(f"{source} must be a positive number of µm/px, got {value}.")
+    return value
 
 
 def remove_channel_suffix(name):
