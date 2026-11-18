@@ -514,7 +514,7 @@ Implementation notes for option 1 (not yet built):
 - **Design note**: because stage 1 copies the image to `<prefix>.zarr` immediately, OMERO is only contacted at the start of a run. The 100 min idle timeout only matters if the session is created long before the job starts (e.g. queue wait). Log in inside the job or refresh the session.
 
 ### Open questions (to test on the HPC / with the facility)
-- ~~Does `omero-py` install on Python 3.12, alongside TF and Torch?~~ Yes, from conda-forge, in both envs on win-64 and linux-64 (CPU node), with the conda pins described in Findings. **Still open**: confirm GPU detection on a GPU node with omero-py co-installed.
+- ~~Does `omero-py` install on Python 3.12, alongside TF and Torch?~~ Yes, from conda-forge, in both envs on win-64 and linux-64 (CPU node), with the conda pins described in Findings. GPU confirmed on an A100 node (driver 580, 2026-11-18) with omero-py co-installed: Stardist runs on the GPU end to end (after the TF CUDA preload fix, see Key gotchas), and Torch reports `cuda.is_available() == True` (CUDA 13.2 wheels). **Still open**: an end-to-end InstanSeg run on GPU.
 - **Auth from compute nodes**: login and session reuse work interactively on the HPC. Is the saved session in `~/.omero` visible from a compute node? What is the cleanest way to log in non-interactively inside a batch job (env vars vs. session key)?
 - ~~**Throughput**~~: resolved — ~300 MB/s with 8 readers × 1024 px tiles (~2 min per 36.6 GB slide; see Findings). Remaining: confirm a cold full read, and whether 16 readers helps.
 - ~~**Metadata**: are channel names and physical pixel sizes populated?~~ Yes on a PhenoImager `.qptiff` (see Findings). Still worth one check on a **COMET** OME-TIFF in OMERO before relying on it.
