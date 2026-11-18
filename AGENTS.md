@@ -462,7 +462,7 @@ where `dapi_cell` is that cell's DAPI mean intensity. Applied **after aggregatio
 
 ## Planned: OMERO input
 
-**Status**: planning only — nothing implemented and no branch yet. Blocked on the HPC/server tests listed under *Open questions*.
+**Status**: implementation planned (see *Implementation plan*), on branch `feature/omero`. The environment is done (omero-py co-installs with both segmenter envs; GPU confirmed). No reader code yet.
 
 **Goal**: read the input image directly from an OMERO server instead of requiring a local OME-TIFF.
 
@@ -529,6 +529,66 @@ Implementation notes for option 1 (not yet built):
 - ~~**Throughput**~~: resolved — ~300 MB/s with 8 readers × 1024 px tiles (~2 min per 36.6 GB slide; see Findings). Remaining: confirm a cold full read, and whether 16 readers helps.
 - ~~**Metadata**: are channel names and physical pixel sizes populated?~~ Yes on a PhenoImager `.qptiff` (see Findings). Still worth one check on a **COMET** OME-TIFF in OMERO before relying on it.
 - (Lower priority now) Does the server publish OME-Zarr over HTTP (option 3)?
+
+### Implementation plan (2026-11-18)
+
+**Goal**: accept `-i omero://host/Image:<id>` wherever a TIFF path is accepted. The image is read once, in stage 1, into `<prefix>.zarr`. Everything after that, including `--resume-from`, works only from the local Zarr.
+
+Already checked: `sopa.io.ome_tif` is a thin wrapper (dask array → `Image2DModel.parse` with `chunks=(1, 1024, 1024)`, `scale_factors=[2, 2, 2, 2]`, plus `attrs[SopaAttrs.CELL_SEGMENTATION]`, from `sopa.constants`). `SpatialData.attrs` are saved to the Zarr and kept through `read_zarr` and `write_element` (spatialdata 0.9.0). The installed omero-py API was inspected. `_PixelsWrapper.getTiles` opens a new `RawPixelsStore` on every call and decodes with `struct`, so it is too slow for whole slides.
+
+1. **Reader layer, new `cellsurvey/image_source.py`**:
+   - `ImageSource`: a lazy `(c, y, x)` dask array, channel names, `pixel_size_um`, provenance, and a reader-thread count.
+   - `open_image_source(path)`: `omero://` paths go to the OMERO reader. Anything else goes through `sopa.io.ome_tif(..., as_image=True)` + `get_pixel_size`, so local TIFFs read exactly as before.
+   - `to_spatialdata(pixel_size)`: copies `sopa.io.ome_tif` (same chunks, pyramid and Sopa attr) and adds `attrs['cellsurvey'] = {pixel_size_um, source}`.
+   - `write()`: wraps `sdata.write` in `dask.config.set(scheduler='threads', num_workers=…)`.
+2. **OMERO reader, new `cellsurvey/omero_source.py`** (omero-py imported only here, lazily):
+   - **URL**: `omero://host[:port]/Image:123` or `omero://host/123`; port defaults to 4064.
+   - **Login**, tried in order, never with a password on the command line:
+     1. the `OMERO_SESSION_KEY` environment variable;
+     2. the session saved by `omero login`, if it is for the same host (`omero.util.sessions.SessionsStore().get_current()`);
+     3. the `OMERO_USER` and `OMERO_PASSWORD` environment variables.
+
+     Otherwise stop and tell the user to run `omero login`. Keep-alive is switched on during the read.
+   - **Cross-group lookup without changing the session's group**: set `conn.SERVICE_OPTS.setOmeroGroup('-1')` (client-side only) for `getObject`, then pass a context with the image's own group to `RawPixelsStore.setPixelsId`. This **replaces** the earlier `setGroupForSession` note: with a reused `omero login` session, that call would also switch the group for the user's own CLI session.
+   - **Fileset check**: catches thumbnail, overview and label images (see decision c).
+   - **Metadata**: `getChannelLabels()` (blank labels become their index); pixel size from `getPixelSizeX/Y(units="MICROMETER")` → `LengthI.getValue()`, with a warning for non-square pixels; pixel type from `getPrimaryPixels().getPixelsType().value` via `OMERO_NUMPY_TYPES`. If the image has more than one Z or T plane, warn and use Z=0, T=0.
+   - **Pixels**:
+     - one `RawPixelsStore` per dask thread (`threading.local`), set to full resolution (`setResolutionLevel(n-1)`, only if `getResolutionLevels() > 1`); that level is checked against `sizeX × sizeY` once at the start (`getResolutionDescriptions()` lists largest first);
+     - 1024² tiles via `getTile(z, c, t, x, y, w, h)`, decoded with `np.frombuffer` (big-endian), wrapped with `dask.array.from_array` (fixed `name`, `meta`, `lock=False`);
+     - up to 3 retries per tile with a fresh store;
+     - 8 readers by default.
+   - **Closing**: close all pixel stores, then `conn.close(hard=False)` if we reused a session (so `omero login` stays valid), or `hard=True` if we logged in ourselves.
+3. **Stage 1 in `cli.py`**:
+   - **New runs**: open the source once at startup. The pixel size comes from `--pixel-size`, or else the source. The startup check that stops the run without a pixel size stays.
+   - **Resumed runs**: do not open the source. The pixel size comes from `--pixel-size`, or `attrs['cellsurvey']` in the resume Zarr, or, for older Zarrs only, the source's metadata. The existing `_seg.zarr` mismatch check stays.
+   - **Write `<prefix>.zarr` first, then detect blobs** from the local copy (`sopa.utils.get_spatial_image`) and add spots with `write_element('spots')`, so the source is read once (decision d). Blob channel names come from `source.channel_names`. Channel indices are checked before any reading.
+   - `-i` help mentions `omero://`; drop the `BioImage`/`imread` imports from `cli.py`.
+4. **Docs**:
+   - this section: mark the plan implemented, record test results;
+   - `AGENTS.md` stage-1 description and flag table;
+   - `CLAUDE.md` input bullet;
+   - `docs/`: a "Reading from OMERO" section (URL form, login, which image ID, HPC batch-job session timeout), plus `getting-started`, `parameters`, `faq` and `installation`.
+5. **Testing**:
+   - **Locally, with a fake OMERO array that counts tile reads (no server)**: checks tile placement, byte order, and that each tile is read once. **Risk to check**: writing the 4-level pyramid may read the full-resolution tiles again for each lower level, which is cheap for a TIFF but 5× the reads from OMERO. If so, write full resolution first and build the pyramid from the local copy.
+   - **On the HPC**:
+     1. a local-TIFF run on `test_crop`, to confirm nothing changed;
+     2. a small OMERO image (login, cross-group lookup, channels);
+     3. Image 602778 as a full read, timing a first read the server hasn't cached;
+     4. resuming from it, which should not contact OMERO;
+     5. the fileset check, using the Overview or Label image ID.
+6. **Commits**:
+   1. the reader layer (local path, no behaviour change);
+   2. the stage-1 reorder;
+   3. the OMERO reader;
+   4. docs.
+
+**Decisions** (2026-11-18):
+- a. **CLI**: the URL goes in `-i` (`omero://host[:port]/Image:<id>` or `omero://host/<id>`), with one new flag, `--omero-readers` (default 8). No separate host/ID flags.
+- b. **Login order**: `OMERO_SESSION_KEY` → the saved `omero login` session for the same host → `OMERO_USER`/`OMERO_PASSWORD`. Otherwise stop with "run `omero login`". Never a password on the command line. Close with `hard=False` for reused sessions.
+- c. **Fileset check**: stop if the image is under 1% of the largest image's area in its fileset (thumbnail, label or overview photo), suggesting the largest ID ("did you mean Image:602778?"). If it is smaller but not tiny (e.g. another scan in a multi-scan `.vsi`), warn, naming the largest, and continue.
+- d. **Reorder blob detection for all inputs**: write `<prefix>.zarr` (image) first, then detect blobs from the local Zarr and add spots with `write_element('spots')`. The old order (detect, then a single write) dates from the March prototype (`78fbcc2`). It was built for Spotiflow, but Spotiflow (`Spotiflow.predict(img=...)`) takes an array, and that commit passed it a `dask_image.imread` dask array, so a Zarr-backed dask array works the same way. No other technical reason was found in the history, and `write_element` into an existing Zarr was verified on spatialdata 0.9.0. Structure detection as "takes a `(y, x)` array, returns spots", so the LoG detector and a future Spotiflow detector are interchangeable. Side effect: a crash during detection now leaves `<prefix>.zarr` without spots. So on `--resume-from` with `--detect-blobs`, if the Zarr has no `spots`, run detection from the Zarr. Needs an HPC regression check with `--detect-blobs` on a local TIFF.
+- e. **Float pixel types**: reject with a clear error naming the type for now. Multiplexed slides are integer (the example qptiff is `uint16`). Revisit if a float image turns up.
+- f. A small OMERO test image ID for the first test: *to do*.
 
 ## Reference: PANORAMIC (plevritis-lab)
 
