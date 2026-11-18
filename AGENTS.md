@@ -536,7 +536,7 @@ Implementation notes for option 1 (not yet built):
 
 Already checked: `sopa.io.ome_tif` is a thin wrapper (dask array → `Image2DModel.parse` with `chunks=(1, 1024, 1024)`, `scale_factors=[2, 2, 2, 2]`, plus `attrs[SopaAttrs.CELL_SEGMENTATION]`, from `sopa.constants`). `SpatialData.attrs` are saved to the Zarr and kept through `read_zarr` and `write_element` (spatialdata 0.9.0). The installed omero-py API was inspected. `_PixelsWrapper.getTiles` opens a new `RawPixelsStore` on every call and decodes with `struct`, so it is too slow for whole slides.
 
-1. **Reader layer, new `cellsurvey/image_source.py`**:
+1. **Reader layer, new `cellsurvey/image_source.py`** — **done (commit 1)**. Local TIFFs only, no behaviour change: on synthetic OME-TIFFs (named `uint16`, `float32` → Sopa's `uint8` cast, unnamed channels), the new path writes Zarrs identical to `sopa.io.ome_tif(...).write(...)` (5 scales, chunks, dtype, channel coords, data, transforms); the only addition is `attrs['cellsurvey']`, which survives `read_zarr`. The blob-detection branch still reads the TIFF itself, and resume still calls `get_pixel_size(imagepath)`; both change in commit 2. Details:
    - `ImageSource`: a lazy `(c, y, x)` dask array, channel names, `pixel_size_um`, provenance, and a reader-thread count.
    - `open_image_source(path)`: `omero://` paths go to the OMERO reader. Anything else goes through `sopa.io.ome_tif(..., as_image=True)` + `get_pixel_size`, so local TIFFs read exactly as before.
    - `to_spatialdata(pixel_size)`: copies `sopa.io.ome_tif` (same chunks, pyramid and Sopa attr) and adds `attrs['cellsurvey'] = {pixel_size_um, source}`.
@@ -979,6 +979,7 @@ Ten tips spanning experimental design → platform selection → data structure 
 │   ├── blob_detection.py             # detect_blobs_in_tile, detect_blobs_tiled
 │   ├── network_analysis.py           # run_network_analysis (µm → px) + compute_louvain_communities + delaunay_edges (scipy Delaunay + networkx Louvain, expr-similarity weights, summary.json)
 │   ├── stability.py                  # run_stability_sweep (community) + run_cluster_sweep (k-means), read-only → CSV
+│   ├── image_source.py               # ImageSource + open_image_source (stage-1 input; local TIFF now, OMERO planned) → to_spatialdata / write
 │   ├── segmentation.py               # run_stardist / run_instanseg, link_nuclei_to_cells, get_pixel_size, expand_nuclei (watershed)
 │   ├── export.py                     # export_to_qupath
 │   └── utils.py                      # shape-layer keys + resolve_shape_keys, remove_channel_suffix, cluster_data, assign_spots_to_cells, get_colors_for_communities

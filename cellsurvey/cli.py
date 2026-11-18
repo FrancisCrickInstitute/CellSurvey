@@ -29,6 +29,7 @@ from cellsurvey.utils import (remove_channel_suffix, cluster_data, assign_spots_
                               resolve_shape_keys, store_pixel_size, resolve_pixel_size,
                               STARDIST_NUCLEI_KEY, NUCLEI_KEY, CELLS_KEY)
 from cellsurvey.blob_detection import detect_blobs_tiled
+from cellsurvey.image_source import open_image_source
 from cellsurvey.network_analysis import run_network_analysis
 from cellsurvey.segmentation import get_pixel_size, expand_nuclei, run_stardist, run_instanseg
 from cellsurvey.export import export_to_qupath
@@ -102,13 +103,18 @@ def main():
 
     imagepath = args.input_file
 
+    # New runs open the input image once, here (lazily); stage 1 writes it to
+    # <prefix>.zarr and every later stage reads only that. Resumed runs work
+    # from the existing Zarr and only look up the pixel size.
+    source = None if args.resume_from else open_image_source(imagepath)
+
     if args.pixel_size is not None:
         if not args.pixel_size > 0:  # also rejects NaN
             parser.error("--pixel-size must be positive")
         pixel_size_um = args.pixel_size
         print(f"Physical pixel size (from --pixel-size): {pixel_size_um:.4f} µm/px")
     else:
-        pixel_size_um = get_pixel_size(imagepath)
+        pixel_size_um = source.pixel_size_um if source is not None else get_pixel_size(imagepath)
         if pixel_size_um is None:
             # Fail before any loading/segmentation: every distance parameter is in µm.
             parser.error("No physical pixel size in the image metadata; pass --pixel-size (µm/px). "
@@ -147,7 +153,7 @@ def main():
         channel_names = BioImage(imagepath).channel_names
         image = imread(imagepath)[channel_index]
 
-        dataset = sopa.io.ome_tif(imagepath, as_image=False)
+        dataset = source.to_spatialdata(pixel_size_um)
 
         frames = []
 
@@ -178,18 +184,18 @@ def main():
         print(f'Saving Zarr to {zarr_path}')
 
         try:
-            dataset.write(zarr_path, overwrite=True)
+            source.write(dataset, zarr_path)
         except Exception as e:
             print(f"ERROR: Failed to write Zarr to {zarr_path}: {e}", file=sys.stderr)
             sys.exit(1)
 
         print("Done")
     else:
-        dataset = sopa.io.ome_tif(imagepath, as_image=False)
+        dataset = source.to_spatialdata(pixel_size_um)
         print(f'Saving Zarr to {zarr_path}')
 
         try:
-            dataset.write(zarr_path, overwrite=True)
+            source.write(dataset, zarr_path)
         except Exception as e:
             print(f"ERROR: Failed to write Zarr to {zarr_path}: {e}", file=sys.stderr)
             sys.exit(1)
