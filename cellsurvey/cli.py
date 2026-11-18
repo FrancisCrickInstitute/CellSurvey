@@ -466,11 +466,15 @@ def main():
     plt.savefig(os.path.join(args.plot_dir, 'cell_density.png'))
     plt.close()
 
-    # Channel intensity heatmap per k-means cluster
-    cluster_means = intensity_df.groupby(sdata.tables['table'].obs['kmeans_cluster']).mean()
+    # Channel intensity heatmap per k-means cluster. Each channel is z-scored
+    # across all cells (as k-means sees it, see cluster_data), then averaged per
+    # cluster, so 0 = the all-cell mean and the diverging colormap is meaningful.
+    channel_std = intensity_df.std(ddof=0).replace(0, np.nan)
+    intensity_z = ((intensity_df - intensity_df.mean()) / channel_std).fillna(0)
+    cluster_means = intensity_z.groupby(sdata.tables['table'].obs['kmeans_cluster']).mean()
     plt.figure(figsize=(max(8, cluster_means.shape[1] * 0.4), max(6, cluster_means.shape[0] * 0.5)))
     sns.heatmap(cluster_means, cmap='RdBu_r', center=0, xticklabels=True, yticklabels=True,
-                cbar_kws={'label': 'Mean intensity (z-score)'})
+                cbar_kws={'label': 'Mean intensity (z-score across cells)'})
     plt.title('Mean channel intensity per k-means cluster')
     plt.xlabel('Channel')
     plt.ylabel('Cluster')

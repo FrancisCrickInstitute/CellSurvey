@@ -221,7 +221,6 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 
 Open:
 
-- **Misleading cluster intensity heatmap** (`cli.py`, `cluster_intensity_heatmap.png`): plots raw per-cluster mean intensities of `intensity_df`, but the colour bar says "z-score" and it uses a diverging `RdBu_r` map centred on 0. Either z-score the means per channel (columns), or use a sequential colormap with the label "Mean intensity".
 - **Slow edge weighting** (`network_analysis.compute_louvain_communities`): calls `np.corrcoef` once per edge in a Python loop (~3 edges per cell, so millions of calls on whole slides). The stability sweep repeats this for every parameter combination. Fix: z-score each row of `imat` once, then compute `(z[a] * z[b]).mean(axis=1)` over the edge arrays.
 - **Slow per-cell lookups**: `run_network_analysis` (cluster labels and `imat`) and `stability.run_stability_sweep` (`imat`) do one `.loc[...]` per cell. Replace with `intensity_matrix.reindex(boundaries.index).fillna(0).to_numpy()` and the same for `obs['kmeans_cluster']`.
 - **Sweep `--pixel-size` not validated** (`stability.py`): `0` causes a divide-by-zero error and negatives give nonsense results. Add the same positive check as `cli.py`.
@@ -232,6 +231,7 @@ Open:
 
 Checked and resolved / not a bug:
 
+- ~~Misleading cluster intensity heatmap~~: `cluster_intensity_heatmap.png` now z-scores each channel across all cells (as k-means sees it), then averages per cluster, so the "z-score" label and the diverging map centred on 0 are correct.
 - ~~GeoJSON default path ignored `-o`~~: the default is now `<output_file>.geojson`, so consecutive runs no longer overwrite `./qupath_export.geojson`.
 - ~~Cell ids may not match between shapes and table~~: `sopa.aggregate` → `parse_table` sets the table's `obs_names` and the cell layer's index to the same string ids (`str_cell_id`, sopa 2.3.0), so `cell_id in table.obs.index` matches. This could only break if the shapes were re-indexed after aggregation.
 - ~~Fallback layer looked up eagerly (`shapes.get('cell_boundaries', shapes['stardist_boundaries'])`)~~: replaced by `resolve_shape_keys`.
