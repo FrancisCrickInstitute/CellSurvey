@@ -136,8 +136,6 @@ def main():
         if not os.path.exists(zarr_path):
             parser.error(f"Resume Zarr not found: {zarr_path}")
         print(f"Resuming from existing Zarr: {zarr_path}")
-
-        channel_names = BioImage(imagepath).channel_names
     elif args.detect_blobs:
         channel_index = list(map(int, args.channels.split(',')))
         thresholds = list(map(float, args.thresholds.split(',')))

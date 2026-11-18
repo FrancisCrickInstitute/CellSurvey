@@ -227,6 +227,7 @@ Open:
 
 Checked and resolved / not a bug:
 
+- ~~Unused source-image read on resume~~: the `--resume-from` branch no longer opens the input with `BioImage` just to read channel names it never used. Resuming still reads the source once, for the startup pixel-size check (`get_pixel_size`), which matters for the planned OMERO reader.
 - ~~Delaunay on too few cells~~: `delaunay_edges` no longer raises. Fewer than 2 points give no edges. With 2 points, or when Qhull can't triangulate because all points are collinear or identical, consecutive points along the main axis are joined, which is the Delaunay graph's limit, and the distance filter still applies. The full pipeline still needs enough cells for k-means (`--n-clusters`), Scanpy neighbours and UMAP, so tiny inputs fail later anyway; this fix protects the sweeps and library callers.
 - ~~Pixel size can change on resume~~: when `--resume-from` reuses a `_seg.zarr` with a table, `cli.py` reads the stored pixel size. If it differs from the current one (`rtol=1e-3`), the run warns and continues with the stored value, so the network, radius conversions and re-stored value stay consistent with the existing shapes. Older Zarrs with no stored value keep the current one. The startup check still needs a pixel size from metadata or `--pixel-size`, even when resuming.
 - ~~Unreachable InstanSeg warning~~: `run_instanseg` now raises `ValueError` at the start, before importing torch, if `pixel_size_um` is missing or not positive. This protects library callers; the CLI already stops at startup.
