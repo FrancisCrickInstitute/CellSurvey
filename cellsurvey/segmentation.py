@@ -12,6 +12,11 @@ TensorFlow and InstanSeg are imported lazily inside their runners so that each
 environment only needs its own framework.
 """
 
+import ctypes
+import importlib.util
+import os
+import sys
+
 import numpy as np
 import pandas as pd
 import geopandas as gpd
@@ -27,8 +32,51 @@ from bioio import BioImage
 from cellsurvey.utils import STARDIST_NUCLEI_KEY, NUCLEI_KEY, CELLS_KEY
 
 
+# CUDA libraries from the pip ``nvidia-*-cu12`` wheels, in dependency order
+# (nvjitlink and cublas before cusparse, all of them before cusolver).
+_TF_CUDA_LIBS = [
+    ('cuda_runtime', 'libcudart.so.12'),
+    ('nvjitlink', 'libnvJitLink.so.12'),
+    ('cublas', 'libcublasLt.so.12'),
+    ('cublas', 'libcublas.so.12'),
+    ('cusparse', 'libcusparse.so.12'),
+    ('cufft', 'libcufft.so.11'),
+    ('curand', 'libcurand.so.10'),
+    ('cusolver', 'libcusolver.so.11'),
+    ('cuda_nvrtc', 'libnvrtc.so.12'),
+]
+
+
+def _preload_tf_cuda_libs():
+    """Load the pip-installed CUDA libraries TensorFlow needs, by full path.
+
+    TF 2.21's wheel lists only some ``nvidia/*/lib`` folders in its RUNPATH;
+    cusolver, nvjitlink, curand and nvrtc are missing. TF then cannot find
+    ``libcusolver.so.11`` and silently runs on CPU. ``LD_LIBRARY_PATH`` is also
+    searched before RUNPATH, so a system CUDA (e.g. ``/usr/local/cuda/lib64``
+    from CUDA 13) can supply a mismatched ``libcusparse.so.12``. Once a library
+    is loaded, later lookups by name reuse it, so preloading the bundled copies
+    fixes both. Linux only; does nothing when the wheels are absent (CPU/Windows).
+    """
+    if not sys.platform.startswith('linux'):
+        return
+    spec = importlib.util.find_spec('nvidia')
+    if spec is None or not spec.submodule_search_locations:
+        return
+    for pkg, soname in _TF_CUDA_LIBS:
+        for base in spec.submodule_search_locations:
+            path = os.path.join(base, pkg, 'lib', soname)
+            if os.path.exists(path):
+                try:
+                    ctypes.CDLL(path, mode=ctypes.RTLD_GLOBAL)
+                except OSError as e:
+                    print(f"WARNING: could not preload {path}: {e}")
+                break
+
+
 def run_stardist(sdata, channel, use_gpu=False):
     """Segment nuclei with Stardist (``2D_versatile_fluo``) into ``stardist_boundaries``."""
+    _preload_tf_cuda_libs()
     try:
         import tensorflow as tf
     except ImportError as e:

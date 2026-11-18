@@ -48,6 +48,7 @@ There are no tests, no linter config and no CI. To check a change, run the pipel
 ## Gotchas worth remembering
 
 - `run.py` sets `TF_USE_LEGACY_KERAS=1` before any imports (Stardist needs `tf_keras` on TF ≥2.16). It also preloads the env's `libstdc++.so.6`. That preload is duplicated at the top of `cli.py`, so change both together.
+- `run_stardist` preloads the pip `nvidia/*/lib` CUDA libraries (`_preload_tf_cuda_libs`), because TF 2.21's wheel can't find `libcusolver.so.11` by itself and would silently fall back to the CPU. Don't remove this preload. Bare `python -c "import tensorflow"` tests skip it, so they aren't a valid GPU check.
 - `matplotlib.use('Agg')` must come before `pyplot` imports, and Scanpy plots need `show=False`.
 - AnnData `.X` may be sparse or dense; check with `hasattr(X, 'toarray')`.
 - Pandas ArrowStringArray breaks Zarr writes. Keep the `pd.option_context('future.infer_string', False)` around `sopa.aggregate` and `obs.index.astype(str)`.
