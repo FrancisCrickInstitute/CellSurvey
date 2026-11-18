@@ -113,6 +113,11 @@ clusters (`cell_type_to_cell_type.png`).
     run stops at startup and asks for `--pixel-size` (µm/px). InstanSeg also
     uses it to rescale the image to its training resolution.
 
+    When resuming (`--resume-from`) from a segmented Zarr, the pixel size stored
+    in it is used, because that is what segmentation used. If you pass a
+    different `--pixel-size`, a warning is printed and the stored value is kept.
+    To change it, re-run segmentation without `--resume-from`.
+
 By default the GPU is auto-detected. With Stardist, `--use-gpu` tells the
 pipeline to attempt the GPU backend when detection fails but a GPU is present.
 InstanSeg always uses the GPU when PyTorch can see CUDA. If it can't, `--use-gpu`

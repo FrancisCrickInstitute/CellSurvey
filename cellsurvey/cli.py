@@ -26,7 +26,7 @@ from spatialdata.models import PointsModel
 from spatialdata.transformations import Identity
 
 from cellsurvey.utils import (remove_channel_suffix, cluster_data, assign_spots_to_cells,
-                              resolve_shape_keys, store_pixel_size,
+                              resolve_shape_keys, store_pixel_size, resolve_pixel_size,
                               STARDIST_NUCLEI_KEY, NUCLEI_KEY, CELLS_KEY)
 from cellsurvey.blob_detection import detect_blobs_tiled
 from cellsurvey.network_analysis import run_network_analysis
@@ -210,6 +210,18 @@ def main():
                 needs_segmentation = False
                 needs_aggregation = False
                 sdata = dataset
+                # Segmentation/expansion used the stored pixel size; keep using it
+                # so the µm conversions stay consistent with the existing shapes.
+                try:
+                    stored_px = resolve_pixel_size(sdata)
+                except ValueError:
+                    stored_px = None  # older Zarr, or invalid stored value
+                if stored_px is not None and not np.isclose(stored_px, pixel_size_um, rtol=1e-3):
+                    print(f"WARNING: pixel size {pixel_size_um:.4f} µm/px differs from the "
+                          f"{stored_px:.4f} µm/px stored in {seg_zarr_path}, which segmentation "
+                          f"used; continuing with the stored value. Re-segment (without "
+                          f"--resume-from) to use the new one.")
+                    pixel_size_um = stored_px
             elif all(k in dataset.shapes for k in seg_layers):
                 print(f"Segmented Zarr has {', '.join(seg_layers)} but no table, re-running aggregation only")
                 needs_segmentation = False
