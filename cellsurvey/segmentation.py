@@ -140,7 +140,16 @@ def run_instanseg(sdata, channels, pixel_size_um, model_type='fluorescence_nucle
     nucleus it contains via a ``nucleus_id`` column (see
     :func:`link_nuclei_to_cells`). Cells with no nucleus, which are mostly
     cytoplasm fragments, are dropped unless ``keep_unnucleated`` is set.
+
+    ``pixel_size_um`` (µm/px) is required: InstanSeg rescales the image to its
+    training resolution, and without it finds few or no cells.
     """
+    # Fail fast, before importing torch or touching the image.
+    if pixel_size_um is None or not pixel_size_um > 0:
+        raise ValueError(f"InstanSeg needs a positive pixel size in µm/px (got {pixel_size_um}); "
+                         "without it the image is not rescaled to the model's training resolution "
+                         "and few or no cells are found. Pass --pixel-size.")
+
     # Check the real dependencies up front; instanseg itself is otherwise only
     # imported inside the first patch, after patching has started.
     try:
@@ -158,10 +167,6 @@ def run_instanseg(sdata, channels, pixel_size_um, model_type='fluorescence_nucle
     else:
         print("WARNING: No GPU detected. InstanSeg will run on CPU and may be slow.")
     sopa.settings.parallelization_backend = None
-
-    if pixel_size_um is None:
-        print("WARNING: no pixel size for InstanSeg; the image is not rescaled to the model's "
-              "training resolution and it may find few or no cells. Pass --pixel-size.")
 
     device = 'cuda' if has_cuda else 'cpu'
     for output, key in (('nuclei', NUCLEI_KEY), ('cells', CELLS_KEY)):
