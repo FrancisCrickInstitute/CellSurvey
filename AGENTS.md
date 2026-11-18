@@ -228,6 +228,10 @@ Open:
   - **Background channels used as markers**: cluster 3 (17 cells) is high in TRITC and Cy5, unstained background channels that appear twice in the COMET channel list, and raised across many markers, so it is likely autofluorescent cells. All aggregated channels currently feed k-means and the Louvain edge weights. Add an option to exclude channels from clustering by name or index (e.g. `--exclude-channels TRITC,Cy5,AF`), still aggregating them so they stay in the table. This would also cover `AF` from the OMERO qptiff findings.
   - Also consider a minimum cluster size, or choosing k from the cluster sweep (inertia plus a subsampled silhouette score).
 
+- **Windows: `UnicodeEncodeError` when output is redirected**: with stdout piped or sent to a file, Windows Python encodes with cp1252, and printing channel names such as `αSMA` crashes the run. Workaround: `PYTHONIOENCODING=utf-8`. Fix: `sys.stdout.reconfigure(encoding='utf-8')` (and stderr) at the top of `run.py`. Interactive consoles and Linux are unaffected.
+- **Windows: Stardist on CPU is extremely slow**: a local run on `test_crop` used more than an hour of CPU time in segmentation (4 patches), against about 14 s on an HPC CPU node. Not investigated; win-64 is only for local testing.
+- **TF gets imported late in the default env** (not a bug): after the network step, Scanpy's UMAP imports umap-learn, which optionally imports TensorFlow (for `ParametricUMAP`) when it is installed. It costs some import time and logs TF's CPU-feature message. The instanseg env has no TF.
+
 Checked and resolved / not a bug:
 
 - ~~Unused source-image read on resume~~: the `--resume-from` branch no longer opens the input with `BioImage` just to read channel names it never used. Resuming still reads the source once, for the startup pixel-size check (`get_pixel_size`), which matters for the planned OMERO reader.
