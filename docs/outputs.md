@@ -75,7 +75,7 @@ All plots are PNG files written to `--plot_dir`.
 | `umap_kmeans_cluster.png` | UMAP embedding of cells coloured by k-means cluster. |
 | `umap_leiden.png` | UMAP embedding coloured by Leiden cluster. |
 | `cell_density.png` | Per-cluster and per-community spatial density maps. |
-| `cluster_intensity_heatmap.png` | Mean channel intensity per k-means cluster, z-scored per channel across all cells (0 = average cell; red = higher, blue = lower). |
+| `cluster_intensity_heatmap.png` | Mean channel intensity per k-means cluster, z-scored per channel across all cells (0 = average cell; red = higher, blue = lower). The colour scale is capped at ±3, so more extreme values show as the darkest colour. |
 | `morphology_by_cluster.png` | Cell area by cluster (only present if an `area` column exists). |
 
 ## QuPath GeoJSON

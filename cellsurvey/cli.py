@@ -483,8 +483,12 @@ def main():
     intensity_z = ((intensity_df - intensity_df.mean()) / channel_std).fillna(0)
     cluster_means = intensity_z.groupby(sdata.tables['table'].obs['kmeans_cluster']).mean()
     plt.figure(figsize=(max(8, cluster_means.shape[1] * 0.4), max(6, cluster_means.shape[0] * 0.5)))
-    sns.heatmap(cluster_means, cmap='RdBu_r', center=0, xticklabels=True, yticklabels=True,
-                cbar_kws={'label': 'Mean intensity (z-score across cells)'})
+    # Cap the colour scale at ±3 SD so one outlier cluster (e.g. a single debris
+    # cell at z≈20) can't wash out the differences between the others.
+    sns.heatmap(cluster_means, cmap='RdBu_r', center=0, vmin=-3, vmax=3,
+                xticklabels=True, yticklabels=True,
+                cbar_kws={'label': 'Mean intensity (z-score across cells, capped at ±3)',
+                          'extend': 'both'})
     plt.title('Mean channel intensity per k-means cluster')
     plt.xlabel('Channel')
     plt.ylabel('Cluster')
