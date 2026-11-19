@@ -76,3 +76,43 @@ def detect_blobs_tiled(image, tile_size=1024, overlap=50, min_sigma=2, max_sigma
 
     print(f"Found {len(all_blobs)} blobs total")
     return all_blobs
+
+
+def detect_spots(image, channel_index, thresholds, tile_size=1024, overlap=50, min_sigma=2, max_sigma=5,
+                 num_sigma=5, n_workers=8):
+    """Detect spots in selected channels of a ``(c, y, x)`` image.
+
+    ``image`` is an xarray ``DataArray`` with channel names as its ``c`` coords
+    (e.g. ``sopa.utils.get_spatial_image(sdata)`` on ``<prefix>.zarr``); only
+    the selected channels are read. Each channel is passed as a ``(y, x)``
+    array to :func:`detect_blobs_tiled`, so another detector (e.g. Spotiflow)
+    can replace it there. Returns a SpatialData points element with columns
+    ``x``, ``y``, ``sigma`` and ``gene`` (the channel name).
+    """
+    import pandas as pd
+    from spatialdata.models import PointsModel
+    from spatialdata.transformations import Identity
+
+    n_channels = image.sizes['c']
+    bad = [ci for ci in channel_index if not 0 <= ci < n_channels]
+    if bad:
+        raise ValueError(f"Blob-detection channel index {bad} out of range: the image has {n_channels} "
+                         f"channels (0..{n_channels - 1})")
+    channel_names = [str(c) for c in image.coords['c'].values]
+
+    frames = []
+    for ci, t in zip(channel_index, thresholds):
+        ch_name = channel_names[ci]
+        print(f'Finding blobs in channel {ch_name} (index {ci})...')
+        blobs = detect_blobs_tiled(image.data[ci], tile_size=tile_size, overlap=overlap, threshold=t,
+                                   min_sigma=min_sigma, max_sigma=max_sigma, num_sigma=num_sigma,
+                                   n_workers=n_workers)
+        frames.append(pd.DataFrame({
+            "x": blobs[:, 1],
+            "y": blobs[:, 0],
+            "sigma": blobs[:, 2],
+            "gene": np.array([ch_name] * len(blobs)),
+        }))
+
+    df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=["x", "y", "sigma", "gene"])
+    return PointsModel.parse(df, coordinates={"x": "x", "y": "y"}, transformations={"global": Identity()})

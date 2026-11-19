@@ -80,6 +80,20 @@ class ImageSource:
             sdata.write(zarr_path, overwrite=True)
 
 
+def stored_pixel_size(sdata):
+    """Return the pixel size (µm/px) stored by :meth:`ImageSource.to_spatialdata`, or ``None``.
+
+    ``None`` for Zarrs written before it was stored, or if the stored value is
+    not a positive number.
+    """
+    value = sdata.attrs.get(ATTRS_KEY, {}).get('pixel_size_um')
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
 def open_image_source(path):
     """Open the input image at ``path`` as an :class:`ImageSource`.
 

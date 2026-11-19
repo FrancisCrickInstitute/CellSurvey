@@ -20,16 +20,12 @@ import seaborn as sns
 import scanpy as sc
 import spatialdata
 import sopa
-from bioio import BioImage
-from dask_image.imread import imread
-from spatialdata.models import PointsModel
-from spatialdata.transformations import Identity
 
 from cellsurvey.utils import (remove_channel_suffix, cluster_data, assign_spots_to_cells,
                               resolve_shape_keys, store_pixel_size, resolve_pixel_size,
                               STARDIST_NUCLEI_KEY, NUCLEI_KEY, CELLS_KEY)
-from cellsurvey.blob_detection import detect_blobs_tiled
-from cellsurvey.image_source import open_image_source
+from cellsurvey.blob_detection import detect_spots
+from cellsurvey.image_source import open_image_source, stored_pixel_size
 from cellsurvey.network_analysis import run_network_analysis
 from cellsurvey.segmentation import get_pixel_size, expand_nuclei, run_stardist, run_instanseg
 from cellsurvey.export import export_to_qupath
@@ -103,9 +99,28 @@ def main():
 
     imagepath = args.input_file
 
+    # Check blob-detection arguments before reading anything.
+    if args.detect_blobs:
+        try:
+            channel_index = [int(c) for c in args.channels.split(',')]
+            thresholds = [float(t) for t in args.thresholds.split(',')]
+        except ValueError:
+            parser.error("--channels must be comma-separated integers and --thresholds comma-separated numbers")
+        if len(channel_index) != len(thresholds):
+            parser.error(
+                f"Number of channels ({len(channel_index)}) must match number of thresholds ({len(thresholds)})")
+
+    resume_zarr_path = None
+    if args.resume_from:
+        resume_zarr_path = args.resume_from
+        if not resume_zarr_path.endswith('.zarr'):
+            resume_zarr_path += '.zarr'
+        if not os.path.exists(resume_zarr_path):
+            parser.error(f"Resume Zarr not found: {resume_zarr_path}")
+
     # New runs open the input image once, here (lazily); stage 1 writes it to
-    # <prefix>.zarr and every later stage reads only that. Resumed runs work
-    # from the existing Zarr and only look up the pixel size.
+    # <prefix>.zarr and every later stage reads only that. Resumed runs never
+    # open the source unless an older Zarr lacks a stored pixel size.
     source = None if args.resume_from else open_image_source(imagepath)
 
     if args.pixel_size is not None:
@@ -114,13 +129,21 @@ def main():
         pixel_size_um = args.pixel_size
         print(f"Physical pixel size (from --pixel-size): {pixel_size_um:.4f} µm/px")
     else:
-        pixel_size_um = source.pixel_size_um if source is not None else get_pixel_size(imagepath)
+        pixel_size_origin = "image metadata"
+        if source is not None:
+            pixel_size_um = source.pixel_size_um
+        else:
+            pixel_size_um = stored_pixel_size(spatialdata.read_zarr(resume_zarr_path))
+            if pixel_size_um is not None:
+                pixel_size_origin = f"stored in {resume_zarr_path}"
+            else:  # Zarr written before pixel sizes were stored
+                pixel_size_um = get_pixel_size(imagepath)
         if pixel_size_um is None:
             # Fail before any loading/segmentation: every distance parameter is in µm.
             parser.error("No physical pixel size in the image metadata; pass --pixel-size (µm/px). "
                          "It is needed because --max-edge-distance, --radius-min/--radius-max and "
                          "--cell-expansion are in µm.")
-        print(f"Physical pixel size: {pixel_size_um:.4f} µm/px")
+        print(f"Physical pixel size ({pixel_size_origin}): {pixel_size_um:.4f} µm/px")
 
     # Shape layers the chosen segmenter writes; used to decide whether a resumed
     # _seg.zarr already holds this segmenter's output. (cell_boundaries alone is
@@ -136,61 +159,15 @@ def main():
         args.geojson_path = zarr_path[:-len('.zarr')] + '.geojson'
 
     if args.resume_from:
-        zarr_path = args.resume_from
-        if not zarr_path.endswith('.zarr'):
-            zarr_path += '.zarr'
-        if not os.path.exists(zarr_path):
-            parser.error(f"Resume Zarr not found: {zarr_path}")
+        zarr_path = resume_zarr_path
         print(f"Resuming from existing Zarr: {zarr_path}")
-    elif args.detect_blobs:
-        channel_index = list(map(int, args.channels.split(',')))
-        thresholds = list(map(float, args.thresholds.split(',')))
-
-        if len(channel_index) != len(thresholds):
-            parser.error(
-                f"Number of channels ({len(channel_index)}) must match number of thresholds ({len(thresholds)})")
-
-        channel_names = BioImage(imagepath).channel_names
-        image = imread(imagepath)[channel_index]
-
-        dataset = source.to_spatialdata(pixel_size_um)
-
-        frames = []
-
-        for i, (ci, t) in enumerate(zip(channel_index, thresholds)):
-            ch_name = channel_names[ci]
-            print(f'Finding blobs in channel {ch_name} (index {ci})...')
-            blobs = detect_blobs_tiled(image[i], tile_size=args.tile_size, overlap=args.overlap, threshold=t,
-                                       min_sigma=args.min_sigma, max_sigma=args.max_sigma,
-                                       num_sigma=args.num_sigma, n_workers=args.workers)
-
-            frames.append(pd.DataFrame({
-                "x": blobs[:, 1],
-                "y": blobs[:, 0],
-                "sigma": blobs[:, 2],
-                "gene": np.array([ch_name] * len(blobs)),
-            }))
-
-        df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=["x", "y", "sigma", "gene"])
-
-        points = PointsModel.parse(
-            df,
-            coordinates={"x": "x", "y": "y"},
-            transformations={"global": Identity()},
-        )
-
-        dataset["spots"] = points
-
-        print(f'Saving Zarr to {zarr_path}')
-
-        try:
-            source.write(dataset, zarr_path)
-        except Exception as e:
-            print(f"ERROR: Failed to write Zarr to {zarr_path}: {e}", file=sys.stderr)
-            sys.exit(1)
-
-        print("Done")
     else:
+        # Stage 1: write the image (only) to <prefix>.zarr. Blob detection runs
+        # afterwards on this local copy, so the source is read once.
+        if args.detect_blobs:
+            bad = [ci for ci in channel_index if not 0 <= ci < source.data.shape[0]]
+            if bad:
+                parser.error(f"--channels {bad} out of range: the image has {source.data.shape[0]} channels")
         dataset = source.to_spatialdata(pixel_size_um)
         print(f'Saving Zarr to {zarr_path}')
 
@@ -232,6 +209,33 @@ def main():
         except Exception:
             import shutil
             shutil.rmtree(seg_zarr_path, ignore_errors=True)
+
+    # Blob detection, on the local <prefix>.zarr (never the source). Only when
+    # segmentation will re-read that Zarr; a reused _seg.zarr already has its spots.
+    if args.detect_blobs:
+        if needs_segmentation:
+            image_sdata = spatialdata.read_zarr(zarr_path)
+            if 'spots' in image_sdata.points:
+                print(f"{zarr_path} already has spots; skipping blob detection")
+            else:
+                try:
+                    points = detect_spots(sopa.utils.get_spatial_image(image_sdata), channel_index, thresholds,
+                                          tile_size=args.tile_size, overlap=args.overlap,
+                                          min_sigma=args.min_sigma, max_sigma=args.max_sigma,
+                                          num_sigma=args.num_sigma, n_workers=args.workers)
+                except ValueError as e:
+                    parser.error(str(e))
+                image_sdata['spots'] = points
+                print(f'Adding spots to {zarr_path}')
+                try:
+                    image_sdata.write_element('spots')
+                except Exception as e:
+                    print(f"ERROR: Failed to write spots to {zarr_path}: {e}", file=sys.stderr)
+                    sys.exit(1)
+                print("Done")
+        elif 'spots' not in dataset.points:
+            print(f"WARNING: --detect-blobs ignored: the reused {seg_zarr_path} has no spots. "
+                  f"Re-run without --resume-from to detect them.")
 
     if needs_segmentation:
         print("Loading Zarr...")

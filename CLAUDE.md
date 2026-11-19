@@ -19,7 +19,7 @@ pixi install -e instanseg     # instanseg env: PyTorch, no TF
 pixi run python run.py -i <input.tiff> -o <output_prefix> -p <plot_dir> [--detect-blobs]
 pixi run -e instanseg python run.py --segmenter instanseg -i <input.tiff> -o <output_prefix> -p <plot_dir>
 
-# Resume from an existing Zarr (skips loading/spot detection; reuses <prefix>_seg.zarr if valid)
+# Resume from an existing Zarr (never re-reads the input; reuses spots and <prefix>_seg.zarr if valid)
 pixi run python run.py -i <input.tiff> -o <output_prefix> -p <plot_dir> --resume-from <output_prefix>.zarr
 
 # Read-only parameter sweeps over an existing segmented Zarr (writes CSVs next to it)
@@ -43,7 +43,7 @@ There are no tests, no linter config and no CI. To check a change, run the pipel
 - **Lazy framework imports**: TensorFlow is imported only inside `segmentation.run_stardist`, and torch/InstanSeg only inside `run_instanseg`. Importing `cellsurvey` must not pull in either one, or the other env breaks. The long-term plan is to drop Stardist/TF, so keep Stardist-specific code isolated there.
 - **Sopa coupling should shrink over time**: Sopa has a single maintainer and is a risk. Prefer owning the logic over adding new Sopa dependencies. Do not use `sopa.shapes.expand.remove_overlap` or `sopa.aggregate(no_overlap=True)`: they empty cells on dense data (see the untracked `SOPA_REMOVE_OVERLAP_FIX.md`). The project uses its own watershed expansion instead.
 - **Distances are in µm, coordinates in pixels.** `--max-edge-distance`, `--radius-min/max` and `--cell-expansion` are µm and are converted at the point of use (`value_um / pixel_size_um`). The pixel size comes from OME metadata (bioio) or `--pixel-size`; if neither exists the run stops at startup. It is stored in `table.uns['cellsurvey']['pixel_size_um']` (`utils.store_pixel_size`), and `utils.resolve_pixel_size` reads it back, so the stability sweep works without `--pixel-size` (except on older Zarrs). On `--resume-from` with an existing table, the stored value wins, with a warning if it differs. InstanSeg also uses it to rescale to its training resolution, so a wrong value can make it find few cells.
-- **Input** must be a 3D/4D multichannel TIFF (read via `sopa.io.ome_tif` / dask_image). ND2, CZI and similar formats are not supported yet.
+- **Input** must be a 3D/4D multichannel TIFF (read via `sopa.io.ome_tif` / dask_image). ND2, CZI and similar formats are not supported yet. The input is read only in stage 1 (`image_source.open_image_source`), which writes `<prefix>.zarr`. Blob detection and everything after it read that Zarr, so don't add reads of the input file elsewhere (an OMERO source is planned).
 
 ## Gotchas worth remembering
 

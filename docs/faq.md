@@ -99,8 +99,10 @@ Use `--resume-from` with the path to an existing Zarr:
 pixi run python run.py -i <image> -o <output> -p <plots> --resume-from <output>.zarr
 ```
 
-This skips image loading and spot detection. If a segmented Zarr (`*_seg.zarr`)
-already exists, the pipeline also skips the stages it can reuse. Pass the same
+This skips reading the input image (the pixel size stored in the Zarr is used)
+and reuses any spots already detected. With `--detect-blobs`, spots missing from
+the Zarr are detected from it. If a segmented Zarr (`*_seg.zarr`) already exists,
+the pipeline also skips the stages it can reuse. Pass the same
 `--segmenter` (and use the same pixi environment) as the original run. See
 [Pipeline](pipeline.md) for the exact reuse rules.
 

@@ -13,11 +13,11 @@ it takes in, and what it produces.
 ```mermaid
 flowchart TD
     A["OME-TIFF image"] --> B["1. Load image<br>+ channel names"]
-    B --> C{"Detect<br>RNA spots?"}
-    C -- "yes (--detect-blobs)" --> D["2. Spot detection<br>(tiled LoG)"]
-    C -- "no" --> E["3. Initial Zarr<br>checkpoint"]
-    D --> E
-    E --> F["4. Segmentation<br>(Stardist or InstanSeg)"]
+    B --> E["2. Initial Zarr<br>checkpoint"]
+    E --> C{"Detect<br>RNA spots?"}
+    C -- "yes (--detect-blobs)" --> D["3. Spot detection<br>(tiled LoG, from the Zarr)"]
+    C -- "no" --> F
+    D --> F["4. Segmentation<br>(Stardist or InstanSeg)"]
     F --> G["5. Aggregation<br>(per-cell intensity)"]
     G --> H["6. K-means clustering"]
     H --> I["7. Network analysis<br>(Delaunay + Louvain)"]
@@ -35,52 +35,51 @@ Each stage is described below, with the module/function that performs it.
 
 Reads the input image and discovers its channel (marker) names.
 
-- **What it does**: loads the multichannel image with `sopa.io.ome_tif()`, and
-  reads channel names from the OME-XML metadata via `BioImage` (from `bioio`).
+- **What it does**: opens the multichannel image lazily with `sopa.io.ome_tif()`
+  (channel names from the OME-XML) and reads the physical pixel size from the
+  OME metadata via `bioio`.
 - **Input**: an OME-TIFF (or plain multi-channel TIFF).
-- **Output**: a SpatialData dataset, plus a list of channel names.
-- **Where**: `cellsurvey/cli.py`.
+- **Output**: a lazy image with its channel names and pixel size.
+- **Where**: `cellsurvey/image_source.py` (`open_image_source`).
 
-There are three code paths depending on the flags:
-
-| Situation | Behaviour |
-|---|---|
-| Neither `--resume-from` nor `--detect-blobs` | Load full image, write Zarr immediately (stage 3). |
-| `--detect-blobs` | Load only the channels needed for spot detection, then write Zarr with spots. |
-| `--resume-from` | Skip loading entirely — read channel names from the existing image, but open the Zarr directly. |
+The input image is read **only here, once**: stage 2 copies it into
+`<output>.zarr`, and every later stage reads that copy. With `--resume-from`
+the input image is not opened at all; the pixel size is taken from the Zarr.
 
 !!! note "Input format"
     Only **multi-channel TIFF** is supported (`.ome.tiff`, `.tiff`, `.tif`).
     ND2 / CZI / LIF / DV and single-channel 2D images are not currently
     accepted. See [FAQ](faq.md).
 
-## 2. Spot / blob detection (optional)
+## 2. Initial Zarr write
+
+Writes the image to disk as a SpatialData Zarr store.
+
+- **What it does**: persists a clean checkpoint before the expensive
+  segmentation step. The pixel size and the input's location are recorded in
+  the store (`attrs['cellsurvey']`).
+- **Output**: `<output>.zarr`.
+- **Where**: `cellsurvey/cli.py` and `cellsurvey/image_source.py`.
+
+## 3. Spot / blob detection (optional)
 
 Detects RNA spots, only when `--detect-blobs` is passed.
 
-- **What it does**: for each configured channel, runs tiled
-  Laplacian-of-Gaussian blob detection (`skimage.feature.blob_log`), parallelised
-  with `dask`. Overlapping tiles and overlap-region filtering avoid double
-  counting at tile seams.
-- **Input**: the channel subset specified by `--channels`.
-- **Output**: a `spots` points layer added to the dataset.
-- **Where**: `cellsurvey/blob_detection.py` (`detect_blobs_tiled`).
+- **What it does**: for each configured channel of the image in `<output>.zarr`,
+  runs tiled Laplacian-of-Gaussian blob detection (`skimage.feature.blob_log`),
+  parallelised with `dask`. Overlapping tiles and overlap-region filtering avoid
+  double counting at tile seams. Only the selected channels are read.
+- **Input**: the channel subset specified by `--channels`, read from the Zarr.
+- **Output**: a `spots` points layer added to `<output>.zarr`.
+- **Where**: `cellsurvey/blob_detection.py` (`detect_spots`, `detect_blobs_tiled`).
 
 The channels and their thresholds are set with `--channels` and `--thresholds`
 (must have equal length). See [Parameters](parameters.md).
 
-## 3. Initial Zarr write
-
-Writes the dataset (with or without spots) to disk as a SpatialData Zarr store.
-
-- **What it does**: persists a clean checkpoint before the expensive
-  segmentation step.
-- **Output**: `<output>.zarr`.
-- **Where**: `cellsurvey/cli.py`.
-
-This checkpoint is intentional: the pipeline writes it, then immediately reads
-it back before segmentation, so the spots-including dataset is materialised as a
-clean state.
+When resuming (`--resume-from`) with `--detect-blobs`, spots already in the Zarr
+are reused. If the Zarr has none (e.g. a run that crashed during spot detection),
+they are detected then, unless an existing segmented Zarr is being reused, in
+which case a warning says to re-run without `--resume-from`.
 
 ## 4. Segmentation
 

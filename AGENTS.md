@@ -75,12 +75,9 @@ There is no build step, no test command, and no linting configured.
 
 The pipeline is split into modules under the `cellsurvey/` package. `run.py` is a shim that sets environment variables (TF_USE_LEGACY_KERAS), preloads libstdc++, and delegates to `cellsurvey.cli.main()`. The pipeline runs these stages sequentially:
 
-1. **Image loading** (`cli.py`): Reads the OME-TIFF via `BioImage` (from `bioio`) to get channel names, and via `sopa.io.ome_tif()` as a SpatialData dataset. Three code paths at this stage:
-   - `--resume-from`: Skips image loading entirely — reads channel names from the existing image via `BioImage` but loads the Zarr directly.
-   - `--detect-blobs`: Loads only the subset of channels needed for blob detection via `dask_image.imread` to limit memory usage.
-   - Neither flag: Loads the full dataset via `sopa.io.ome_tif()` and writes Zarr immediately (no blob detection).
+1. **Image loading + initial Zarr** (`cli.py` → `image_source.py`): New runs call `open_image_source(path)` once at startup. This gives a lazy `(c, y, x)` image, channel names (`sopa.io.ome_tif(..., as_image=True)`) and the pixel size (`get_pixel_size`, bioio). `ImageSource.to_spatialdata()` + `write()` then write `<prefix>.zarr` (image only, with `attrs['cellsurvey'] = {pixel_size_um, source}`). **The source is read only here**; every later stage reads the Zarr. `--resume-from` never opens the source: the pixel size comes from `--pixel-size`, else `attrs['cellsurvey']` in the resume Zarr (`image_source.stored_pixel_size`), else (older Zarrs only) `get_pixel_size(imagepath)`. Blob `--channels`/`--thresholds` are parsed and checked (lengths, then index range against the source) before anything is written.
 
-2. **Spot/blob detection** (`cli.py` → `blob_detection.py`): Only runs when `--detect-blobs` is passed. For each configured channel, runs tiled Laplacian-of-Gaussian blob detection (`skimage.feature.blob_log`) parallelized with `dask.delayed` and a thread pool (`dask.compute(..., scheduler='threads')`). Overlapping tiles with overlap region filtering prevent duplicate detections. Results are assembled into a `PointsModel` and stored in `dataset["spots"]`.
+2. **Spot/blob detection** (`cli.py` → `blob_detection.detect_spots`): Only runs when `--detect-blobs` is passed, **after** the initial Zarr write, on the image read back from `<prefix>.zarr` (`sopa.utils.get_spatial_image`); spots are added with `write_element('spots')`. `detect_spots` passes each selected channel as a `(y, x)` array to `detect_blobs_tiled` (tiled Laplacian-of-Gaussian, `skimage.feature.blob_log`, parallelised with `dask.delayed` on threads; overlap-region filtering prevents duplicates), so a different detector (e.g. Spotiflow) can be swapped in there. Gene names are the Zarr's channel names. It runs only when segmentation will re-read `<prefix>.zarr`. On `--resume-from`, existing spots are reused. Missing spots are detected then, unless a `_seg.zarr` is being reused, in which case it warns. Before 2026-11 detection ran on the TIFF before a single write (a March prototype choice for Spotiflow); on a synthetic OME-TIFF both orders give identical spots.
 
 3. **Initial Zarr write** (`cli.py`): The dataset (with or without spots) is written to disk with try/except error handling.
 
@@ -135,7 +132,7 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 | `--max-edge-distance` | `50` | Max edge length (µm) for the Delaunay network |
 | `--radius-min` | `0` | Min radius (µm) for spatial neighbors graph |
 | `--radius-max` | `280` | Max radius (µm) for spatial neighbors graph |
-| `--resume-from` | — | Path to existing Zarr to resume from (skips image loading and spot detection) |
+| `--resume-from` | — | Path to existing Zarr to resume from (never opens the input image; reuses spots, detects them only if missing and `--detect-blobs` is set) |
 | `--geojson-path` | `<output_file>.geojson` | Output path for QuPath GeoJSON |
 | `--font-size` | `20` | Font size for plots |
 | `--axes-linewidth` | `3` | Axes line width for plots |
@@ -184,9 +181,9 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 
 - **Segmented Zarr write uses tempfile + atomic rename**: The segmented Zarr is written to a temporary directory and then atomically renamed into place. This prevents "path in use" errors that occur when `spatialdata.read_zarr()` has the backing store open (during `--resume-from` with a pre-existing `_seg.zarr`). After the rename, the temporary directory is cleaned up.
 
-- **`--resume-from` enables crash recovery**: If a Zarr already exists at the expected path, you can skip image loading and spot detection and resume from Stardist segmentation. When used with the segmented Zarr reuse logic, this provides two levels of checkpoint restart.
+- **`--resume-from` enables crash recovery**: If a Zarr already exists at the expected path, you can skip image loading (and reuse its spots) and resume from segmentation. When used with the segmented Zarr reuse logic, this provides two levels of checkpoint restart.
 
-- **Channel subset loading**: The full multichannel image is not loaded into memory for blob detection. Only the channels specified by `--channels` are loaded via `dask_image.imread`, reducing memory footprint. The full image is available on disk via the Zarr for Stardist segmentation.
+- **Channel subset loading**: The full multichannel image is not loaded into memory for blob detection. Only the channels specified by `--channels` are read (lazily, from the 1024²-chunked `<prefix>.zarr`); `detect_blobs_tiled` materialises one channel at a time.
 
 - **AnnData `.X` can be sparse or dense**: `sopa.aggregate()` may produce either a scipy sparse matrix or a dense numpy array depending on the input data size and sopa version. The intensity extraction in `cli.main()` (and `stability.extract_intensity_matrix`) handles both with `hasattr(measurements.X, 'toarray')`. Never assume `.X` is sparse.
 
@@ -210,7 +207,7 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 - NumPy, pandas, GeoPandas, and AnnData/Scanpy are the primary data structures
 - `run.py` is the entry-point shim — all logic lives in the `cellsurvey/` package modules. However, `cli.py` can also be run standalone (`python -m cellsurvey.cli`) since it duplicates the libstdc++ preload.
 - `export_to_qupath` takes `cell_ids`, `community_labels`, `cluster_labels`, `sdata`, `intensity_df`, and `spots_with_cells` as explicit parameters (no implicit closure on module globals)
-- The pipeline writes Zarr files at two points: the initial Zarr after image loading (and optionally blob detection), and the segmented Zarr after Stardist + aggregation. Both writes are wrapped in try/except and exit with code 1 on failure.
+- The pipeline writes Zarr files at two points: the initial Zarr after image loading (spots, if any, are then added to it with `write_element`), and the segmented Zarr after segmentation + aggregation. All writes are wrapped in try/except and exit with code 1 on failure.
 - The Zarr write-then-immediate-read pattern between stages 3 and 4 materializes a clean checkpoint. If segmented Zarr reuse kicks in (stage 4), the read of the initial Zarr is skipped entirely.
 - Segmentation channels come from `--seg-channels` (indices into `unique_channels`): Stardist takes exactly one (default `0`); InstanSeg defaults to all channels.
 - Dynamic imports inside except blocks: `import shutil` is imported inside the segmented Zarr corruption handler to avoid pulling it in unnecessarily.
@@ -234,7 +231,7 @@ Open:
 
 Checked and resolved / not a bug:
 
-- ~~Unused source-image read on resume~~: the `--resume-from` branch no longer opens the input with `BioImage` just to read channel names it never used. Resuming still reads the source once, for the startup pixel-size check (`get_pixel_size`), which matters for the planned OMERO reader.
+- ~~Unused source-image read on resume~~: the `--resume-from` branch no longer opens the input with `BioImage` just to read channel names it never used. Since the stage-1 reorder it doesn't read the source for the pixel size either, unless the Zarr predates stored pixel sizes.
 - ~~Delaunay on too few cells~~: `delaunay_edges` no longer raises. Fewer than 2 points give no edges. With 2 points, or when Qhull can't triangulate because all points are collinear or identical, consecutive points along the main axis are joined, which is the Delaunay graph's limit, and the distance filter still applies. The full pipeline still needs enough cells for k-means (`--n-clusters`), Scanpy neighbours and UMAP, so tiny inputs fail later anyway; this fix protects the sweeps and library callers.
 - ~~Pixel size can change on resume~~: when `--resume-from` reuses a `_seg.zarr` with a table, `cli.py` reads the stored pixel size. If it differs from the current one (`rtol=1e-3`), the run warns and continues with the stored value, so the network, radius conversions and re-stored value stay consistent with the existing shapes. Older Zarrs with no stored value keep the current one. The startup check still needs a pixel size from metadata or `--pixel-size`, even when resuming.
 - ~~Unreachable InstanSeg warning~~: `run_instanseg` now raises `ValueError` at the start, before importing torch, if `pixel_size_um` is missing or not positive. This protects library callers; the CLI already stops at startup.
@@ -558,7 +555,7 @@ Already checked: `sopa.io.ome_tif` is a thin wrapper (dask array → `Image2DMod
      - up to 3 retries per tile with a fresh store;
      - 8 readers by default.
    - **Closing**: close all pixel stores, then `conn.close(hard=False)` if we reused a session (so `omero login` stays valid), or `hard=True` if we logged in ourselves.
-3. **Stage 1 in `cli.py`**:
+3. **Stage 1 in `cli.py`** — **done (commit 2)**. Tested on a synthetic 4-channel OME-TIFF with Gaussian spots: the old flow (`imread` + `BioImage` names + `detect_blobs_tiled` on the TIFF) and the new flow (write the Zarr, `detect_spots` from it, `write_element`, read back) give identical spots (118; same x/y/sigma/gene). The stored pixel size survives `write_element`, and an out-of-range channel index gives a clear error. Resume-with-missing-spots and an end-to-end `--detect-blobs` run still need an HPC check. Details:
    - **New runs**: open the source once at startup. The pixel size comes from `--pixel-size`, or else the source. The startup check that stops the run without a pixel size stays.
    - **Resumed runs**: do not open the source. The pixel size comes from `--pixel-size`, or `attrs['cellsurvey']` in the resume Zarr, or, for older Zarrs only, the source's metadata. The existing `_seg.zarr` mismatch check stays.
    - **Write `<prefix>.zarr` first, then detect blobs** from the local copy (`sopa.utils.get_spatial_image`) and add spots with `write_element('spots')`, so the source is read once (decision d). Blob channel names come from `source.channel_names`. Channel indices are checked before any reading.
@@ -976,7 +973,7 @@ Ten tips spanning experimental design → platform selection → data structure 
 ├── cellsurvey/
 │   ├── __init__.py                   # Re-exports all public symbols
 │   ├── cli.py                        # main() with argparse and pipeline orchestration
-│   ├── blob_detection.py             # detect_blobs_in_tile, detect_blobs_tiled
+│   ├── blob_detection.py             # detect_spots ((c,y,x) DataArray → spots PointsModel) → detect_blobs_tiled → detect_blobs_in_tile
 │   ├── network_analysis.py           # run_network_analysis (µm → px) + compute_louvain_communities + delaunay_edges (scipy Delaunay + networkx Louvain, expr-similarity weights, summary.json)
 │   ├── stability.py                  # run_stability_sweep (community) + run_cluster_sweep (k-means), read-only → CSV
 │   ├── image_source.py               # ImageSource + open_image_source (stage-1 input; local TIFF now, OMERO planned) → to_spatialdata / write
