@@ -658,7 +658,12 @@ Already checked: `sopa.io.ome_tif` is a thin wrapper (dask array → `Image2DMod
 
 ### HPC test checklist (before merging `feature/omero` → `main`)
 
-**Status**: in progress (written 2026-11-19, `feature/omero` at `b63b4d7`). First pass 2026-11-20: test 2 passed. Test 1 failed only because `$OMERO` was empty in that shell, so the path became `/Image:602780` (now caught with a clear "Input image not found … must start with omero://" error); re-run it with the full URL. Test 3 exposed an old bug (zero blobs → float `gene` column → `sopa.aggregate` crash), now fixed (see below); re-run it with `--thresholds 1,1` to exercise the zero-spots path. Tick items off here as they pass and record anything surprising. `feature/omero` contains all of `feature/instanseg`, so passing tests 1–6 covers both branches; then `feature/omero` can fast-forward into `main` (no separate `feature/instanseg` merge needed). Paths in `<…>` are placeholders; use a small local TIFF (e.g. `test_crop`) for tests 2–5.
+**Status**: **tests 1–5 passed (2026-11-20)**; only test 6 (OMERO full run as a batch job) remains. History: on the first pass, test 1 failed only because `$OMERO` was empty in that shell, so the path became `/Image:602780` (now caught with a clear "Input image not found … must start with omero://" error). Test 3 exposed an old bug (zero blobs → float `gene` column → `sopa.aggregate` crash), now fixed (see stage 2). Second pass, after the fixes: all of 1–5 passed.
+
+Minor, harmless log noise seen (possible follow-ups, not blockers):
+- TF startup messages at the end of a resumed (no-segmentation) run come from `umap-learn` importing TensorFlow for its optional ParametricUMAP. Not our import; default env only.
+- `python -m cellsurvey.stability` warns `'cellsurvey.stability' found in sys.modules…` because `cellsurvey/__init__.py` imports `stability` eagerly.
+- On the first OMERO import in a fresh env, Ice's generated stubs print many `SyntaxWarning`s; they stop once Python has cached the compiled files. A `warnings` filter before the omero-py import in `omero_source` would hide them. Tick items off here as they pass and record anything surprising. `feature/omero` contains all of `feature/instanseg`, so passing tests 1–6 covers both branches; then `feature/omero` can fast-forward into `main` (no separate `feature/instanseg` merge needed). Paths in `<…>` are placeholders; use a small local TIFF (e.g. `test_crop`) for tests 2–5.
 
 **Setup** (once):
 ```bash
@@ -669,21 +674,21 @@ pixi run omero sessions group STP-CALM     # or log in again: pixi run omero log
 OMERO=omero://omero-prod.camp.thecrick.org   # set it in every new shell/job, or write the URL out in full
 ```
 
-- [ ] **1. Fileset check** (seconds; no pixels read):
+- [x] **1. Fileset check** (seconds; no pixels read) — **passed 2026-11-20** (interactive): logged in via the saved session, then stopped with "…`[Overview]` (2046 x 3950 px) is a small image… Did you mean omero://omero-prod.camp.thecrick.org/Image:602778?":
   `pixi run -e instanseg python run.py -i $OMERO/Image:602780 -o out/t_overview -p out/t_overview_plots --segmenter instanseg`
   ✅ Logs in via the saved session and finds the image in Lab-Gandhi, then stops with "…Did you mean omero://…/Image:602778?". No `out/t_overview.zarr` is created.
 - [x] **2. Local TIFF, plain** (checks the default Stardist path for regressions; GPU node) — **passed 2026-11-20** on `test_data/test_crop.ome.tiff`: `Found 1 GPU(s)` (A100), 2109 cells, 6123 edges (≤ 3×), GeoJSON at `out/t_local.geojson`:
   `pixi run python run.py -i <test_crop.ome.tiff> -o out/t_local -p out/t_local_plots`
   ✅ Completes. The log shows `Found 1 GPU(s)` (the TF CUDA preload works). `out/t_local.zarr` has `attrs['cellsurvey']` (pixel size, source path). `summary.json` has `cluster_on: intensities`, and `n_edges` is ≤ ~3× the cell count.
-- [ ] **3. Local TIFF with `--detect-blobs`** (checks the reordered blob detection):
+- [x] **3. Local TIFF with `--detect-blobs`** (checks the reordered blob detection) — **passed 2026-11-20**. No spots + `both`: stopped straight after detection, before Stardist. No spots + `intensities`: warned and completed (2110 cells). Spots (`--channels 8,10 --thresholds 0.05,0.05 --cluster-on both`): correct log order; 5165 + 4888 spots, 98.4% assigned to cells; 21 intensity + 2 spot features = 23:
   `pixi run python run.py -i <test_crop.ome.tiff> -o out/t_blobs -p out/t_blobs_plots --detect-blobs --channels <i,j> --thresholds <a,b> --cluster-on both`
   ✅ Log order: "Saving Zarr", then "Finding blobs in channel …", then "Adding spots to out/t_blobs.zarr", then segmentation. The intensity and spot channels are listed separately, and the heatmap has `(spots)` columns. Any two channels will do; this only checks the plumbing.
   - **Also check the zero-spots path**: with thresholds that find nothing (e.g. `--thresholds 1,1` on `test_crop`), `--cluster-on both` must stop straight after detection with "No spots were detected in channels … Lower --thresholds, or use --cluster-on intensities". With `--cluster-on intensities` it should warn "no spots detected … continuing without spots" and complete. (The first pass found the bug this checks for.)
   - Then re-run with thresholds that find spots (try `0.05`–`0.1` on spot-like channels) for the main check above.
-- [ ] **4. Resume never opens the source**:
+- [x] **4. Resume never opens the source** — **passed 2026-11-20**. Worked with `-i /nonexistent.tiff`, used the stored pixel size, skipped to clustering, and reproduced test 3's clusters, edges (6120) and communities (18) exactly:
   `pixi run python run.py -i /nonexistent.tiff -o out/t_blobs -p out/t_blobs_plots2 --resume-from out/t_blobs.zarr --detect-blobs --channels <i,j> --thresholds <a,b> --cluster-on both`
   ✅ Works despite the non-existent `-i`. Log shows `Physical pixel size (stored in out/t_blobs.zarr)`, "Segmented Zarr with table found, skipping to clustering", and no blob detection.
-- [ ] **5. Stability sweep uses the stored mode**:
+- [x] **5. Stability sweep uses the stored mode** — **passed 2026-11-20**: `Features: --cluster-on both (stored in the Zarr)`. Results on `test_crop` (2108 cells) are instructive. At resolution 0.1: 25 µm → 5963 edges, 51 communities; 50 µm → 6120 edges, 18; 100 µm → 6256 edges, 4. A 25 µm cutoff drops only ~160 edges against 50 µm but triples the community count (isolated cells become small communities); 50 µm looks like a reasonable default, but sweep per dataset:
   `pixi run python -m cellsurvey.stability --zarr out/t_blobs_seg.zarr --max-edge-distances 25,50,100`
   ✅ Prints `Features: --cluster-on both (stored in the Zarr)` and writes the CSVs.
 - [ ] **6. OMERO full run, as an `sbatch` job on a GPU node** (covers the real-server re-test of the per-thread stores, the first read of an uncached slide, and batch-job login):
