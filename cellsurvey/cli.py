@@ -21,8 +21,9 @@ import scanpy as sc
 import spatialdata
 import sopa
 
-from cellsurvey.utils import (remove_channel_suffix, cluster_data, assign_spots_to_cells,
-                              resolve_shape_keys, store_pixel_size, resolve_pixel_size,
+from cellsurvey.utils import (cluster_data, assign_spots_to_cells, extract_feature_tables,
+                              build_clustering_features, resolve_shape_keys, store_pixel_size,
+                              store_table_meta, resolve_pixel_size, CLUSTER_ON_CHOICES,
                               STARDIST_NUCLEI_KEY, NUCLEI_KEY, CELLS_KEY)
 from cellsurvey.blob_detection import detect_spots
 from cellsurvey.image_source import open_image_source, stored_pixel_size
@@ -73,6 +74,10 @@ def main():
                         help='Number of sigma steps for blob detection (default: 5)')
     parser.add_argument('--n-clusters', type=int, default=10,
                         help='Number of clusters for k-means (default: 10)')
+    parser.add_argument('--cluster-on', choices=CLUSTER_ON_CHOICES, default='intensities',
+                        help='Per-cell features for k-means, the network edge weights and UMAP/Leiden: '
+                             'channel intensities, spot densities (needs --detect-blobs), or both, '
+                             'weighted equally (default: intensities)')
     parser.add_argument('--community-resolution', type=float, default=0.1,
                         help='Resolution for Louvain community detection (default: 0.1)')
     parser.add_argument('--max-edge-distance', type=float, default=50,
@@ -82,7 +87,8 @@ def main():
     parser.add_argument('--radius-max', type=float, default=280,
                         help='Max radius in µm for the spatial neighbors graph (default: 280)')
     parser.add_argument('--resume-from',
-                        help='Path to existing Zarr to resume from (skips image loading and spot detection)')
+                        help='Path to existing Zarr to resume from (never re-reads the input image; '
+                             'reuses spots and a valid _seg.zarr)')
     parser.add_argument('--geojson-path', default=None,
                         help='Output path for QuPath GeoJSON (default: <output_file>.geojson, '
                              'next to the Zarr outputs)')
@@ -98,6 +104,11 @@ def main():
     os.makedirs(args.plot_dir, exist_ok=True)
 
     imagepath = args.input_file
+
+    # Spot-based clustering needs spots; a new run only gets them with --detect-blobs.
+    # (A resumed run is checked once its table is loaded.)
+    if args.cluster_on != 'intensities' and not args.detect_blobs and not args.resume_from:
+        parser.error(f"--cluster-on {args.cluster_on} needs spots: add --detect-blobs")
 
     # Check blob-detection arguments before reading anything.
     if args.detect_blobs:
@@ -310,33 +321,37 @@ def main():
 
         sdata = dataset
 
+    # Force obs index to plain string dtype to avoid ArrowStringArray
+    # write errors with Zarr backing stores (done first, so every per-cell
+    # table below shares this index).
+    sdata.tables['table'].obs.index = sdata.tables['table'].obs.index.astype(str)
     measurements = sdata.tables['table']
 
-    X_data = measurements.X.toarray() if hasattr(measurements.X, 'toarray') else measurements.X
-
-    intensity_df = pd.DataFrame(
-        X_data,
-        index=measurements.obs.index,
-        columns=measurements.var.index
-    )
-
-    intensity_df.columns = [remove_channel_suffix(col) for col in intensity_df.columns]
-
-    intensity_df = intensity_df.loc[:, ~intensity_df.columns.duplicated(keep='first')]
-    print(f"Columns after removing duplicates: {list(intensity_df.columns)}")
+    # Per-cell channel intensities and, with spots, spot counts. (With spots,
+    # sopa.aggregate puts the counts in .X and the intensities in obsm.)
+    intensity_df, counts_df = extract_feature_tables(measurements)
+    print(f"Intensity channels: {list(intensity_df.columns)}")
+    if counts_df is not None:
+        print(f"Spot channels: {list(counts_df.columns)}")
     print(f"Number of cells: {len(intensity_df)}")
 
-    cluster_labels, cluster_distances = cluster_data(intensity_df, n_clusters=args.n_clusters)
+    # The features k-means, the network edge weights and UMAP/Leiden use.
+    if args.cluster_on != 'intensities' and counts_df is None:
+        parser.error(f"--cluster-on {args.cluster_on} needs spots, but {zarr_path} has none: "
+                     f"add --detect-blobs (and re-run without --resume-from if a _seg.zarr is reused)")
+    cell_area_um2 = None
+    if counts_df is not None and 'area' in measurements.obs:
+        cell_area_um2 = measurements.obs['area'].astype(float) * pixel_size_um ** 2   # px² → µm²
+    features = build_clustering_features(intensity_df, counts_df, args.cluster_on, cell_area_um2)
+    print(f"Clustering on {args.cluster_on}: {features.shape[1]} features")
+
+    cluster_labels, cluster_distances = cluster_data(features, n_clusters=args.n_clusters, scale=False)
 
     sdata.tables['table'].obs['kmeans_cluster'] = pd.Categorical(cluster_labels)
 
     sdata.tables['table'].obs['kmeans_cluster_label'] = pd.Categorical(
         [f'Cluster_{i}' for i in cluster_labels]
     )
-
-    # Force obs index to plain string dtype to avoid ArrowStringArray
-    # write errors with Zarr backing stores
-    sdata.tables['table'].obs.index = sdata.tables['table'].obs.index.astype(str)
 
     print("\n\u2713 Cluster labels added to sdata.tables['table'].obs['kmeans_cluster']")
     print("\u2713 Cluster labels added to sdata.tables['table'].obs['kmeans_cluster_label']")
@@ -346,18 +361,20 @@ def main():
     # Build the network on the cell layer (not the nuclei), so cell ids match the
     # table produced by aggregation over that layer.
     nuclei_key, network_shapes_key = resolve_shape_keys(sdata)
-    result = run_network_analysis(sdata, intensity_matrix=intensity_df,
+    result = run_network_analysis(sdata, intensity_matrix=features,
                                 cell_boundaries=network_shapes_key,
                                 comm_detect_res=args.community_resolution,
                                 max_edge_distance=args.max_edge_distance,
                                 pixel_size_um=pixel_size_um,
-                                output_dir=args.plot_dir)
+                                output_dir=args.plot_dir,
+                                summary_extra={'cluster_on': args.cluster_on,
+                                               'n_features': int(features.shape[1])})
 
     spots_with_cells = assign_spots_to_cells(sdata, cell_boundaries=network_shapes_key)
 
     export_to_qupath(result['cell_ids'], result['community_labels'], result['cluster_labels'],
                      output_path=args.geojson_path,
-                     sdata=sdata, intensity_df=intensity_df,
+                     sdata=sdata, intensity_df=intensity_df, counts_df=counts_df,
                      spots_with_cells=spots_with_cells,
                      cell_boundaries=network_shapes_key)
 
@@ -373,6 +390,7 @@ def main():
     sdata.tables['table'].obs['community'] = pd.Categorical(result['community_labels'])
     # Persist the pixel size so read-only consumers (stability sweep) can convert µm params.
     store_pixel_size(sdata, pixel_size_um)
+    store_table_meta(sdata, cluster_on=args.cluster_on)
 
     # Also attach cluster/community to the nuclei layer via the nucleus_id
     # recorded on each cell (survives sopa.aggregate's re-indexing). Nuclei not
@@ -414,9 +432,10 @@ def main():
     plt.tight_layout()
     plt.savefig(os.path.join(args.plot_dir, 'cell_type_to_cell_type.png'))
 
-    sc.pp.normalize_total(adata)
-    sc.pp.log1p(adata)
-    sc.pp.neighbors(adata)
+    # UMAP/Leiden on the same scaled features as k-means and the network (not
+    # Scanpy's count normalisation of .X, which holds intensities or spot counts).
+    adata.obsm['X_cellsurvey'] = features.reindex(adata.obs.index).fillna(0).to_numpy()
+    sc.pp.neighbors(adata, use_rep='X_cellsurvey')
     sc.tl.umap(adata)
     sc.tl.leiden(adata, flavor='igraph', n_iterations=2, directed=False)
     sc.pl.umap(adata, color="kmeans_cluster", show=False)
@@ -486,21 +505,21 @@ def main():
     plt.savefig(os.path.join(args.plot_dir, 'cell_density.png'))
     plt.close()
 
-    # Channel intensity heatmap per k-means cluster. Each channel is z-scored
-    # across all cells (as k-means sees it, see cluster_data), then averaged per
-    # cluster, so 0 = the all-cell mean and the diverging colormap is meaningful.
-    channel_std = intensity_df.std(ddof=0).replace(0, np.nan)
-    intensity_z = ((intensity_df - intensity_df.mean()) / channel_std).fillna(0)
-    cluster_means = intensity_z.groupby(sdata.tables['table'].obs['kmeans_cluster']).mean()
+    # Heatmap of the clustering features per k-means cluster: each feature
+    # z-scored across all cells (as k-means sees it, but without the --cluster-on
+    # both group weighting, so values are comparable), then averaged per cluster;
+    # 0 = the all-cell mean. Spot features are log spot densities, '(spots)'.
+    heatmap_features = build_clustering_features(intensity_df, counts_df, args.cluster_on, cell_area_um2,
+                                                 weight_groups=False)
+    cluster_means = heatmap_features.groupby(sdata.tables['table'].obs['kmeans_cluster']).mean()
     plt.figure(figsize=(max(8, cluster_means.shape[1] * 0.4), max(6, cluster_means.shape[0] * 0.5)))
     # Cap the colour scale at ±3 SD so one outlier cluster (e.g. a single debris
     # cell at z≈20) can't wash out the differences between the others.
     sns.heatmap(cluster_means, cmap='RdBu_r', center=0, vmin=-3, vmax=3,
                 xticklabels=True, yticklabels=True,
-                cbar_kws={'label': 'Mean intensity (z-score across cells, capped at ±3)',
-                          'extend': 'both'})
-    plt.title('Mean channel intensity per k-means cluster')
-    plt.xlabel('Channel')
+                cbar_kws={'label': 'Mean z-score across cells (capped at ±3)', 'extend': 'both'})
+    plt.title(f'Clustering features per k-means cluster (--cluster-on {args.cluster_on})')
+    plt.xlabel('Feature')
     plt.ylabel('Cluster')
     plt.tight_layout()
     plt.savefig(os.path.join(args.plot_dir, 'cluster_intensity_heatmap.png'))

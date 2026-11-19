@@ -159,8 +159,10 @@ segments cells directly, so
 
 Groups cells by their expression profile.
 
-- **What it does**: extracts the intensity matrix from the AnnData table,
-  standardises it (`StandardScaler`), and runs k-means with `--n-clusters`.
+- **What it does**: builds the per-cell features chosen by `--cluster-on`
+  (channel intensities, spot densities, or both; each z-scored across cells, see
+  [Parameters](parameters.md)) and runs k-means with `--n-clusters`. The same
+  features weight the network edges (stage 7) and drive UMAP/Leiden.
 - **Output**: a `kmeans_cluster` label per cell.
 - **Where**: `cellsurvey/utils.py` (`cluster_data`).
 
@@ -171,7 +173,8 @@ Builds a spatial network of neighbouring cells and detects communities.
 - **What it does**: extracts cell centroids, builds a `scipy.spatial.Delaunay`
   triangulation, filters edges longer than `--max-edge-distance` (µm, converted
   to pixels with the image's pixel size), weights the
-  remaining edges by expression similarity (`1 + Pearson correlation`), and runs
+  remaining edges by the similarity of the two cells' `--cluster-on` features
+  (`1 + Pearson correlation`), and runs
   Louvain community detection (`networkx`) at `--community-resolution`.
 - **Output**: `kmeans_cluster` and `community` labels, plus `summary.json`
   (cell / cluster / community / edge counts).

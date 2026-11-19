@@ -28,8 +28,10 @@ stores. The segmented store contains:
 - A nuclei layer — `stardist_boundaries` (Stardist) or `nucleus_boundaries`
   (InstanSeg) — with the same `kmeans_cluster` and `community` labels, copied
   from each nucleus's cell. Nuclei not linked to a cell get `-1`.
-- `table` — an AnnData table of cells × markers (per-cell mean intensities),
-  measured over `cell_boundaries`.
+- `table` — an AnnData table of cells, measured over `cell_boundaries`.
+  Without spots, `.X` holds the per-cell mean intensities (cells × markers).
+  With `--detect-blobs`, `.X` holds the **spot counts** per spot channel and the
+  intensities are in `obsm['intensities']`. That is how Sopa stores them.
 - `spots` — detected RNA spots (only if `--detect-blobs` was used).
 
 !!! note "Nuclei-only runs"
@@ -54,6 +56,8 @@ Written to `--plot_dir`. A small JSON summary of the network analysis:
   "max_edge_distance_px": 178.57,
   "pixel_size_um": 0.28,
   "community_resolution": 0.1,
+  "cluster_on": "intensities",
+  "n_features": 21,
   "cluster_sizes": { "0": 1204, "1": 980, "...": "..." },
   "community_sizes": { "0": 2100, "1": 1550, "...": "..." }
 }
@@ -75,7 +79,7 @@ All plots are PNG files written to `--plot_dir`.
 | `umap_kmeans_cluster.png` | UMAP embedding of cells coloured by k-means cluster. |
 | `umap_leiden.png` | UMAP embedding coloured by Leiden cluster. |
 | `cell_density.png` | Per-cluster and per-community spatial density maps. |
-| `cluster_intensity_heatmap.png` | Mean channel intensity per k-means cluster, z-scored per channel across all cells (0 = average cell; red = higher, blue = lower). The colour scale is capped at ±3, so more extreme values show as the darkest colour. |
+| `cluster_intensity_heatmap.png` | The clustering features (`--cluster-on`) per k-means cluster: channel intensities and/or log spot densities (labelled `(spots)`), each z-scored across all cells (0 = average cell; red = higher, blue = lower). The colour scale is capped at ±3, so more extreme values show as the darkest colour. |
 | `morphology_by_cluster.png` | Cell area by cluster (only present if an `area` column exists). |
 
 ## QuPath GeoJSON
@@ -88,7 +92,9 @@ The GeoJSON contains:
 
 - **Cell boundaries** (from `cell_boundaries`, or the nuclei layer in a
   nuclei-only run) as annotations, coloured by community, with cluster and
-  per-marker mean-intensity measurements attached.
+  per-marker mean-intensity measurements (`Cell: <channel> mean`) attached, and,
+  with `--detect-blobs`, the raw spot count per spot channel
+  (`Cell: <channel> spot count`).
 - **RNA spots** as detection objects (only when `--detect-blobs` was used),
   linked to their parent cell where assignment succeeded.
 

@@ -6,7 +6,13 @@ from cellsurvey.utils import get_colors_for_communities, resolve_shape_keys
 
 
 def export_to_qupath(cell_ids, community_labels, cluster_labels, output_path, sdata, intensity_df,
-                     spots_with_cells=None, cell_boundaries=None):
+                     spots_with_cells=None, cell_boundaries=None, counts_df=None):
+    """Write cells (and spots) as QuPath GeoJSON.
+
+    Each cell gets ``Cell: <channel> mean`` measurements from ``intensity_df``
+    and, if ``counts_df`` is given (runs with spots), ``Cell: <channel> spot
+    count`` measurements (raw counts).
+    """
     if cell_boundaries is None:
         cell_boundaries = resolve_shape_keys(sdata)[1]
     print("Exporting to QuPath GeoJSON format...")
@@ -46,6 +52,11 @@ def export_to_qupath(cell_ids, community_labels, cluster_labels, output_path, sd
                             measurements_dict[f"Cell: {col} mean"] = float(val)
                     except (ValueError, TypeError, KeyError):
                         pass
+
+        if counts_df is not None and idx in counts_df.index:
+            for col, val in counts_df.loc[idx].items():
+                if pd.notna(val):
+                    measurements_dict[f"Cell: {col} spot count"] = float(val)
 
         feature = {
             "type": "Feature",

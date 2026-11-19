@@ -80,12 +80,16 @@ def compute_louvain_communities(coords, imat, comm_detect_res=0.1, max_edge_dist
 
 
 def run_network_analysis(sdata, intensity_matrix=None, cell_boundaries=None, index_name='cell_id',
-               output_dir='.', comm_detect_res=0.1, max_edge_distance=50, pixel_size_um=None):
+               output_dir='.', comm_detect_res=0.1, max_edge_distance=50, pixel_size_um=None,
+               summary_extra=None):
     """Delaunay network + Louvain communities on the cell layer.
 
     ``max_edge_distance`` is in µm and converted to pixels with
     ``pixel_size_um`` (µm/px); if that is None, the value stored in the table's
     ``.uns`` is used (see :func:`cellsurvey.utils.store_pixel_size`).
+    ``intensity_matrix`` (cells × features, indexed by cell id) weights the
+    edges by feature correlation; the pipeline passes its clustering features.
+    ``summary_extra`` is merged into ``summary.json``.
     """
     if cell_boundaries is None:
         cell_boundaries = resolve_shape_keys(sdata)[1]
@@ -140,6 +144,7 @@ def run_network_analysis(sdata, intensity_matrix=None, cell_boundaries=None, ind
         'cluster_sizes': {int(k): int(v) for k, v in zip(*np.unique(cluster_labels[cluster_labels >= 0], return_counts=True))},
         'community_sizes': {int(k): int(v) for k, v in zip(*np.unique(community_labels[community_labels >= 0], return_counts=True))},
     }
+    stats.update(summary_extra or {})
     with open(os.path.join(output_dir, 'summary.json'), 'w') as f:
         json.dump(stats, f, indent=2)
     print(f"\nSummary statistics written to {os.path.join(output_dir, 'summary.json')}")

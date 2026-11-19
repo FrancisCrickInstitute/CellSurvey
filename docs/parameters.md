@@ -49,8 +49,25 @@ passed, and detects RNA spots on the channels you specify.
 | Flag | Default | What it controls |
 |---|---|---|
 | `--n-clusters` | `10` | Number of k-means clusters. |
+| `--cluster-on` | `intensities` | What cells are compared on: `intensities`, `spots` or `both` (see below). |
 | `--community-resolution` | `0.1` | Louvain community resolution. |
 | `--max-edge-distance` | `50` | Max edge length in **µm** for the Delaunay network. |
+
+!!! info "What cells are compared on: `--cluster-on`"
+    The same per-cell features drive k-means, the weights of the spatial-network
+    edges (and so the communities), and UMAP/Leiden.
+
+    - `intensities` (default): each channel's mean intensity, z-scored across cells.
+    - `spots`: each spot channel's **spot density** (spots per 100 µm² of cell
+      area, so clusters don't simply follow cell size), log-transformed and
+      z-scored. Needs `--detect-blobs`.
+    - `both`: intensities and spot densities together. Each group is weighted
+      so that the intensity channels as a whole and the spot channels as a
+      whole count equally, however many channels each has.
+
+    With only a few features (e.g. `spots` with one or two spot channels), the
+    network's correlation-based edge weights carry little information, so
+    communities are less reliable.
 
 !!! tip "Tuning clustering and communities"
     - `--n-clusters` is the k-means **k** — there is no automatic selection, so
@@ -190,9 +207,16 @@ Both modes use the `cell_boundaries` layer when the Zarr has one, otherwise the
 nuclei layer (`stardist_boundaries` or `nucleus_boundaries`), so nuclei-only
 Zarrs work too. Override it with `--cell-boundaries <layer>`.
 
+### Which features are used
+
+Both modes take `--cluster-on intensities|spots|both` (default `intensities`),
+with the same meaning as in the pipeline: the features k-means clusters on
+(cluster mode) and that weight the network edges (community mode). Use the same
+value as the pipeline run to reproduce its results.
+
 !!! note "Clusters are independent of communities"
     `--n-clusters` does **not** affect the communities: Louvain weights its graph
-    from the raw intensity matrix, not the k-means labels. Sweep them separately
+    from the `--cluster-on` features, not the k-means labels. Sweep them separately
     — `--n-clusters` for the expression clusters, `--community-resolution` /
     `--max-edge-distance` for the spatial communities.
 
