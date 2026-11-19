@@ -6,14 +6,18 @@ it to a SpatialData object with :meth:`ImageSource.to_spatialdata` and writes
 ``<prefix>.zarr``; everything after that reads only the local Zarr, so later
 stages don't know or care where the image came from.
 
-Local multichannel TIFFs are read exactly as before (``sopa.io.ome_tif`` and
-the OME pixel size via bioio). An OMERO source is planned (see AGENTS.md,
-"Planned: OMERO input").
+Sources:
+
+- local multichannel TIFFs, read exactly as before (``sopa.io.ome_tif`` and
+  the OME pixel size via bioio);
+- ``omero://host[:port]/Image:<id>``: see :mod:`cellsurvey.omero_source`
+  (omero-py is imported only for these).
 """
 
 import os
 from contextlib import nullcontext
 from dataclasses import dataclass, field
+from typing import Callable
 
 import dask
 import dask.array as da
@@ -46,6 +50,8 @@ class ImageSource:
         source: Provenance, recorded in the Zarr (e.g. ``{'type': 'file', 'path': ...}``).
         readers: Thread count for reading while writing the Zarr; ``None``
             keeps dask's default scheduler (used for local files).
+        closer: Releases the source (e.g. OMERO pixel stores and connection);
+            called by :meth:`close`. ``None`` for local files.
     """
     data: da.Array
     channel_names: list
@@ -53,6 +59,13 @@ class ImageSource:
     pixel_size_um: float | None
     source: dict = field(default_factory=dict)
     readers: int | None = None
+    closer: Callable | None = field(default=None, repr=False)
+
+    def close(self):
+        """Release the source; the lazy ``data`` can't be read afterwards. Safe to call twice."""
+        closer, self.closer = self.closer, None
+        if closer is not None:
+            closer()
 
     def to_spatialdata(self, pixel_size_um):
         """Build the SpatialData object for ``<prefix>.zarr``.
@@ -94,13 +107,22 @@ def stored_pixel_size(sdata):
     return value if value > 0 else None
 
 
-def open_image_source(path):
+def is_omero(path):
+    return str(path).lower().startswith('omero://')
+
+
+def open_image_source(path, readers=None):
     """Open the input image at ``path`` as an :class:`ImageSource`.
 
-    Only local multichannel TIFFs are supported so far, read with
-    ``sopa.io.ome_tif`` (dask_image/tifffile, 3D ``(c, y, x)`` or 4D
-    ``(1, y, x, c)``) and the OME physical pixel size via bioio.
+    ``omero://host[:port]/Image:<id>`` opens an OMERO image (``readers`` =
+    parallel tile readers; see :mod:`cellsurvey.omero_source`). Anything else
+    is a local multichannel TIFF, read with ``sopa.io.ome_tif`` (dask_image/
+    tifffile, 3D ``(c, y, x)`` or 4D ``(1, y, x, c)``) and the OME physical
+    pixel size via bioio. Call :meth:`ImageSource.close` when done.
     """
+    if is_omero(path):
+        from cellsurvey.omero_source import open_omero_image
+        return open_omero_image(path, readers=readers)
     image = sopa.io.ome_tif(path, as_image=True)  # rechunked, integer dtype, channel coords
     return ImageSource(
         data=image.data,

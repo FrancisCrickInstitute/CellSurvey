@@ -47,9 +47,10 @@ The input image is read **only here, once**: stage 2 copies it into
 the input image is not opened at all; the pixel size is taken from the Zarr.
 
 !!! note "Input format"
-    Only **multi-channel TIFF** is supported (`.ome.tiff`, `.tiff`, `.tif`).
-    ND2 / CZI / LIF / DV and single-channel 2D images are not currently
-    accepted. See [FAQ](faq.md).
+    Local files must be **multi-channel TIFF** (`.ome.tiff`, `.tiff`, `.tif`).
+    ND2 / CZI / LIF / DV files and single-channel 2D images are not currently
+    accepted, but images in OMERO can be read directly
+    (`-i omero://<host>/Image:<id>`, see [Reading from OMERO](omero.md)). See [FAQ](faq.md).
 
 ## 2. Initial Zarr write
 

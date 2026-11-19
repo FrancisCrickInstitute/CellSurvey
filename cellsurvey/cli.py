@@ -28,13 +28,18 @@ from cellsurvey.utils import (cluster_data, assign_spots_to_cells, extract_featu
 from cellsurvey.blob_detection import detect_spots
 from cellsurvey.image_source import open_image_source, stored_pixel_size
 from cellsurvey.network_analysis import run_network_analysis
-from cellsurvey.segmentation import get_pixel_size, expand_nuclei, run_stardist, run_instanseg
+from cellsurvey.segmentation import expand_nuclei, run_stardist, run_instanseg
 from cellsurvey.export import export_to_qupath
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('-i', '--input_file', help='Path to input image', required=True)
+    parser.add_argument('-i', '--input_file', required=True,
+                        help='Input image: a multichannel (OME-)TIFF path, or an OMERO image as '
+                             'omero://<host>[:<port>]/Image:<id> (log in first with `omero login`)')
+    parser.add_argument('--omero-readers', type=int, default=8,
+                        help='OMERO input only: parallel tile readers (server connections) used when '
+                             'copying the image into <output>.zarr (default: 8)')
     parser.add_argument('-o', '--output_file', help='Path to output Zarr', required=True)
     parser.add_argument('-p', '--plot_dir', help='Output directory for data plots', default='.')
     parser.add_argument('--detect-blobs', action='store_true',
@@ -105,6 +110,9 @@ def main():
 
     imagepath = args.input_file
 
+    if args.omero_readers < 1:
+        parser.error("--omero-readers must be at least 1")
+
     # Spot-based clustering needs spots; a new run only gets them with --detect-blobs.
     # (A resumed run is checked once its table is loaded.)
     if args.cluster_on != 'intensities' and not args.detect_blobs and not args.resume_from:
@@ -129,14 +137,27 @@ def main():
         if not os.path.exists(resume_zarr_path):
             parser.error(f"Resume Zarr not found: {resume_zarr_path}")
 
-    # New runs open the input image once, here (lazily); stage 1 writes it to
-    # <prefix>.zarr and every later stage reads only that. Resumed runs never
-    # open the source unless an older Zarr lacks a stored pixel size.
-    source = None if args.resume_from else open_image_source(imagepath)
+    def open_source():
+        try:
+            return open_image_source(imagepath, readers=args.omero_readers)
+        except (ValueError, RuntimeError, FileNotFoundError, ImportError) as e:
+            parser.error(str(e))
+
+    # New runs open the input image once, here (lazily: nothing is read yet);
+    # stage 1 writes it to <prefix>.zarr and every later stage reads only that.
+    # Resumed runs never open the source unless an older Zarr lacks a stored
+    # pixel size.
+    source = None if args.resume_from else open_source()
+
+    def fail(message):
+        """parser.error, closing the source first (e.g. the OMERO connection)."""
+        if source is not None:
+            source.close()
+        parser.error(message)
 
     if args.pixel_size is not None:
         if not args.pixel_size > 0:  # also rejects NaN
-            parser.error("--pixel-size must be positive")
+            fail("--pixel-size must be positive")
         pixel_size_um = args.pixel_size
         print(f"Physical pixel size (from --pixel-size): {pixel_size_um:.4f} µm/px")
     else:
@@ -147,13 +168,15 @@ def main():
             pixel_size_um = stored_pixel_size(spatialdata.read_zarr(resume_zarr_path))
             if pixel_size_um is not None:
                 pixel_size_origin = f"stored in {resume_zarr_path}"
-            else:  # Zarr written before pixel sizes were stored
-                pixel_size_um = get_pixel_size(imagepath)
+            else:  # Zarr written before pixel sizes were stored: read the source's metadata only
+                old_source = open_source()
+                pixel_size_um = old_source.pixel_size_um
+                old_source.close()
         if pixel_size_um is None:
             # Fail before any loading/segmentation: every distance parameter is in µm.
-            parser.error("No physical pixel size in the image metadata; pass --pixel-size (µm/px). "
-                         "It is needed because --max-edge-distance, --radius-min/--radius-max and "
-                         "--cell-expansion are in µm.")
+            fail("No physical pixel size in the image metadata; pass --pixel-size (µm/px). "
+                 "It is needed because --max-edge-distance, --radius-min/--radius-max and "
+                 "--cell-expansion are in µm.")
         print(f"Physical pixel size ({pixel_size_origin}): {pixel_size_um:.4f} µm/px")
 
     # Shape layers the chosen segmenter writes; used to decide whether a resumed
@@ -178,7 +201,7 @@ def main():
         if args.detect_blobs:
             bad = [ci for ci in channel_index if not 0 <= ci < source.data.shape[0]]
             if bad:
-                parser.error(f"--channels {bad} out of range: the image has {source.data.shape[0]} channels")
+                fail(f"--channels {bad} out of range: the image has {source.data.shape[0]} channels")
         dataset = source.to_spatialdata(pixel_size_um)
         print(f'Saving Zarr to {zarr_path}')
 
@@ -186,7 +209,11 @@ def main():
             source.write(dataset, zarr_path)
         except Exception as e:
             print(f"ERROR: Failed to write Zarr to {zarr_path}: {e}", file=sys.stderr)
+            source.close()
             sys.exit(1)
+        # The source is never read again (e.g. this closes the OMERO connection).
+        source.close()
+        del dataset
 
         print("Done")
 

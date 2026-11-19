@@ -87,7 +87,7 @@ A full reference of every flag, with tuning guidance, is in the
 [Parameters](https://cell-survey.readthedocs.io/en/latest/parameters/) page. The
 three required arguments are:
 
-* `-i`, `--input_file`: Path to the input multichannel TIFF image (OME-TIFF recommended).
+* `-i`, `--input_file`: Path to the input multichannel TIFF image (OME-TIFF recommended), or an image on an OMERO server as `omero://<host>/Image:<id>` (log in first with `omero login`; see the [OMERO docs page](docs/omero.md)).
 * `-o`, `--output_file`: Path for the output Zarr (`.zarr` appended automatically).
 * `-p`, `--plot_dir`: Directory where output plots are saved.
 

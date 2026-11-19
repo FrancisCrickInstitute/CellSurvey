@@ -111,7 +111,8 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 
 | Flag | Default | Description |
 |---|---|---|
-| `-i`, `--input_file` | *(required)* | Path to input OME-TIFF image |
+| `-i`, `--input_file` | *(required)* | Input OME-TIFF path, or `omero://host[:port]/Image:<id>` |
+| `--omero-readers` | `8` | OMERO input only: parallel tile readers (connections) for the stage-1 copy |
 | `-o`, `--output_file` | *(required)* | Path to output Zarr (`.zarr` appended if missing) |
 | `-p`, `--plot_dir` | `.` | Output directory for plots |
 | `--detect-blobs` | — | Enable RNA spot blob detection on specified channels (default: off) |
@@ -511,7 +512,7 @@ where `dapi_cell` is that cell's DAPI mean intensity. Applied **after aggregatio
 
 ## Planned: OMERO input
 
-**Status**: implementation planned (see *Implementation plan*), on branch `feature/omero`. The environment is done (omero-py co-installs with both segmenter envs; GPU confirmed). No reader code yet.
+**Status** (2026-11-19): **implemented on `feature/omero`** (`cellsurvey/omero_source.py`; plan steps 1–3 + reader). Tested locally against a fake server; **awaiting the first real-server test** on Image 602778. User docs: `docs/omero.md`.
 
 **Goal**: read the input image directly from an OMERO server instead of requiring a local OME-TIFF.
 
@@ -590,7 +591,18 @@ Already checked: `sopa.io.ome_tif` is a thin wrapper (dask array → `Image2DMod
    - `open_image_source(path)`: `omero://` paths go to the OMERO reader. Anything else goes through `sopa.io.ome_tif(..., as_image=True)` + `get_pixel_size`, so local TIFFs read exactly as before.
    - `to_spatialdata(pixel_size)`: copies `sopa.io.ome_tif` (same chunks, pyramid and Sopa attr) and adds `attrs['cellsurvey'] = {pixel_size_um, source}`.
    - `write()`: wraps `sdata.write` in `dask.config.set(scheduler='threads', num_workers=…)`.
-2. **OMERO reader, new `cellsurvey/omero_source.py`** (omero-py imported only here, lazily):
+2. **OMERO reader, new `cellsurvey/omero_source.py`** (omero-py imported only here, lazily) — **done (commit 3), real-server test pending**. As planned, plus: `ImageSource.closer`/`close()` (cli closes the source right after the stage-1 write, and before any `parser.error`); `open_image_source(path, readers=)`; `--omero-readers` (default 8); on resume with an old Zarr lacking a stored pixel size, the source is opened for metadata only and closed. Local tests (fake server mimicking omero-py objects):
+   - URL parsing;
+   - login order and the "run `omero login`" error, with a fake `BlitzGateway`;
+   - cross-group lookup (`omero.group=-1`) and pixel-store context with the image's group;
+   - full-resolution level `n-1`, with the size check;
+   - big-endian decoding: pixel-identical Zarr after `to_spatialdata` + `write`;
+   - a failed tile retried with a fresh store;
+   - one store per thread, all closed, and a reused session closed with `hard=False`;
+   - fileset stop (`[Label]`, 0.05% of the largest) and warn (a second scan);
+   - `import cellsurvey` doesn't import omero.
+
+   **Pyramid risk resolved**: with a counting fake source, writing all 5 pyramid levels read each full-resolution tile exactly **once**, so no two-step write is needed. Details as planned:
    - **URL**: `omero://host[:port]/Image:123` or `omero://host/123`; port defaults to 4064.
    - **Login**, tried in order, never with a password on the command line:
      1. the `OMERO_SESSION_KEY` environment variable;
@@ -1028,7 +1040,8 @@ Ten tips spanning experimental design → platform selection → data structure 
 │   ├── blob_detection.py             # detect_spots ((c,y,x) DataArray → spots PointsModel) → detect_blobs_tiled → detect_blobs_in_tile
 │   ├── network_analysis.py           # run_network_analysis (µm → px) + compute_louvain_communities + delaunay_edges (scipy Delaunay + networkx Louvain, expr-similarity weights, summary.json)
 │   ├── stability.py                  # run_stability_sweep (community) + run_cluster_sweep (k-means), read-only → CSV
-│   ├── image_source.py               # ImageSource + open_image_source (stage-1 input; local TIFF now, OMERO planned) → to_spatialdata / write
+│   ├── image_source.py               # ImageSource + open_image_source (stage-1 input: local TIFF or omero://) → to_spatialdata / write / close; stored_pixel_size
+│   ├── omero_source.py               # OMERO reader: parse_omero_url, connect (login order), fileset check, per-thread RawPixelsStore tiles → lazy dask array
 │   ├── segmentation.py               # run_stardist / run_instanseg, link_nuclei_to_cells, get_pixel_size, expand_nuclei (watershed)
 │   ├── export.py                     # export_to_qupath
 │   └── utils.py                      # shape-layer keys + resolve_shape_keys, remove_channel_suffix, cluster_data, assign_spots_to_cells, get_colors_for_communities

@@ -11,9 +11,12 @@ pixi run python run.py -i <image> -o <output> -p <plots> [options]
 
 | Flag | Meaning |
 |---|---|
-| `-i`, `--input_file` | Path to the input multichannel TIFF (OME-TIFF recommended). |
+| `-i`, `--input_file` | Path to the input multichannel TIFF (OME-TIFF recommended), or an OMERO image as `omero://<host>/Image:<id>` (see [Reading from OMERO](omero.md)). |
 | `-o`, `--output_file` | Prefix for the output Zarr (`.zarr` is appended automatically). |
 | `-p`, `--plot_dir` | Directory for the summary plots (default `.`). |
+
+For OMERO input, `--omero-readers` (default `8`) sets how many tiles are read
+from the server in parallel.
 
 ## Spot / blob detection
 

@@ -33,6 +33,7 @@ nav:
   - Home: index.md
   - Installation: installation.md
   - Getting started: getting-started.md
+  - Reading from OMERO: omero.md
   - Pipeline: pipeline.md
   - Parameters: parameters.md
   - Outputs: outputs.md

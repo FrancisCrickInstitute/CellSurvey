@@ -119,8 +119,10 @@ See [Parameters](parameters.md) for full guidance.
 
 ## Can I process formats other than OME-TIFF?
 
-Not currently. Only multi-channel TIFF is supported (`.ome.tiff`, `.tiff`,
-`.tif`). Formats such as ND2, CZI, LIF, and DV are not accepted yet.
+Local files must be multi-channel TIFF (`.ome.tiff`, `.tiff`, `.tif`); ND2,
+CZI, LIF, DV and similar files can't be read directly yet. If the image is in an
+OMERO server, though, any format OMERO can read works: pass it as
+`-i omero://<host>/Image:<id>` (see [Reading from OMERO](omero.md)).
 
 ## What does "No cell was returned by the segmentation" mean?
 

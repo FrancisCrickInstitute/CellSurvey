@@ -28,8 +28,9 @@ pixi run python run.py \
     The input must be a **multi-channel TIFF** — OME-TIFF (`.ome.tiff`) is
     recommended. Its embedded channel names become the marker column headers in
     your results. Plain `.tiff`/`.tif` also works, but channels then fall back to
-    numeric names. Non-TIFF formats such as ND2, CZI, LIF, or DV are **not**
-    currently supported.
+    numeric names. Non-TIFF files such as ND2, CZI, LIF, or DV can't be read
+    directly, but if they are in OMERO you can read them from there: see
+    [Reading from OMERO](omero.md).
 
 ## A realistic example
 
