@@ -656,6 +656,46 @@ Already checked: `sopa.io.ome_tif` is a thin wrapper (dask array → `Image2DMod
 - e. **Float pixel types**: reject with a clear error naming the type for now. Multiplexed slides are integer (the example qptiff is `uint16`). Revisit if a float image turns up.
 - f. A small OMERO test image ID for the first test: *to do*.
 
+### HPC test checklist (before merging `feature/omero` → `main`)
+
+**Status**: not yet run (written 2026-11-19, `feature/omero` at `b63b4d7`). Tick items off here as they pass and record anything surprising. `feature/omero` contains all of `feature/instanseg`, so passing tests 1–6 covers both branches; then `feature/omero` can fast-forward into `main` (no separate `feature/instanseg` merge needed). Paths in `<…>` are placeholders; use a small local TIFF (e.g. `test_crop`) for tests 2–5.
+
+**Setup** (once):
+```bash
+cd <repo> && git pull                      # feature/omero
+pixi install --locked && pixi install --locked -e instanseg
+pixi run omero sessions list               # check the current group; the 2026-11 throughput script may have switched it:
+pixi run omero sessions group STP-CALM     # or log in again: pixi run omero login -s omero-prod.camp.thecrick.org -u <user>
+OMERO=omero://omero-prod.camp.thecrick.org
+```
+
+- [ ] **1. Fileset check** (seconds; no pixels read):
+  `pixi run -e instanseg python run.py -i $OMERO/Image:602780 -o out/t_overview -p out/t_overview_plots --segmenter instanseg`
+  ✅ Logs in via the saved session and finds the image in Lab-Gandhi, then stops with "…Did you mean omero://…/Image:602778?". No `out/t_overview.zarr` is created.
+- [ ] **2. Local TIFF, plain** (checks the default Stardist path for regressions; GPU node):
+  `pixi run python run.py -i <test_crop.ome.tiff> -o out/t_local -p out/t_local_plots`
+  ✅ Completes. The log shows `Found 1 GPU(s)` (the TF CUDA preload works). `out/t_local.zarr` has `attrs['cellsurvey']` (pixel size, source path). `summary.json` has `cluster_on: intensities`, and `n_edges` is ≤ ~3× the cell count.
+- [ ] **3. Local TIFF with `--detect-blobs`** (checks the reordered blob detection):
+  `pixi run python run.py -i <test_crop.ome.tiff> -o out/t_blobs -p out/t_blobs_plots --detect-blobs --channels <i,j> --thresholds <a,b> --cluster-on both`
+  ✅ Log order: "Saving Zarr", then "Finding blobs in channel …", then "Adding spots to out/t_blobs.zarr", then segmentation. The intensity and spot channels are listed separately, and the heatmap has `(spots)` columns. Any two channels will do; this only checks the plumbing.
+- [ ] **4. Resume never opens the source**:
+  `pixi run python run.py -i /nonexistent.tiff -o out/t_blobs -p out/t_blobs_plots2 --resume-from out/t_blobs.zarr --detect-blobs --channels <i,j> --thresholds <a,b> --cluster-on both`
+  ✅ Works despite the non-existent `-i`. Log shows `Physical pixel size (stored in out/t_blobs.zarr)`, "Segmented Zarr with table found, skipping to clustering", and no blob detection.
+- [ ] **5. Stability sweep uses the stored mode**:
+  `pixi run python -m cellsurvey.stability --zarr out/t_blobs_seg.zarr --max-edge-distances 25,50,100`
+  ✅ Prints `Features: --cluster-on both (stored in the Zarr)` and writes the CSVs.
+- [ ] **6. OMERO full run, as an `sbatch` job on a GPU node** (covers the real-server re-test of the per-thread stores, the first read of an uncached slide, and batch-job login):
+  `pixi run -e instanseg python run.py -i $OMERO/Image:602778 -o out/omero_602778 -p out/omero_602778_plots --segmenter instanseg`
+  ✅ Log shows:
+  - `Connected to OMERO … via saved `omero login` session` (batch-job login works);
+  - the image in Lab-Gandhi, 8 named channels, 0.4987 µm/px;
+  - `CUDA available`;
+  - **no** "Hibernate session is not re-entrant" error.
+
+  Record the time from "Saving Zarr to out/omero_602778.zarr" to "Done" (uncached read; ~2–5 min predicted; `date` before and after in the job script helps). InstanSeg afterwards takes ~1.5 h. Then spot-check visually: `out/omero_602778.zarr` in napari, or the GeoJSON in QuPath, against the image in OMERO. This catches tile placement or byte-order bugs the fake server could have missed.
+
+**Results**: *(fill in)*
+
 ## Reference: PANORAMIC (plevritis-lab)
 
 **Note (for future consideration):** [PANORAMIC](https://github.com/plevritis-lab/panoramic) is an R/Bioconductor package for **multi-sample meta-analysis of spatial colocalization**. It is NOT integrated into CellSurvey yet — this section records the concepts worth borrowing or adopting downstream.
