@@ -13,7 +13,10 @@ omero-py is imported only here, so ``cellsurvey`` imports without it.
   reused ``omero login`` session it would also switch the group of the user's
   CLI session.
 - **Pixels**: full resolution, Z=0, T=0, read lazily in 1024² tiles. Each dask
-  thread uses its own ``RawPixelsStore`` (``getTile`` + ``np.frombuffer``;
+  thread uses its own ``RawPixelsStore`` from ``conn.c.sf.createRawPixelsStore()``
+  (not ``conn.createRawPixelsStore()``, which returns one cached proxy shared by
+  the whole connection; stateful services must not be used by two threads at
+  once). Tiles use ``getTile`` + ``np.frombuffer`` (
   omero-py's ``getTiles`` opens a store per call and decodes with ``struct``,
   too slow for whole slides).
 - **Read once**: stage 1 writes the image to ``<prefix>.zarr`` and closes the
@@ -137,8 +140,12 @@ class _TileReader:
         rps = getattr(self._local, 'rps', None)
         if rps is not None:
             return rps
-        rps = self._conn.createRawPixelsStore()
-        rps.setPixelsId(self._pixels_id, True, self._ctx)
+        # A *new* stateful service per thread, straight from the session factory.
+        # (BlitzGateway.createRawPixelsStore() returns one cached proxy per
+        # connection; sharing it across threads fails on the server with
+        # "Hibernate session is not re-entrant".)
+        rps = self._conn.c.sf.createRawPixelsStore()
+        rps.setPixelsId(self._pixels_id, True, dict(self._ctx))
         levels = rps.getResolutionLevels()
         if levels > 1:
             # Levels are numbered smallest = 0 .. largest = n-1.

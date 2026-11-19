@@ -602,6 +602,11 @@ Already checked: `sopa.io.ome_tif` is a thin wrapper (dask array → `Image2DMod
    - fileset stop (`[Label]`, 0.05% of the largest) and warn (a second scan);
    - `import cellsurvey` doesn't import omero.
 
+   **First real-server test (2026-11-19, Image 602778, HPC)**:
+   - **Metadata worked**: login via the saved `omero login` session; cross-group lookup (image in Lab-Gandhi, group 954); 44160 × 51840 px, 8 channels `DAPI, CNPASE, PSYN, GFAP, PTAU, IBA1, MAP2, AF`, uint16, 0.4987 µm/px.
+   - **Pixel reads failed**, with `Hibernate session is not re-entrant. Either you have two threads operating on the same stateful object`. Cause: **`BlitzGateway.createRawPixelsStore()` does not create a store**; it returns the connection's single cached proxy (`self._proxies['rawpixels']`). So every dask thread shared one stateful service.
+   - **Fix**: create one store per thread with `conn.c.sf.createRawPixelsStore()` (a new service each call), passing the context as a plain `dict`. The fake server now mimics both behaviours (cached `conn.createRawPixelsStore()`, and stores that raise when two threads use them at once), and the fixed reader passes: pixel-identical, one store per thread, all closed.
+
    **Pyramid risk resolved**: with a counting fake source, writing all 5 pyramid levels read each full-resolution tile exactly **once**, so no two-step write is needed. Details as planned:
    - **URL**: `omero://host[:port]/Image:123` or `omero://host/123`; port defaults to 4064.
    - **Login**, tried in order, never with a password on the command line:
