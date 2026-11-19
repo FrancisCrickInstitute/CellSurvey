@@ -26,7 +26,7 @@ from cellsurvey.utils import (cluster_data, assign_spots_to_cells, extract_featu
                               store_table_meta, resolve_pixel_size, CLUSTER_ON_CHOICES,
                               STARDIST_NUCLEI_KEY, NUCLEI_KEY, CELLS_KEY)
 from cellsurvey.blob_detection import detect_spots
-from cellsurvey.image_source import open_image_source, stored_pixel_size
+from cellsurvey.image_source import open_image_source, stored_pixel_size, is_omero
 from cellsurvey.network_analysis import run_network_analysis
 from cellsurvey.segmentation import expand_nuclei, run_stardist, run_instanseg
 from cellsurvey.export import export_to_qupath
@@ -138,10 +138,19 @@ def main():
             parser.error(f"Resume Zarr not found: {resume_zarr_path}")
 
     def open_source():
+        if not is_omero(imagepath) and not os.path.exists(imagepath):
+            hint = (" (an OMERO URL must start with omero://; check the host part isn't an empty "
+                    "shell variable)" if imagepath.lower().lstrip('/').startswith('image:') else "")
+            parser.error(f"Input image not found: {imagepath}{hint}")
         try:
             return open_image_source(imagepath, readers=args.omero_readers)
         except (ValueError, RuntimeError, FileNotFoundError, ImportError) as e:
             parser.error(str(e))
+        except Exception as e:
+            if is_omero(imagepath):
+                raise   # unexpected OMERO/Ice error: keep the traceback
+            parser.error(f"Can't read input image {imagepath}: {type(e).__name__}: {e}. "
+                         f"Expected a multichannel (OME-)TIFF, or an omero://<host>/Image:<id> URL.")
 
     # New runs open the input image once, here (lazily: nothing is read yet);
     # stage 1 writes it to <prefix>.zarr and every later stage reads only that.
@@ -263,14 +272,24 @@ def main():
                                           num_sigma=args.num_sigma, n_workers=args.workers)
                 except ValueError as e:
                     parser.error(str(e))
-                image_sdata['spots'] = points
-                print(f'Adding spots to {zarr_path}')
-                try:
-                    image_sdata.write_element('spots')
-                except Exception as e:
-                    print(f"ERROR: Failed to write spots to {zarr_path}: {e}", file=sys.stderr)
-                    sys.exit(1)
-                print("Done")
+                if points is None:
+                    # Nothing to count: carry on as a run without spots.
+                    if args.cluster_on != 'intensities':
+                        parser.error(f"No spots were detected in channels {channel_index} "
+                                     f"(--thresholds {args.thresholds}), so --cluster-on "
+                                     f"{args.cluster_on} has nothing to use. Lower --thresholds, or "
+                                     f"use --cluster-on intensities.")
+                    print(f"WARNING: no spots detected in channels {channel_index} (--thresholds "
+                          f"{args.thresholds}); continuing without spots. Lower --thresholds to find some.")
+                else:
+                    image_sdata['spots'] = points
+                    print(f'Adding spots to {zarr_path}')
+                    try:
+                        image_sdata.write_element('spots')
+                    except Exception as e:
+                        print(f"ERROR: Failed to write spots to {zarr_path}: {e}", file=sys.stderr)
+                        sys.exit(1)
+                    print("Done")
         elif 'spots' not in dataset.points:
             print(f"WARNING: --detect-blobs ignored: the reused {seg_zarr_path} has no spots. "
                   f"Re-run without --resume-from to detect them.")

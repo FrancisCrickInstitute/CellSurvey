@@ -77,7 +77,7 @@ The pipeline is split into modules under the `cellsurvey/` package. `run.py` is 
 
 1. **Image loading + initial Zarr** (`cli.py` → `image_source.py`): New runs call `open_image_source(path)` once at startup. This gives a lazy `(c, y, x)` image, channel names (`sopa.io.ome_tif(..., as_image=True)`) and the pixel size (`get_pixel_size`, bioio). `ImageSource.to_spatialdata()` + `write()` then write `<prefix>.zarr` (image only, with `attrs['cellsurvey'] = {pixel_size_um, source}`). **The source is read only here**; every later stage reads the Zarr. `--resume-from` never opens the source: the pixel size comes from `--pixel-size`, else `attrs['cellsurvey']` in the resume Zarr (`image_source.stored_pixel_size`), else (older Zarrs only) `get_pixel_size(imagepath)`. Blob `--channels`/`--thresholds` are parsed and checked (lengths, then index range against the source) before anything is written.
 
-2. **Spot/blob detection** (`cli.py` → `blob_detection.detect_spots`): Only runs when `--detect-blobs` is passed, **after** the initial Zarr write, on the image read back from `<prefix>.zarr` (`sopa.utils.get_spatial_image`); spots are added with `write_element('spots')`. `detect_spots` passes each selected channel as a `(y, x)` array to `detect_blobs_tiled` (tiled Laplacian-of-Gaussian, `skimage.feature.blob_log`, parallelised with `dask.delayed` on threads; overlap-region filtering prevents duplicates), so a different detector (e.g. Spotiflow) can be swapped in there. Gene names are the Zarr's channel names. It runs only when segmentation will re-read `<prefix>.zarr`. On `--resume-from`, existing spots are reused. Missing spots are detected then, unless a `_seg.zarr` is being reused, in which case it warns. Before 2026-11 detection ran on the TIFF before a single write (a March prototype choice for Spotiflow); on a synthetic OME-TIFF both orders give identical spots.
+2. **Spot/blob detection** (`cli.py` → `blob_detection.detect_spots`): Only runs when `--detect-blobs` is passed, **after** the initial Zarr write, on the image read back from `<prefix>.zarr` (`sopa.utils.get_spatial_image`); spots are added with `write_element('spots')`. `detect_spots` passes each selected channel as a `(y, x)` array to `detect_blobs_tiled` (tiled Laplacian-of-Gaussian, `skimage.feature.blob_log`, parallelised with `dask.delayed` on threads; overlap-region filtering prevents duplicates), so a different detector (e.g. Spotiflow) can be swapped in there. Gene names are the Zarr's channel names. The `gene` column is built as strings (`np.full(n, name, dtype=object)`); with 0 blobs, `np.array([])` would be float and `sopa.aggregate`'s spot counting crashes (`.str accessor … not floating`; a pre-existing bug, found on the HPC 2026-11-20). If **no** spots are found in any channel, `detect_spots` returns `None` and no `spots` element is added. The run then continues as one without spots (with a warning), or stops straight away if `--cluster-on spots|both` needs them. It runs only when segmentation will re-read `<prefix>.zarr`. On `--resume-from`, existing spots are reused. Missing spots are detected then, unless a `_seg.zarr` is being reused, in which case it warns. Before 2026-11 detection ran on the TIFF before a single write (a March prototype choice for Spotiflow); on a synthetic OME-TIFF both orders give identical spots.
 
 3. **Initial Zarr write** (`cli.py`): The dataset (with or without spots) is written to disk with try/except error handling.
 
@@ -658,7 +658,7 @@ Already checked: `sopa.io.ome_tif` is a thin wrapper (dask array → `Image2DMod
 
 ### HPC test checklist (before merging `feature/omero` → `main`)
 
-**Status**: not yet run (written 2026-11-19, `feature/omero` at `b63b4d7`). Tick items off here as they pass and record anything surprising. `feature/omero` contains all of `feature/instanseg`, so passing tests 1–6 covers both branches; then `feature/omero` can fast-forward into `main` (no separate `feature/instanseg` merge needed). Paths in `<…>` are placeholders; use a small local TIFF (e.g. `test_crop`) for tests 2–5.
+**Status**: in progress (written 2026-11-19, `feature/omero` at `b63b4d7`). First pass 2026-11-20: test 2 passed. Test 1 failed only because `$OMERO` was empty in that shell, so the path became `/Image:602780` (now caught with a clear "Input image not found … must start with omero://" error); re-run it with the full URL. Test 3 exposed an old bug (zero blobs → float `gene` column → `sopa.aggregate` crash), now fixed (see below); re-run it with `--thresholds 1,1` to exercise the zero-spots path. Tick items off here as they pass and record anything surprising. `feature/omero` contains all of `feature/instanseg`, so passing tests 1–6 covers both branches; then `feature/omero` can fast-forward into `main` (no separate `feature/instanseg` merge needed). Paths in `<…>` are placeholders; use a small local TIFF (e.g. `test_crop`) for tests 2–5.
 
 **Setup** (once):
 ```bash
@@ -666,18 +666,20 @@ cd <repo> && git pull                      # feature/omero
 pixi install --locked && pixi install --locked -e instanseg
 pixi run omero sessions list               # check the current group; the 2026-11 throughput script may have switched it:
 pixi run omero sessions group STP-CALM     # or log in again: pixi run omero login -s omero-prod.camp.thecrick.org -u <user>
-OMERO=omero://omero-prod.camp.thecrick.org
+OMERO=omero://omero-prod.camp.thecrick.org   # set it in every new shell/job, or write the URL out in full
 ```
 
 - [ ] **1. Fileset check** (seconds; no pixels read):
   `pixi run -e instanseg python run.py -i $OMERO/Image:602780 -o out/t_overview -p out/t_overview_plots --segmenter instanseg`
   ✅ Logs in via the saved session and finds the image in Lab-Gandhi, then stops with "…Did you mean omero://…/Image:602778?". No `out/t_overview.zarr` is created.
-- [ ] **2. Local TIFF, plain** (checks the default Stardist path for regressions; GPU node):
+- [x] **2. Local TIFF, plain** (checks the default Stardist path for regressions; GPU node) — **passed 2026-11-20** on `test_data/test_crop.ome.tiff`: `Found 1 GPU(s)` (A100), 2109 cells, 6123 edges (≤ 3×), GeoJSON at `out/t_local.geojson`:
   `pixi run python run.py -i <test_crop.ome.tiff> -o out/t_local -p out/t_local_plots`
   ✅ Completes. The log shows `Found 1 GPU(s)` (the TF CUDA preload works). `out/t_local.zarr` has `attrs['cellsurvey']` (pixel size, source path). `summary.json` has `cluster_on: intensities`, and `n_edges` is ≤ ~3× the cell count.
 - [ ] **3. Local TIFF with `--detect-blobs`** (checks the reordered blob detection):
   `pixi run python run.py -i <test_crop.ome.tiff> -o out/t_blobs -p out/t_blobs_plots --detect-blobs --channels <i,j> --thresholds <a,b> --cluster-on both`
   ✅ Log order: "Saving Zarr", then "Finding blobs in channel …", then "Adding spots to out/t_blobs.zarr", then segmentation. The intensity and spot channels are listed separately, and the heatmap has `(spots)` columns. Any two channels will do; this only checks the plumbing.
+  - **Also check the zero-spots path**: with thresholds that find nothing (e.g. `--thresholds 1,1` on `test_crop`), `--cluster-on both` must stop straight after detection with "No spots were detected in channels … Lower --thresholds, or use --cluster-on intensities". With `--cluster-on intensities` it should warn "no spots detected … continuing without spots" and complete. (The first pass found the bug this checks for.)
+  - Then re-run with thresholds that find spots (try `0.05`–`0.1` on spot-like channels) for the main check above.
 - [ ] **4. Resume never opens the source**:
   `pixi run python run.py -i /nonexistent.tiff -o out/t_blobs -p out/t_blobs_plots2 --resume-from out/t_blobs.zarr --detect-blobs --channels <i,j> --thresholds <a,b> --cluster-on both`
   ✅ Works despite the non-existent `-i`. Log shows `Physical pixel size (stored in out/t_blobs.zarr)`, "Segmented Zarr with table found, skipping to clustering", and no blob detection.

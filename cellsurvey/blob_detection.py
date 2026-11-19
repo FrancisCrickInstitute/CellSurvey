@@ -87,7 +87,9 @@ def detect_spots(image, channel_index, thresholds, tile_size=1024, overlap=50, m
     the selected channels are read. Each channel is passed as a ``(y, x)``
     array to :func:`detect_blobs_tiled`, so another detector (e.g. Spotiflow)
     can replace it there. Returns a SpatialData points element with columns
-    ``x``, ``y``, ``sigma`` and ``gene`` (the channel name).
+    ``x``, ``y``, ``sigma`` and ``gene`` (the channel name), or ``None`` if no
+    spots were found in any channel (callers should then not add a ``spots``
+    element; ``sopa.aggregate`` can't count an empty spots table).
     """
     import pandas as pd
     from spatialdata.models import PointsModel
@@ -111,8 +113,12 @@ def detect_spots(image, channel_index, thresholds, tile_size=1024, overlap=50, m
             "x": blobs[:, 1],
             "y": blobs[:, 0],
             "sigma": blobs[:, 2],
-            "gene": np.array([ch_name] * len(blobs)),
+            # dtype=object: with 0 blobs, np.array([]) would be float, and sopa's
+            # spot counting fails on a non-string gene column.
+            "gene": np.full(len(blobs), ch_name, dtype=object),
         }))
 
     df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=["x", "y", "sigma", "gene"])
+    if df.empty:
+        return None
     return PointsModel.parse(df, coordinates={"x": "x", "y": "y"}, transformations={"global": Identity()})
