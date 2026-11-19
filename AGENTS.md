@@ -460,6 +460,30 @@ where `dapi_cell` is that cell's DAPI mean intensity. Applied **after aggregatio
 - Normalisation amplifies noise in low-DAPI cells; the zero/epsilon guard is essential.
 - Changing the matrix changes clustering/community results, so existing `_seg.zarr` outputs become non-comparable once enabled (same breaking-change consideration as cell segmentation).
 
+## Future: per-cell spatial analysis of protein and spot distribution
+
+**Status**: idea only (2026-11-19); nothing planned in detail. The aim is to describe *where* signal sits within each cell, not just how much (today's per-cell mean intensity and spot count).
+
+**Candidate per-cell features**:
+- **Spots**:
+  - nuclear vs cytoplasmic fraction (nucleus polygons already exist and are linked through `nucleus_id`);
+  - radial position (distance to the nucleus boundary or centroid, normalised by cell size);
+  - clustering within the cell (nearest-neighbour distances between spots);
+  - polarity (spot centroid offset from the cell centroid).
+- **Protein**:
+  - compartment intensities and ratios: nucleus; cytoplasm (cell minus nucleus); membrane ring (a thin band inside the cell boundary);
+  - intensity-weighted centroid offset (polarisation);
+  - radial intensity profile;
+  - robust positivity scores (see PIPEX: 90th percentile, fraction of pixels above Otsu).
+- **Protein × spots**: marker intensity at spot locations vs the cell mean, i.e. spot–protein colocalisation per cell.
+
+**Keeping it computationally feasible**:
+- Whole slides have ~10⁵–10⁶ cells × 20+ channels. Avoid Python loops over cells and polygons, and pixel-level statistics that scale with cell count × channels × iterations, such as per-cell Ripley's K or Haralick texture on every channel.
+- **Work per tile, vectorised**: reuse Sopa's image patches and read 1024²-chunked tiles from `<prefix>.zarr`. Rasterise cell and nucleus labels per tile (plus a membrane ring by erosion), then compute all cells' compartment statistics at once with `scipy.ndimage`/`skimage.measure.regionprops_table(intensity_image=…)`. Parallelise over tiles with dask. Cells crossing a tile edge belong to the tile containing their centroid, with tiles padded by the maximum cell radius.
+- **Spots are cheap**: assignment is already a vectorised spatial join, and distances to nucleus/cell boundaries can use shapely 2's vectorised functions.
+- **Limit the scope**: compute only for chosen channels (a flag) and store summary statistics only, as new `obs` columns or an `obsm` block. This could be an opt-in stage, or a separate read-only command like the stability sweep.
+- **Fits the aim of owning aggregation** instead of relying on `sopa.aggregate`, which reduces Sopa coupling.
+
 ## Planned: OMERO input
 
 **Status**: implementation planned (see *Implementation plan*), on branch `feature/omero`. The environment is done (omero-py co-installs with both segmenter envs; GPU confirmed). No reader code yet.
