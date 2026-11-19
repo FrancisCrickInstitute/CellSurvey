@@ -132,7 +132,7 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 | `--max-sigma` | `5` | Maximum blob radius for spot detection |
 | `--num-sigma` | `5` | Number of sigma steps for blob detection |
 | `--n-clusters` | `10` | Number of k-means clusters |
-| `--cluster-on` | `intensities` | Features for k-means, network edge weights and UMAP/Leiden: `intensities`, `spots` (spot density; needs spots) or `both` (groups weighted equally). Also in the stability sweep |
+| `--cluster-on` | `intensities` | Features for k-means, network edge weights and UMAP/Leiden: `intensities`, `spots` (spot density; needs spots) or `both` (groups weighted equally). Also in the stability sweep, where it defaults to the mode recorded in the Zarr (`utils.resolve_cluster_on`; `intensities` for older Zarrs) |
 | `--community-resolution` | `0.1` | Louvain community detection resolution |
 | `--max-edge-distance` | `50` | Max edge length (µm) for the Delaunay network |
 | `--radius-min` | `0` | Min radius (µm) for spatial neighbors graph |
@@ -246,7 +246,7 @@ Open:
   - the GeoJSON gets `mean` and `spot count` measurements.
 
   Design:
-  - **New flag `--cluster-on {intensities,spots,both}`** (default `intensities`), also in the stability sweep. `spots`/`both` need spots: a new run without `--detect-blobs` stops at startup.
+  - **New flag `--cluster-on {intensities,spots,both}`** (default `intensities`), also in the stability sweep, which defaults to the mode recorded in `table.uns['cellsurvey']['cluster_on']` so a sweep uses the same features as the run it tests (`utils.resolve_cluster_on`; falls back to `intensities` for Zarrs that predate it; an explicit flag overrides). `spots`/`both` need spots: a new run without `--detect-blobs` stops at startup.
   - **Spot features**: spot *density* (spots per 100 µm² of cell area, so clusters don't just track cell size), then `log1p`, then z-scored.
   - **Intensity features**: z-scored per channel.
   - **`both`**: each group (intensity channels, spot channels) is weighted by 1/√(number of its columns), so the groups contribute equally.
@@ -512,7 +512,7 @@ where `dapi_cell` is that cell's DAPI mean intensity. Applied **after aggregatio
 
 ## Planned: OMERO input
 
-**Status** (2026-11-19): **implemented on `feature/omero`** (`cellsurvey/omero_source.py`; plan steps 1–3 + reader). Tested locally against a fake server; **awaiting the first real-server test** on Image 602778. User docs: `docs/omero.md`.
+**Status** (2026-11-19): **implemented on `feature/omero`** (`cellsurvey/omero_source.py`; plan steps 1–3 + reader). Tested locally against a fake server. The **first real-server test** on Image 602778 (below) got the metadata right but failed on pixel reads (one shared `RawPixelsStore`). The per-thread-store fix has so far only been checked against the fake server, so a **real-server re-test is pending** (also the first timed read of an uncached slide). User docs: `docs/omero.md`.
 
 **Goal**: read the input image directly from an OMERO server instead of requiring a local OME-TIFF.
 

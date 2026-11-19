@@ -26,8 +26,8 @@ import spatialdata
 from sklearn.cluster import KMeans
 
 from cellsurvey.network_analysis import compute_louvain_communities
-from cellsurvey.utils import (resolve_shape_keys, resolve_pixel_size, extract_feature_tables,
-                              build_clustering_features, CLUSTER_ON_CHOICES)
+from cellsurvey.utils import (resolve_shape_keys, resolve_pixel_size, resolve_cluster_on,
+                              extract_feature_tables, build_clustering_features, CLUSTER_ON_CHOICES)
 
 
 def _fmt(v):
@@ -40,11 +40,13 @@ def extract_intensity_matrix(sdata, table_key="table"):
     return extract_feature_tables(sdata.tables[table_key])[0]
 
 
-def extract_features(sdata, cluster_on="intensities", pixel_size_um=None, table_key="table"):
+def extract_features(sdata, cluster_on=None, pixel_size_um=None, table_key="table"):
     """The scaled per-cell features the pipeline clusters on for ``cluster_on``
-    (see :func:`cellsurvey.utils.build_clustering_features`). Spot modes need
-    the pixel size (``pixel_size_um`` or the value stored in the Zarr) to turn
-    cell areas into µm²."""
+    (see :func:`cellsurvey.utils.build_clustering_features`). ``None`` uses the
+    mode the run recorded in the Zarr (see :func:`cellsurvey.utils.resolve_cluster_on`).
+    Spot modes need the pixel size (``pixel_size_um`` or the value stored in the
+    Zarr) to turn cell areas into µm²."""
+    cluster_on, _ = resolve_cluster_on(sdata, cluster_on, table_key)
     table = sdata.tables[table_key]
     intensity_df, counts_df = extract_feature_tables(table)
     cell_area_um2 = None
@@ -61,12 +63,13 @@ def extract_coords(sdata, cell_boundaries=None):
 
 
 def run_stability_sweep(sdata, resolutions, max_edge_distances,
-                        cell_boundaries=None, seed=42, pixel_size_um=None, cluster_on="intensities"):
+                        cell_boundaries=None, seed=42, pixel_size_um=None, cluster_on=None):
     """Recompute Louvain communities across a parameter grid.
 
     ``max_edge_distances`` are in µm, converted to pixels with ``pixel_size_um``
     (µm/px) or, if that is None, the pixel size stored in the table's ``.uns``.
-    Edges are weighted by the ``cluster_on`` features, as in the pipeline.
+    Edges are weighted by the ``cluster_on`` features, as in the pipeline
+    (``None``: the mode the run recorded in the Zarr).
 
     Returns a dict with keys ``cell_ids``, ``coords``, ``labels`` (an
     ``(n_cells, n_sweeps)`` int array, one column per parameter combo), and
@@ -136,11 +139,12 @@ def _coords_for_cell_ids(sdata, cell_ids, cell_boundaries=None):
     return np.array([lookup.get(cid, (np.nan, np.nan)) for cid in cell_ids], dtype=float)
 
 
-def run_cluster_sweep(sdata, n_clusters_list, cell_boundaries=None, seed=42, cluster_on="intensities",
+def run_cluster_sweep(sdata, n_clusters_list, cell_boundaries=None, seed=42, cluster_on=None,
                       pixel_size_um=None):
     """Recompute k-means clusters across a range of ``n_clusters``.
 
-    Clusters on the ``cluster_on`` features, scaled as in the pipeline.
+    Clusters on the ``cluster_on`` features, scaled as in the pipeline
+    (``None``: the mode the run recorded in the Zarr).
     Returns a dict with keys ``cell_ids``, ``coords``, ``labels`` (an
     ``(n_cells, n_sweeps)`` int array, one column per ``k``), ``params`` (the
     list of ``k`` values), and ``inertias``.
@@ -203,9 +207,10 @@ def main():
                              "required for Zarrs written before pixel sizes were stored).")
     parser.add_argument("--n-clusters", default="5,8,10,12,15,20",
                         help="k-means k values to sweep (cluster mode).")
-    parser.add_argument("--cluster-on", choices=CLUSTER_ON_CHOICES, default="intensities",
+    parser.add_argument("--cluster-on", choices=CLUSTER_ON_CHOICES, default=None,
                         help="Features for k-means (cluster mode) and the network edge weights (community "
-                             "mode), as the pipeline's --cluster-on (default: intensities).")
+                             "mode), as the pipeline's --cluster-on (default: the mode the run used, "
+                             "recorded in the Zarr; 'intensities' for Zarrs that predate it).")
     parser.add_argument("--cell-boundaries", default=None,
                         help="Shape layer to sweep over (default: cell_boundaries if present, else the nuclei layer).")
     parser.add_argument("--output", default=None,
@@ -216,12 +221,14 @@ def main():
 
     sdata = spatialdata.read_zarr(args.zarr)
     zarr_dir = os.path.dirname(args.zarr) or "."
+    cluster_on, origin = resolve_cluster_on(sdata, args.cluster_on)
+    print(f"Features: --cluster-on {cluster_on} ({origin})")
 
     if args.mode == "clusters":
         n_clusters_list = [int(x) for x in args.n_clusters.split(",")]
         try:
             result = run_cluster_sweep(sdata, n_clusters_list, cell_boundaries=args.cell_boundaries,
-                                       cluster_on=args.cluster_on, pixel_size_um=args.pixel_size)
+                                       cluster_on=cluster_on, pixel_size_um=args.pixel_size)
         except ValueError as e:
             parser.error(str(e))
         output = args.output or os.path.join(zarr_dir, "cluster_sweep.csv")
@@ -238,7 +245,7 @@ def main():
         try:
             result = run_stability_sweep(sdata, resolutions, max_edge_distances,
                                          cell_boundaries=args.cell_boundaries,
-                                         pixel_size_um=pixel_size_um, cluster_on=args.cluster_on)
+                                         pixel_size_um=pixel_size_um, cluster_on=cluster_on)
         except ValueError as e:
             parser.error(str(e))
         output = args.output or os.path.join(zarr_dir, "community_sweep.csv")

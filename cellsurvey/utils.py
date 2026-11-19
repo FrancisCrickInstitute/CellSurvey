@@ -86,6 +86,24 @@ SPOTS_SUFFIX = ' (spots)'
 _INTENSITIES_OBSM = 'intensities'
 
 
+def resolve_cluster_on(sdata, cluster_on=None, table_key='table'):
+    """Return ``(mode, origin)``: the ``--cluster-on`` mode to use and where it came from.
+
+    An explicit ``cluster_on`` wins. Otherwise the mode the pipeline recorded in
+    ``table.uns['cellsurvey']['cluster_on']`` is used, so sweeps use the same
+    features as the run they test. Zarrs written before it was recorded fall
+    back to ``'intensities'`` (the pipeline default).
+    """
+    if cluster_on is not None:
+        return cluster_on, 'given'
+    stored = None
+    if table_key in sdata.tables:
+        stored = sdata.tables[table_key].uns.get(_UNS_KEY, {}).get('cluster_on')
+    if stored in CLUSTER_ON_CHOICES:
+        return stored, 'stored in the Zarr'
+    return 'intensities', 'default (none stored in the Zarr)'
+
+
 def _clean_channel_columns(df):
     df = df.copy()
     df.columns = [remove_channel_suffix(str(c)) for c in df.columns]

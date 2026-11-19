@@ -212,10 +212,13 @@ Zarrs work too. Override it with `--cell-boundaries <layer>`.
 
 ### Which features are used
 
-Both modes take `--cluster-on intensities|spots|both` (default `intensities`),
-with the same meaning as in the pipeline: the features k-means clusters on
-(cluster mode) and that weight the network edges (community mode). Use the same
-value as the pipeline run to reproduce its results.
+Both modes take `--cluster-on intensities|spots|both`, with the same meaning as
+in the pipeline: the features k-means clusters on (cluster mode) and that weight
+the network edges (community mode). By default the sweep uses the mode the
+pipeline run used, which is recorded in the segmented Zarr, so it reproduces
+that run's features; the sweep prints which mode it picked. Pass `--cluster-on`
+to override it. Zarrs written before the mode was recorded default to
+`intensities`.
 
 !!! note "Clusters are independent of communities"
     `--n-clusters` does **not** affect the communities: Louvain weights its graph
