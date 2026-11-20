@@ -261,6 +261,51 @@ Open:
   - **InstanSeg runs the model twice** (once per layer, each computing both outputs; see `_instanseg_paired_patch`): ~26 + ~48 min here. Caching each patch's cell mask from the first pass (e.g. in the Sopa cache dir) and returning it in the second would roughly halve the GPU time.
   - **27% of InstanSeg cells had no nucleus** and were dropped (226,499), against 9% on `test_crop`. Plausible for brain tissue (fragments of processes), but check visually (e.g. the GeoJSON in QuPath) before relying on the default.
   - **`morphology_by_cluster.png` plots area in px²**: now that the pixel size is always known, convert it to µm².
+
+  **To-do plan for these findings (2026-11-20; not started).** Steps 1–4 are small and planned *before* fast-forwarding `feature/omero` into `main`; steps 5–8 are larger and can go on a new branch after the merge. Each step lists how to check it.
+
+  *Before the merge:*
+  1. **Minimum community size + size-ordered labels** (`network_analysis.py`; also the stability sweep):
+     - add `--min-community-size`; proposed default 10 cells;
+     - relabel smaller communities as `-1` ("unassigned", grey in the GeoJSON, which already handles `-1`; nuclei mapping and plots must handle it);
+     - renumber the rest by size (0 = largest);
+     - `summary.json`: report the communities above the minimum, the number of unassigned cells, and the raw Louvain count;
+     - the sweep applies the same minimum, so counts match.
+
+     Check: resume `omero_602778` → ~50 communities instead of 1,723.
+  2. **`cell_density.png`** (`cli.py`; after step 1): plot the k-means clusters plus only the largest communities (proposed default 20), state the number left out in the title, and loop over actual labels rather than `range(n_communities)`. Check: normal image size, drawn in seconds.
+  3. **Area in µm²** (`cli.py`, morphology plot): `area_px × pixel_size_um²`, axis labelled µm².
+  4. **Docs**: this file, `docs/outputs.md` and `docs/parameters.md` (new flag(s), new `summary.json` fields, the "unassigned" label).
+
+  → One resume run on `omero_602778` checks steps 1–3 together (resumes skip segmentation, ~20 min). Then fast-forward into `main`.
+
+  **Decisions open for steps 1–2**: the minimum community size (10?); renumbering by size (yes?); the `cell_density.png` cap (20, fixed or a flag?).
+
+  *After the merge:*
+  5. **Stop Sopa writing into `<prefix>.zarr`**:
+     - first confirm the mechanism (Sopa writes new elements when the dataset is Zarr-backed) and where Sopa's segmentation cache goes;
+     - likely fix: detach after reading (`dataset.path = None`), so new elements stay in memory until the single `_seg.zarr` write while the image is still read lazily from the Zarr;
+     - risks to measure on `omero_602778`: memory, and the cache location.
+
+     Check: `<prefix>.zarr` holds only `images` (+ `points`) after a run; `test_crop` results are identical; all resume paths still work, especially "shapes but no table".
+  6. **GeoJSON size**:
+     - measure what takes up the 1.9 GB first;
+     - cheap savings: round coordinates to 2 decimals (currently full float precision) and simplify polygons slightly (~0.5 px), plausibly halving the file;
+     - then, if needed: options for no measurements, cells only, or gzip (check whether QuPath imports compressed GeoJSON);
+     - longer term: a `.pbf` export (see the PIPEX reference).
+
+     Check: file size, and that it loads and looks right in QuPath.
+  7. **Run the InstanSeg model once**:
+     - in the nuclei pass, save each patch's cell mask to a temporary cache keyed by a hash of the patch pixels (Sopa's callable gets no patch coordinates);
+     - the cells pass returns the cached mask instead of running the model;
+     - nuclei and cells then come from identical model output, which should reduce unlinked nuclei;
+     - ~16 MB per patch (~10 GB for this slide): node-local temporary disk, deleted afterwards.
+
+     Check: identical results on `test_crop`; ~half the segmentation time on `omero_602778` (~35 min saved).
+  8. **27% unnucleated cells**:
+     - mainly a visual review: the GeoJSON in QuPath, or a `--keep-unnucleated` run;
+     - code support: record the dropped count in `summary.json`, and optionally export the dropped cells as a separate GeoJSON layer for review;
+     - then decide whether the default should change.
 - **Windows: `UnicodeEncodeError` when output is redirected**: with stdout piped or sent to a file, Windows Python encodes with cp1252, and printing channel names such as `αSMA` crashes the run. Workaround: `PYTHONIOENCODING=utf-8`. Fix: `sys.stdout.reconfigure(encoding='utf-8')` (and stderr) at the top of `run.py`. Interactive consoles and Linux are unaffected.
 - **`python -m cellsurvey.stability` warns `'cellsurvey.stability' found in sys.modules…`** (harmless, pre-existing): `cellsurvey/__init__.py` imports `stability` (and `cli`), so running the module with `-m` loads it twice. Fix: import lazily in `__init__`, or give the sweep its own entry point.
 - **Windows: Stardist on CPU is extremely slow**: a local run on `test_crop` used more than an hour of CPU time in segmentation (4 patches), against about 14 s on an HPC CPU node. Not investigated; win-64 is only for local testing.
