@@ -781,6 +781,38 @@ OMERO=omero://omero-prod.camp.thecrick.org   # set it in every new shell/job, or
 
   About **1 h 53 min end to end**. Problems this whole-slide run exposed are in Known issues ("Whole-slide run findings").
 
+## Future: export results back to OMERO
+
+**Status**: idea only (2026-11-20). Goal: let people browse CellSurvey results (segmentation, k-means clusters, communities, per-cell measurements) in OMERO, next to the source image.
+
+**Why it fits**: `<prefix>_seg.zarr` already records its OMERO source (`attrs['cellsurvey']['source']`: host, port, image ID, group). So a separate, read-only-on-the-Zarr command (e.g. `python -m cellsurvey.omero_export --zarr <output>_seg.zarr`) needs no other input, and can reuse `omero_source.connect` (same login order; and never `setGroupForSession`, see the OMERO notes).
+
+**Options**, from cheapest to hardest:
+1. **Attachments + key–value pairs** (easy):
+   - `summary.json`, the plots and the run parameters attached to the source image as FileAnnotations;
+   - a MapAnnotation with headline numbers: cells, clusters, communities, `--cluster-on`, segmenter, CellSurvey version or commit.
+
+   Findable next to the image, but not spatially browsable.
+2. **Label / cluster-map image** (medium; the best fit for browsing whole slides):
+   - rasterise the results at the source resolution into a new multichannel image: cell labels, nucleus labels, k-means cluster ID, community ID;
+   - write a pyramidal OME-TIFF and import it next to the source (e.g. a "CellSurvey results" dataset, with both images linked by a key–value or a comment);
+   - OMERO.iviewer then shows it at full speed like any slide, with per-channel lookup tables, side by side with or overlaid on the original;
+   - the file is large but very compressible (label rasters). Cluster and community maps fit uint8 or uint16; cell labels need uint32.
+3. **ROIs** (hard at whole-slide scale): one polygon ROI per cell, with cluster and community, is the most native form. But iviewer and the API degrade badly with tens of thousands of ROIs per image, and whole slides have ~10⁵–10⁶ cells (617k for Image 602778). Workable variants:
+   - ROIs for a subset only (a region or cluster of interest);
+   - **one polygon per community** (the union or concave hull of its cells; ~50 for 602778), a compact, browsable map of tissue regions;
+   - simplified polygons, uploaded in batches (`saveAndReturnArray`).
+4. **Per-cell table** (medium; depends on the server): an OMERO.table (HDF5) on the image with cell ID, centroid, cluster, community and intensities. With ROIs, the OMERO.parade plugin can filter and colour cells by table values, if installed.
+- **Related, no export needed**: QuPath's OMERO extension can open the image straight from OMERO, and users can load CellSurvey's GeoJSON onto it (the GeoJSON size issue, see Known issues, applies).
+
+**To check first** (with the facility):
+- **Write access**: can the user annotate or import into the image's group? That depends on the group's permission level (read-annotate vs read-only), and the image may belong to someone else.
+- **Server features**: whether OMERO.tables and OMERO.parade are available, and the iviewer version.
+- **ROI limit**: the recommended maximum ROI count per image.
+- **Import route**: where derived images should go, and how imports are done from the HPC (`omero import` from the pixi env?).
+
+**Suggested order**: 1 (attachments + key–values), then 2 (label/cluster-map image), then community-outline ROIs from 3. Per-cell ROIs or tables only if the server copes.
+
 ## Reference: PANORAMIC (plevritis-lab)
 
 **Note (for future consideration):** [PANORAMIC](https://github.com/plevritis-lab/panoramic) is an R/Bioconductor package for **multi-sample meta-analysis of spatial colocalization**. It is NOT integrated into CellSurvey yet — this section records the concepts worth borrowing or adopting downstream.
