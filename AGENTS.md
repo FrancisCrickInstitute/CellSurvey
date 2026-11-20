@@ -253,6 +253,14 @@ Open:
   - **Same features everywhere**: k-means, the Louvain edge weights and UMAP/Leiden (`use_rep`) all use the same scaled features. This changes default community and UMAP results: edges were previously weighted by raw-intensity correlation, and UMAP used Scanpy's `normalize_total` + `log1p` on `.X`.
   - **GeoJSON**: exports both `Cell: <channel> mean` and `Cell: <channel> spot count` (raw counts).
 - **Correlation edge weights are weak with few features** (`network_analysis.compute_louvain_communities`): each edge is weighted by `1 + Pearson r` between the two cells' feature vectors, computed *across features*. With few features this carries little information: with 2 features r is always ±1, so `--cluster-on spots` with two spot channels gave 59 communities on 300 synthetic cells, against 8 for `intensities`. It matters most for `spots` with few spot channels. Options: a distance-based similarity (e.g. `exp(-‖a−b‖² / σ²)`) instead of correlation, or unweighted edges below a minimum feature count. Revisit together with the vectorised edge weighting.
+- **Whole-slide run findings** (OMERO Image 602778, 617,527 cells, 2026-11-20; see the OMERO HPC test results):
+  - **`cell_density.png` has one panel per community**: `n_rows = n_clusters + n_communities` (`cli.py`), so 1,723 communities gave a **1,000 × 1,039,800 px, 65 MB PNG** that took ~4 min and can't be viewed. Fix: plot only the largest communities (e.g. the top 20 by size) and note how many were left out.
+  - **Most communities are isolated cells**: 1,723 communities, but **52 hold 99.1% of cells**; 1,182 are single cells and 1,556 have ≤5 cells. These are cells with no Delaunay neighbour within 50 µm (tissue edges, debris, gaps), so `n_communities` in `summary.json` is misleading. Options: report counts above a minimum size (e.g. `n_communities_ge_10`), and/or relabel communities below a minimum size as `-1` ("unassigned"), as for unlinked nuclei.
+  - **`<prefix>.zarr` also gets `shapes` and `tables`**, not only the image (and spots): `nucleus_boundaries`, `cell_boundaries`, `image_patches` and the table are written into it. Sopa writes new elements straight into the Zarr a dataset was read from (`dataset = spatialdata.read_zarr(zarr_path)` before segmentation). This is pre-existing, and the same data is written again to `_seg.zarr`, so it doubles the disk use for shapes and table. To check: whether a later re-run without `--resume-from` cleans these up (stage 1 overwrites the Zarr), and whether reading the image Zarr into memory or a separate store avoids it. Docs that say `<prefix>.zarr` holds only the image + spots are inaccurate until then.
+  - **GeoJSON is 1.9 GB** for 617k cells (8 channels): heavy for QuPath. See the PIPEX note on compressed `.pbf` export, or offer gzip / cells-only / no-measurements options.
+  - **InstanSeg runs the model twice** (once per layer, each computing both outputs; see `_instanseg_paired_patch`): ~26 + ~48 min here. Caching each patch's cell mask from the first pass (e.g. in the Sopa cache dir) and returning it in the second would roughly halve the GPU time.
+  - **27% of InstanSeg cells had no nucleus** and were dropped (226,499), against 9% on `test_crop`. Plausible for brain tissue (fragments of processes), but check visually (e.g. the GeoJSON in QuPath) before relying on the default.
+  - **`morphology_by_cluster.png` plots area in px²**: now that the pixel size is always known, convert it to µm².
 - **Windows: `UnicodeEncodeError` when output is redirected**: with stdout piped or sent to a file, Windows Python encodes with cp1252, and printing channel names such as `αSMA` crashes the run. Workaround: `PYTHONIOENCODING=utf-8`. Fix: `sys.stdout.reconfigure(encoding='utf-8')` (and stderr) at the top of `run.py`. Interactive consoles and Linux are unaffected.
 - **`python -m cellsurvey.stability` warns `'cellsurvey.stability' found in sys.modules…`** (harmless, pre-existing): `cellsurvey/__init__.py` imports `stability` (and `cli`), so running the module with `-m` loads it twice. Fix: import lazily in `__init__`, or give the sweep its own entry point.
 - **Windows: Stardist on CPU is extremely slow**: a local run on `test_crop` used more than an hour of CPU time in segmentation (4 patches), against about 14 s on an HPC CPU node. Not investigated; win-64 is only for local testing.
@@ -658,7 +666,7 @@ Already checked: `sopa.io.ome_tif` is a thin wrapper (dask array → `Image2DMod
 
 ### HPC test checklist (before merging `feature/omero` → `main`)
 
-**Status**: **tests 1–5 passed (2026-11-20)**; only test 6 (OMERO full run as a batch job) remains. History: on the first pass, test 1 failed only because `$OMERO` was empty in that shell, so the path became `/Image:602780` (now caught with a clear "Input image not found … must start with omero://" error). Test 3 exposed an old bug (zero blobs → float `gene` column → `sopa.aggregate` crash), now fixed (see stage 2). Second pass, after the fixes: all of 1–5 passed.
+**Status**: **all tests 1–6 passed (2026-11-20)**. Test 6 ran interactively on a GPU node rather than as an `sbatch` job, so batch-job login is the only part not exercised. `feature/omero` is ready to fast-forward into `main`. History: on the first pass, test 1 failed only because `$OMERO` was empty in that shell, so the path became `/Image:602780` (now caught with a clear "Input image not found … must start with omero://" error). Test 3 exposed an old bug (zero blobs → float `gene` column → `sopa.aggregate` crash), now fixed (see stage 2). Second pass, after the fixes: all of 1–5 passed.
 
 Minor, harmless log noise seen (possible follow-ups, not blockers):
 - TF startup messages at the end of a resumed (no-segmentation) run come from `umap-learn` importing TensorFlow for its optional ParametricUMAP. Not our import; default env only.
@@ -691,7 +699,7 @@ OMERO=omero://omero-prod.camp.thecrick.org   # set it in every new shell/job, or
 - [x] **5. Stability sweep uses the stored mode** — **passed 2026-11-20**: `Features: --cluster-on both (stored in the Zarr)`. Results on `test_crop` (2108 cells) are instructive. At resolution 0.1: 25 µm → 5963 edges, 51 communities; 50 µm → 6120 edges, 18; 100 µm → 6256 edges, 4. A 25 µm cutoff drops only ~160 edges against 50 µm but triples the community count (isolated cells become small communities); 50 µm looks like a reasonable default, but sweep per dataset:
   `pixi run python -m cellsurvey.stability --zarr out/t_blobs_seg.zarr --max-edge-distances 25,50,100`
   ✅ Prints `Features: --cluster-on both (stored in the Zarr)` and writes the CSVs.
-- [ ] **6. OMERO full run, as an `sbatch` job on a GPU node** (covers the real-server re-test of the per-thread stores, the first read of an uncached slide, and batch-job login):
+- [x] **6. OMERO full run** — **passed 2026-11-19/20** (interactive GPU node, not `sbatch`); see Results below. (Originally specified as an `sbatch` job on a GPU node, covering the real-server re-test of the per-thread stores, the first read of an uncached slide, and batch-job login):
   `pixi run -e instanseg python run.py -i $OMERO/Image:602778 -o out/omero_602778 -p out/omero_602778_plots --segmenter instanseg`
   ✅ Log shows:
   - `Connected to OMERO … via saved `omero login` session` (batch-job login works);
@@ -701,7 +709,32 @@ OMERO=omero://omero-prod.camp.thecrick.org   # set it in every new shell/job, or
 
   Record the time from "Saving Zarr to out/omero_602778.zarr" to "Done" (uncached read; ~2–5 min predicted; `date` before and after in the job script helps). InstanSeg afterwards takes ~1.5 h. Then spot-check visually: `out/omero_602778.zarr` in napari, or the GeoJSON in QuPath, against the image in OMERO. This catches tile placement or byte-order bugs the fake server could have missed.
 
-**Results**: *(fill in)*
+**Results** (test 6, Image 602778, InstanSeg, A100; outputs in `out/omero_602778*`):
+- **OMERO read**: logged in via the saved session; image found in Lab-Gandhi; 8 named channels; 0.4987 µm/px. **No "Hibernate session is not re-entrant" errors** (the per-thread `c.sf.createRawPixelsStore()` fix works on the real server).
+- **Stage-1 copy of the uncached slide took ~5.6 min** for 36.6 GB (~110 MB/s), from Zarr file timestamps 21:23:59 → 21:29:38. That includes the 5-level pyramid, compression and writing to Nemo. The predicted range was 2–5 min.
+- **Copy verified visually**:
+  - a 1/16-scale render of DAPI/GFAP/MAP2 shows coherent tissue with no scrambled or missing tiles;
+  - at a full-resolution junction of four 1024² tiles, nuclei run continuously across both edges (correct placement and byte order);
+  - `attrs['cellsurvey']` records the pixel size and the OMERO source (host, image ID, name, group 954).
+
+  MAP2 shows vertical banding, apparently in the source (acquisition or unmixing), not the copy.
+- **Segmentation**: 621 patches.
+  - Nuclei: 657,741 found → 622,853 after conflicts (~26 min).
+  - Cells: 895,272 → 848,343 (~48 min including conflict resolution).
+  - 621,844 cells linked to a nucleus (1,009 nuclei unlinked); **226,499 cells (27%) dropped with no nucleus**, against 9% on `test_crop`. That's plausible for brain (fragments of processes), but worth a visual check.
+  - 4,317 cells were filtered as too dim, leaving 617,527 cells.
+  - "No cell was returned" on ~14 patches is empty background, and harmless.
+- **Clusters are biologically sensible**, mostly single-marker: MAP2 (neurons, the largest cells), DAPI-high small uniform cells, GFAP (astrocytes), CNPASE (oligodendrocytes), IBA1 (microglia), PSYN, PTAU (154 cells; rare cells or artefacts), and AF (autofluorescent; supports a way to exclude `AF` from clustering, see Known issues).
+- **Timeline**:
+  - stage-1 copy: 21:24 → 21:30;
+  - nuclei: → 21:56;
+  - cells: → 22:44;
+  - GeoJSON: 22:52;
+  - `_seg.zarr`: 22:57;
+  - UMAP: 23:11;
+  - `cell_density.png`: 23:16.
+
+  About **1 h 53 min end to end**. Problems this whole-slide run exposed are in Known issues ("Whole-slide run findings").
 
 ## Reference: PANORAMIC (plevritis-lab)
 
