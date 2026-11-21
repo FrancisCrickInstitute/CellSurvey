@@ -1,0 +1,1002 @@
+"""Overview report: one self-contained HTML page summarising a CellSurvey run.
+
+Reads only the segmented Zarr (``<prefix>_seg.zarr``), like the stability
+sweep, and writes ``<plot_dir>/report.html`` (figures embedded as base64 PNG,
+so the file can be emailed or printed) plus the PNGs in ``<plot_dir>/report/``.
+
+Sections (v1, "core"): header (source, parameters, counts); how to read the
+report; cluster profiles with automatic names; spatial maps over the tissue
+image; communities (outlines, composition, narrative, resolution sweep); and
+data-quality flags (non-specific cells, flagged clusters, suspect markers,
+control channels). Marker histograms, per-marker "positive" maps and a spots
+section are planned (see AGENTS.md, "Planned: Overview report").
+
+Display scale: each marker is shown as a robust z-score of arcsinh intensity
+(median/IQR), following the cellsurvey-analysis overview. This is for display
+only and differs from the plain z-score k-means uses (see
+:func:`cellsurvey.utils.build_clustering_features`).
+
+Run standalone (re-generate without re-running the pipeline):
+    python -m cellsurvey.report --zarr <prefix>_seg.zarr -p <plot_dir>
+
+Must not import TensorFlow, PyTorch or omero-py.
+"""
+
+import argparse
+import base64
+import datetime
+import html
+import io
+import json
+import math
+import os
+import re
+import subprocess
+
+import numpy as np
+import pandas as pd
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+from matplotlib import patheffects
+from scipy.ndimage import gaussian_filter
+
+from cellsurvey.utils import extract_feature_tables, remove_channel_suffix
+
+# --- Fixed report settings (stated in the report header) ---------------------
+POSITIVE_Z = 2.0                  # illustrative "positive" cutoff on the robust z scale
+NONSPECIFIC_MIN_MARKERS = 3       # non-specific: z > POSITIVE_Z in at least max(this,
+NONSPECIFIC_MIN_FRACTION = 0.25   #   ceil(this × number of markers)) markers
+FLAG_CLUSTER_FRACTION = 0.5       # flag clusters that are more than this non-specific
+MARKER_SUSPECT = 0.25             # share of a marker's positives that are non-specific
+MARKER_DOMINATED = 0.5
+MIN_POSITIVES = 100               # fewer positive cells than this: too few to judge a marker
+PURE_COMMUNITY = 0.8              # "mostly one cluster" in the community narrative
+MAX_COMMUNITY_PANELS = 20         # communities drawn in the outline / composition figures
+MAX_BACKGROUND_SIDE = 4000        # pick the largest pyramid level no bigger than this
+MAX_POINTS_PER_PANEL = 60_000     # subsample scatter panels (rasterised)
+MAX_MARKER_PANELS = 30            # per-marker "positive" maps
+
+# Channel-name tokens (first word of the name, upper-case).
+NUCLEAR_TOKENS = {'DAPI', 'HOECHST', 'DRAQ5', 'SYTOX', 'NUCLEI', 'NUCLEAR'}
+CONTROL_TOKENS = {'TRITC', 'CY3', 'CY5', 'CY7', 'FITC', 'AF', 'AUTOFLUORESCENCE', 'AUTOFLUOR',
+                  'BLANK', 'EMPTY', 'BACKGROUND', 'BG'}
+
+# No greys in the cluster palette: grey is reserved for flagged clusters, and the
+# tissue background is greyscale.
+_TAB10 = plt.get_cmap('tab10').colors
+CLUSTER_COLOURS = tuple(c for i, c in enumerate(_TAB10) if i != 7) + tuple(
+    c for i, c in enumerate(plt.get_cmap('tab20b').colors) if i % 4 in (0, 2))
+FLAGGED_COLOUR = (0.62, 0.62, 0.62)
+NAME_MIN_Z = 0.5                  # a marker must average at least this (robust z) to name a cluster
+NAME_LOW_Z = -0.75                # ... or at most this to name it "low <marker>"
+MIN_CELLS_PER_TILE = 3            # overview map: emptier tiles (isolated debris) are left blank
+
+
+# =============================================================================
+# Loading
+# =============================================================================
+
+def _channel_token(name):
+    parts = re.split(r'[\s_()\-]+', str(name).strip())
+    return parts[0].upper() if parts and parts[0] else ''
+
+
+def classify_channel(name):
+    """Return ``'nuclear'``, ``'control'`` or ``'marker'`` for a channel name."""
+    token = _channel_token(name)
+    if token in NUCLEAR_TOKENS:
+        return 'nuclear'
+    if token in CONTROL_TOKENS:
+        return 'control'
+    return 'marker'
+
+
+def code_version():
+    """Short git commit of the CellSurvey code (with ``-dirty`` if modified), or ``None``."""
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    try:
+        sha = subprocess.run(['git', '-C', repo, 'rev-parse', '--short', 'HEAD'], capture_output=True,
+                             text=True, timeout=10, check=True).stdout.strip()
+        dirty = subprocess.run(['git', '-C', repo, 'status', '--porcelain', '--untracked-files=no'],
+                               capture_output=True, text=True, timeout=10).stdout.strip()
+        return sha + ('-dirty' if dirty else '') if sha else None
+    except Exception:
+        return None
+
+
+def _read_sdata(zarr_path):
+    import spatialdata
+    try:
+        return spatialdata.read_zarr(zarr_path, selection=('images', 'tables'))
+    except TypeError:   # older spatialdata without `selection`
+        return spatialdata.read_zarr(zarr_path)
+
+
+def _shape_layers(zarr_path):
+    try:
+        return sorted(n for n in os.listdir(os.path.join(zarr_path, 'shapes')) if not n.startswith(('.', 'zarr')))
+    except OSError:
+        return []
+
+
+def _load_background(sdata):
+    """Nuclear channel from the largest pyramid level whose longest side <= MAX_BACKGROUND_SIDE.
+
+    Returns ``(image, (sx, sy), channel_name)`` with ``sx, sy`` = full-resolution
+    pixels per background pixel, or ``(None, None, None)``.
+    """
+    try:
+        name = sdata.attrs.get('cell_segmentation_image') or next(iter(sdata.images))
+        img = sdata.images[name]
+        if hasattr(img, 'children') and len(img.children):
+            levels = [img[s].ds['image'] for s in img.children]
+        else:
+            levels = [img]
+        full = levels[0]
+        level = levels[-1]
+        for lv in levels:   # largest level that fits
+            if max(lv.shape[-2:]) <= MAX_BACKGROUND_SIDE:
+                level = lv
+                break
+        channels = [remove_channel_suffix(str(c)) for c in level.coords['c'].values]
+        idx = next((i for i, c in enumerate(channels) if classify_channel(c) == 'nuclear'), 0)
+        arr = np.asarray(level.isel(c=idx).data, dtype='float32')
+        sy = full.shape[-2] / arr.shape[0]
+        sx = full.shape[-1] / arr.shape[1]
+        return arr, (sx, sy), channels[idx]
+    except Exception as e:
+        print(f"Report: no tissue background ({type(e).__name__}: {e}); drawing points on white")
+        return None, None, None
+
+
+def _load_matching_sweep(zarr_path, n_cells, mode, folder=None):
+    """This run's sweep summary (``mode``: ``communities`` or ``clusters``), or ``None``.
+
+    Looks in ``folder`` (default: the Zarr's directory) for the run-named files
+    ``python -m cellsurvey.stability`` writes (``<run>_<community|cluster>_sweep*.csv``),
+    then for the old fixed names (``community_sweep*.csv``), which runs sharing a
+    folder overwrite. Either is accepted only if the per-cell CSV has one row
+    per cell of this run.
+    """
+    from cellsurvey.stability import sweep_paths
+    folder = folder or os.path.dirname(os.path.abspath(zarr_path))
+    stem = 'community' if mode == 'communities' else 'cluster'
+    candidates = [sweep_paths(zarr_path, mode, folder),
+                  (os.path.join(folder, f'{stem}_sweep.csv'), os.path.join(folder, f'{stem}_sweep_summary.csv'))]
+    for cells_path, summary_path in candidates:
+        if not (os.path.exists(cells_path) and os.path.exists(summary_path)):
+            continue
+        try:
+            with open(cells_path, 'rb') as f:
+                n_rows = sum(1 for _ in f) - 1
+            if n_rows != n_cells:
+                print(f"Report: ignoring {summary_path}: it's from another run ({n_rows:,} cells, not {n_cells:,})")
+                continue
+            return pd.read_csv(summary_path)
+        except Exception:
+            continue
+    return None
+
+
+def load_report_data(zarr_path, summary_path=None, sweep_dir=None):
+    """Read everything the report needs from ``<prefix>_seg.zarr`` (and summary/sweep files)."""
+    sdata = _read_sdata(zarr_path)
+    table = sdata.tables['table']
+    intensity_df, counts_df = extract_feature_tables(table)
+    obs = table.obs
+    if 'kmeans_cluster' not in obs:
+        raise ValueError(f"{zarr_path} has no k-means clusters; was it written by a full CellSurvey run?")
+    if 'spatial' not in table.obsm:
+        raise ValueError(f"{zarr_path} has no cell centroids (table.obsm['spatial'])")
+
+    meta = dict(table.uns.get('cellsurvey', {}) or {})
+    attrs = dict(sdata.attrs.get('cellsurvey', {}) or {})
+    summary = {}
+    if summary_path and os.path.exists(summary_path):
+        with open(summary_path) as f:
+            summary = json.load(f)
+    sweep = _load_matching_sweep(zarr_path, table.n_obs, 'communities', sweep_dir)
+    cluster_sweep = _load_matching_sweep(zarr_path, table.n_obs, 'clusters', sweep_dir)
+
+    background, scale, background_channel = _load_background(sdata)
+    xy = np.asarray(table.obsm['spatial'], dtype=float)[:, :2]
+    community = (obs['community'].astype(int).to_numpy() if 'community' in obs else None)
+    area_px = obs['area'].astype(float).to_numpy() if 'area' in obs else None
+    return {
+        'zarr_path': os.path.abspath(zarr_path),
+        'intensity_df': intensity_df,
+        'counts_df': counts_df,
+        'cluster': obs['kmeans_cluster'].astype(int).to_numpy(),
+        'community': community,
+        'area_px': area_px,
+        'x': xy[:, 0], 'y': xy[:, 1],
+        'meta': meta, 'attrs': attrs, 'summary': summary, 'sweep': sweep, 'cluster_sweep': cluster_sweep,
+        'shape_layers': _shape_layers(zarr_path),
+        'background': background, 'scale': scale, 'background_channel': background_channel,
+    }
+
+
+# =============================================================================
+# Computations (no plotting)
+# =============================================================================
+
+def robust_z(values):
+    """Robust z-score of arcsinh intensity: (asinh(x) - median) / IQR (IQR 0 → std, then 1)."""
+    a = np.arcsinh(np.asarray(values, dtype='float64'))
+    med = np.median(a)
+    q75, q25 = np.percentile(a, [75, 25])
+    spread = q75 - q25
+    if not spread > 0:
+        spread = a.std() if a.std() > 0 else 1.0
+    return (a - med) / spread
+
+
+def nonspecific_threshold(n_markers):
+    """Number of markers a cell must be bright in to count as non-specific (None if too few markers)."""
+    if n_markers < 2:
+        return None
+    return min(n_markers, max(NONSPECIFIC_MIN_MARKERS, math.ceil(NONSPECIFIC_MIN_FRACTION * n_markers)))
+
+
+def cluster_name(row):
+    """Automatic name from a cluster's mean robust-z profile (a Series indexed by marker).
+
+    The (up to) two markers raised by at least ``NAME_MIN_Z``, e.g. ``GFAP`` or
+    ``PSYN/PTAU``. If none is raised: ``low X/Y`` for markers at or below
+    ``NAME_LOW_Z``, else ``no distinct marker``. So weakly-raised markers never
+    end up in a name.
+    """
+    high = row[row >= NAME_MIN_Z].sort_values(ascending=False)
+    if len(high):
+        return '/'.join(high.index[:2])
+    low = row[row <= NAME_LOW_Z].sort_values()
+    if len(low):
+        return 'low ' + '/'.join(low.index[:2])
+    return 'no distinct marker'
+
+
+def compute(data):
+    """All tables the figures and text use."""
+    df = data['intensity_df']
+    classes = {c: classify_channel(c) for c in df.columns}
+    markers = [c for c in df.columns if classes[c] == 'marker']
+    if not markers:   # e.g. only DAPI + controls: fall back to every channel
+        markers = list(df.columns)
+    Z = pd.DataFrame({m: robust_z(df[m].to_numpy()) for m in markers}, index=df.index)
+    cluster = data['cluster']
+    clusters = sorted(np.unique(cluster).tolist())
+
+    n_needed = nonspecific_threshold(len(markers))
+    if n_needed is not None:
+        nonspecific = ((Z.to_numpy() > POSITIVE_Z).sum(axis=1) >= n_needed)
+    else:
+        nonspecific = np.zeros(len(Z), dtype=bool)
+
+    profile = Z.groupby(cluster).mean()
+    sizes = pd.Series(cluster).value_counts().reindex(clusters).fillna(0).astype(int)
+    ns_frac = pd.Series(nonspecific).groupby(cluster).mean().reindex(clusters).fillna(0)
+    flagged = [c for c in clusters if ns_frac[c] > FLAG_CLUSTER_FRACTION]
+    # Most distinctive markers: largest |mean robust z|, so clearly *low* markers count too.
+    top = {c: list(profile.loc[c].reindex(profile.loc[c].abs().sort_values(ascending=False).index)
+                   .head(5).items()) for c in clusters}
+    names = {c: ('non-specific' if c in flagged else cluster_name(profile.loc[c])) for c in clusters}
+
+    marker_rows = []
+    for m in markers:
+        pos = Z[m].to_numpy() > POSITIVE_Z
+        n_pos = int(pos.sum())
+        share = float((pos & nonspecific).sum() / n_pos) if n_pos else 0.0
+        if n_pos < MIN_POSITIVES:
+            status = 'too few'
+        else:
+            status = ('dominated' if share > MARKER_DOMINATED else 'suspect' if share > MARKER_SUSPECT
+                      else 'clean')
+        marker_rows.append({'marker': m, 'n_positive': n_pos, 'pct_positive': 100 * pos.mean(),
+                            'pct_nonspecific': 100 * share, 'status': status})
+
+    comm = None
+    if data['community'] is not None:
+        community = data['community']
+        valid = community >= 0
+        if valid.any():
+            ct = pd.crosstab(community[valid], cluster[valid])
+            frac = ct.div(ct.sum(axis=1), axis=0)
+            comm_sizes = ct.sum(axis=1).sort_values(ascending=False)
+            dom = frac.idxmax(axis=1)
+            comm = {
+                'sizes': comm_sizes,
+                'frac': frac,
+                'dominant': dom,
+                'dominant_share': frac.max(axis=1),
+                'n_unassigned': int((~valid).sum()),
+            }
+    return {
+        'markers': markers, 'classes': classes, 'Z': Z, 'clusters': clusters, 'sizes': sizes,
+        'profile': profile, 'top': top, 'names': names, 'flagged': flagged, 'ns_frac': ns_frac,
+        'nonspecific': nonspecific, 'n_needed': n_needed, 'marker_table': pd.DataFrame(marker_rows),
+        'comm': comm,
+    }
+
+
+# =============================================================================
+# Figures (each a function of the loaded data + computed tables)
+# =============================================================================
+
+def _cluster_colour(c, res):
+    if c in res['flagged']:
+        return FLAGGED_COLOUR
+    return CLUSTER_COLOURS[res['clusters'].index(c) % len(CLUSTER_COLOURS)]
+
+
+def _display_xy(data):
+    """Cell coordinates in the background image's pixel frame (or full-res if no background)."""
+    if data['background'] is None:
+        return data['x'], data['y']
+    sx, sy = data['scale']
+    return data['x'] / sx, data['y'] / sy
+
+
+def _tissue_axes(ax, data, xs=None, ys=None, dim=0.45):
+    """Draw the tissue background (image coordinates: y down) and set equal aspect.
+
+    The background is dimmed (shown at ``dim`` of full brightness) so coloured
+    points and outlines on top stay visible.
+    """
+    bg = data['background']
+    if bg is not None:
+        finite = bg[np.isfinite(bg)]
+        lo, hi = (np.percentile(finite, [1, 99.8]) if finite.size else (0, 1))
+        shown = np.clip((bg - lo) / max(hi - lo, 1e-9), 0, 1) * dim
+        ax.imshow(shown, cmap='gray', origin='upper', vmin=0, vmax=1, interpolation='nearest')
+        ax.set_xlim(0, bg.shape[1])
+        ax.set_ylim(bg.shape[0], 0)
+    else:
+        ax.set_facecolor('white')
+        if xs is not None and len(xs):
+            ax.set_xlim(np.nanmin(xs), np.nanmax(xs))
+            ax.set_ylim(np.nanmax(ys), np.nanmin(ys))
+    ax.set_aspect('equal')
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+
+def fig_cluster_profile(res):
+    prof = res['profile'].loc[res['clusters'], res['markers']]
+    n_c, n_m = prof.shape
+    fig, ax = plt.subplots(figsize=(max(6, 0.55 * n_m + 4), max(3.5, 0.45 * n_c + 1.5)), layout='constrained')
+    im = ax.imshow(prof.to_numpy(), aspect='auto', cmap='RdBu_r', vmin=-2, vmax=2)
+    ax.set_xticks(range(n_m))
+    ax.set_xticklabels(res['markers'], rotation=60, ha='right', fontsize=8)
+    ax.set_yticks(range(n_c))
+    ax.set_yticklabels([f"{c}: {res['names'][c]}" + (' ⚠' if c in res['flagged'] else '')
+                        for c in res['clusters']], fontsize=8)
+    ax.set_title('Mean marker level per k-means cluster (robust z)', fontsize=11)
+    fig.colorbar(im, ax=ax, shrink=0.8, label='mean robust z (capped at ±2)')
+    return fig
+
+
+def fig_cluster_maps(data, res, rng):
+    xs, ys = _display_xy(data)
+    clusters = res['clusters']
+    ncols = 4 if len(clusters) <= 8 else 5
+    nrows = math.ceil(len(clusters) / ncols)
+    fig, axes = plt.subplots(nrows, ncols, figsize=(3.6 * ncols, 3.8 * nrows), layout='constrained', squeeze=False)
+    for ax in axes.ravel():
+        ax.axis('off')
+    cluster = data['cluster']
+    for ax, c in zip(axes.ravel(), clusters):
+        ax.axis('on')
+        _tissue_axes(ax, data, xs, ys)
+        idx = np.flatnonzero(cluster == c)
+        n = len(idx)
+        if n > MAX_POINTS_PER_PANEL:
+            idx = rng.choice(idx, MAX_POINTS_PER_PANEL, replace=False)
+        # Small clusters get bigger, more opaque points so a few hundred cells still show.
+        size, alpha = (0.3, 0.45) if n > 20_000 else (1.5, 0.7) if n > 2_000 else (6.0, 0.9)
+        ax.scatter(xs[idx], ys[idx], s=size, alpha=alpha, color=_cluster_colour(c, res), linewidths=0,
+                   rasterized=True)
+        ax.set_title(f"{c}: {res['names'][c]} ({int(res['sizes'][c]):,})", fontsize=8)
+    fig.suptitle('Where each k-means cluster sits (over the tissue image)', fontsize=12)
+    return fig
+
+
+def fig_cluster_overview_map(data, res, bins=220):
+    """Each square bin coloured by its most common cluster, over the tissue image."""
+    xs, ys = _display_xy(data)
+    finite = np.isfinite(xs) & np.isfinite(ys)
+    xs_f, ys_f, cl = xs[finite], ys[finite], data['cluster'][finite]
+    if data['background'] is not None:
+        h, w = data['background'].shape
+        rng_x, rng_y = (0, w), (0, h)
+    else:
+        rng_x, rng_y = (xs_f.min(), xs_f.max()), (ys_f.min(), ys_f.max())
+    long_side = max(rng_x[1] - rng_x[0], rng_y[1] - rng_y[0])
+    nx = max(1, int(bins * (rng_x[1] - rng_x[0]) / long_side))
+    ny = max(1, int(bins * (rng_y[1] - rng_y[0]) / long_side))
+    counts = np.stack([np.histogram2d(ys_f[cl == c], xs_f[cl == c], bins=(ny, nx), range=(rng_y, rng_x))[0]
+                       for c in res['clusters']])
+    dominant = counts.argmax(axis=0)
+    occupied = counts.sum(axis=0) >= MIN_CELLS_PER_TILE
+    colours = [_cluster_colour(c, res) for c in res['clusters']]
+    rgba = np.zeros((ny, nx, 4))
+    rgba[..., :3] = np.array(colours)[dominant]
+    rgba[..., 3] = np.where(occupied, 0.85, 0.0)
+
+    fig, ax = plt.subplots(figsize=(9, 9 * (rng_y[1] - rng_y[0]) / max(rng_x[1] - rng_x[0], 1)))
+    _tissue_axes(ax, data, xs, ys)
+    ax.imshow(rgba, origin='upper', extent=(rng_x[0], rng_x[1], rng_y[1], rng_y[0]), interpolation='nearest')
+    handles = [mpatches.Patch(color=colours[i], label=f"{c}: {res['names'][c]}")
+               for i, c in enumerate(res['clusters'])]
+    ax.legend(handles=handles, fontsize=7, loc='upper left', bbox_to_anchor=(1.01, 1), frameon=False)
+    ax.set_title('All clusters at once: each tile shows its most common cluster', fontsize=11)
+    return fig
+
+
+def fig_community_outlines(data, res, grid=320):
+    comm = res['comm']
+    xs, ys = _display_xy(data)
+    community = data['community']
+    top = comm['sizes'].index[:MAX_COMMUNITY_PANELS].tolist()
+    if data['background'] is not None:
+        h, w = data['background'].shape
+        rng_x, rng_y = (0, w), (0, h)
+    else:
+        f = np.isfinite(xs) & np.isfinite(ys)
+        rng_x, rng_y = (xs[f].min(), xs[f].max()), (ys[f].min(), ys[f].max())
+    fig, ax = plt.subplots(figsize=(9, 9 * (rng_y[1] - rng_y[0]) / max(rng_x[1] - rng_x[0], 1)))
+    _tissue_axes(ax, data, xs, ys)
+    cmap = plt.get_cmap('tab20')
+    halo = [patheffects.withStroke(linewidth=2.5, foreground='black')]
+    for i, c in enumerate(top):
+        m = community == c
+        H, ye, xe = np.histogram2d(ys[m], xs[m], bins=grid, range=(rng_y, rng_x))
+        H = gaussian_filter(H, sigma=1.5)
+        if H.max() <= 0:
+            continue
+        xc, yc = (xe[:-1] + xe[1:]) / 2, (ye[:-1] + ye[1:]) / 2
+        ax.contour(xc, yc, H, levels=[max(H.max() * 0.05, 1e-9)], colors=[cmap(i % 20)], linewidths=1.3)
+        ax.text(np.nanmedian(xs[m]), np.nanmedian(ys[m]), str(c), color=cmap(i % 20), fontsize=9,
+                ha='center', va='center', weight='bold', path_effects=halo)
+    shown = len(top)
+    total = len(comm['sizes'])
+    ax.set_title(f"Outlines of the {shown} largest communities"
+                 + (f" (of {total})" if total > shown else ""), fontsize=11)
+    return fig
+
+
+def fig_community_composition(res):
+    comm = res['comm']
+    top = comm['sizes'].index[:max(MAX_COMMUNITY_PANELS, 30)].tolist()
+    dom = comm['dominant'].loc[top]
+    order = sorted(top, key=lambda c: (res['clusters'].index(dom[c]), -comm['sizes'][c]))
+    frac = comm['frac'].reindex(index=order, columns=res['clusters']).fillna(0)
+    fig, ax = plt.subplots(figsize=(max(8, 0.32 * len(order) + 4), 4.8), layout='constrained')
+    bottom = np.zeros(len(order))
+    for c in res['clusters']:
+        vals = frac[c].to_numpy()
+        ax.bar(range(len(order)), vals, bottom=bottom, width=0.9, color=_cluster_colour(c, res),
+               label=f"{c}: {res['names'][c]}")
+        bottom += vals
+    ax.set_xticks(range(len(order)))
+    ax.set_xticklabels([str(c) for c in order], rotation=90, fontsize=7)
+    ax.set_xlim(-0.6, len(order) - 0.4)
+    ax.set_ylim(0, 1)
+    ax.set_xlabel('community (grouped by its most common cluster, then by size)')
+    ax.set_ylabel('fraction of cells')
+    ax.set_title(f'What each of the {len(order)} largest communities is made of', fontsize=11)
+    ax.legend(fontsize=7, loc='upper left', bbox_to_anchor=(1.01, 1), frameon=False)
+    return fig
+
+
+def fig_marker_distributions(res):
+    """One log-scale histogram per marker on the robust z scale, with the "positive" line."""
+    markers = res['markers']
+    ncols = min(4, len(markers))
+    nrows = math.ceil(len(markers) / ncols)
+    fig, axes = plt.subplots(nrows, ncols, figsize=(3.4 * ncols, 2.5 * nrows), squeeze=False,
+                             layout='constrained')
+    for ax in axes.ravel():
+        ax.axis('off')
+    for ax, m in zip(axes.ravel(), markers):
+        ax.axis('on')
+        z = res['Z'][m].to_numpy()
+        lo, hi = np.percentile(z, [0.01, 99.99])
+        lo, hi = min(lo, -3), max(hi, POSITIVE_Z + 2)
+        ax.hist(np.clip(z, lo, hi), bins=120, range=(lo, hi), color='#9A9FA8', log=True)
+        ax.axvline(POSITIVE_Z, color='#C1622D', lw=1.5)
+        ax.axvline(0, color='#6C5B9E', lw=0.8, ls=':')
+        pct = 100 * (z > POSITIVE_Z).mean()
+        ax.set_title(f'{m}  ({pct:.1f}% "positive")', fontsize=9)
+        ax.tick_params(labelsize=7)
+    fig.suptitle(f'Marker distributions (robust z; log count). Orange = "positive" line (z = {POSITIVE_Z:g}); '
+                 'dotted = typical cell (z = 0)', fontsize=11)
+    return fig
+
+
+def fig_positive_maps(data, res, rng):
+    """Cells above the "positive" line for each marker, over the tissue; non-specific cells in grey."""
+    xs, ys = _display_xy(data)
+    markers = res['markers'][:MAX_MARKER_PANELS]
+    ncols = 4 if len(markers) <= 8 else 5
+    nrows = math.ceil(len(markers) / ncols)
+    fig, axes = plt.subplots(nrows, ncols, figsize=(3.6 * ncols, 3.8 * nrows), layout='constrained', squeeze=False)
+    for ax in axes.ravel():
+        ax.axis('off')
+    ns = res['nonspecific']
+    for ax, m in zip(axes.ravel(), markers):
+        ax.axis('on')
+        _tissue_axes(ax, data, xs, ys)
+        pos = res['Z'][m].to_numpy() > POSITIVE_Z
+        n = int(pos.sum())
+        size, alpha = (0.4, 0.5) if n > 20_000 else (1.5, 0.75) if n > 2_000 else (5.0, 0.9)
+        for sel, colour in ((pos & ns, FLAGGED_COLOUR), (pos & ~ns, '#F28E2B')):
+            idx = np.flatnonzero(sel)
+            if len(idx) > MAX_POINTS_PER_PANEL:
+                idx = rng.choice(idx, MAX_POINTS_PER_PANEL, replace=False)
+            ax.scatter(xs[idx], ys[idx], s=size, alpha=alpha, color=colour, linewidths=0, rasterized=True)
+        ax.set_title(f'{m} ({n:,} positive)', fontsize=8)
+    extra = (f' (first {MAX_MARKER_PANELS} of {len(res["markers"])} markers)'
+             if len(res['markers']) > MAX_MARKER_PANELS else '')
+    fig.suptitle(f'"Positive" cells (robust z > {POSITIVE_Z:g}) for each marker{extra}: orange; '
+                 'grey = non-specific cells', fontsize=12)
+    return fig
+
+
+def fig_cluster_sweep(sweep, k_used):
+    """Inertia and silhouette against k, with the run's k marked."""
+    sw = sweep.sort_values('n_clusters')
+    has_sil = 'silhouette' in sw.columns and sw['silhouette'].notna().any()
+    fig, axes = plt.subplots(1, 2 if has_sil else 1, figsize=(10 if has_sil else 5.5, 3.6), squeeze=False,
+                             layout='constrained')
+    ax = axes[0, 0]
+    ax.plot(sw['n_clusters'], sw['inertia'], 'o-', color='#4C72B0')
+    ax.set_xlabel('number of clusters (k)')
+    ax.set_ylabel('inertia (within-cluster spread)')
+    ax.set_title('Elbow: where adding clusters stops helping', fontsize=10)
+    if has_sil:
+        ax2 = axes[0, 1]
+        ax2.plot(sw['n_clusters'], sw['silhouette'], 'o-', color='#55A868')
+        ax2.set_xlabel('number of clusters (k)')
+        ax2.set_ylabel('mean silhouette (higher = better separated)')
+        ax2.set_title('Silhouette: how distinct the clusters are', fontsize=10)
+    for a in axes.ravel():
+        a.axvline(k_used, color='#C1622D', ls='--', lw=1.2, label=f'this run (k = {k_used})')
+        a.set_xticks(sw['n_clusters'])
+        a.legend(fontsize=8)
+    return fig
+
+
+def fig_quality(res):
+    clusters = res['clusters']
+    vals = [100 * res['ns_frac'][c] for c in clusters]
+    fig, ax = plt.subplots(figsize=(max(6, 0.6 * len(clusters) + 2), 3.6), layout='constrained')
+    ax.bar(range(len(clusters)), vals, color=[_cluster_colour(c, res) for c in clusters])
+    ax.axhline(100 * FLAG_CLUSTER_FRACTION, color='#C1622D', lw=1.2, ls='--')
+    ax.set_xticks(range(len(clusters)))
+    ax.set_xticklabels([f"{c}: {res['names'][c]}" for c in clusters], rotation=45, ha='right', fontsize=8)
+    ax.set_ylabel('% non-specific cells')
+    ax.set_ylim(0, 100)
+    ax.set_title('Share of each cluster that is non-specific (dashed line = flag threshold)', fontsize=11)
+    return fig
+
+
+# =============================================================================
+# HTML
+# =============================================================================
+
+CSS = """
+body{font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;max-width:1100px;margin:2em auto;padding:0 1.2em;
+color:#222;line-height:1.5}
+h1{font-size:1.7em;margin-bottom:.2em}h2{border-bottom:1px solid #ddd;padding-bottom:.2em;margin-top:2em}
+h3{margin-top:1.4em}table{border-collapse:collapse;margin:.8em 0;font-size:.9em}
+th,td{border:1px solid #ddd;padding:.3em .6em;text-align:left;vertical-align:top}th{background:#f5f5f5}
+td.num{text-align:right;font-variant-numeric:tabular-nums}img{max-width:100%;height:auto;margin:.6em 0}
+.note{background:#f7f7f2;border-left:4px solid #c9b458;padding:.6em 1em;margin:1em 0}
+.warn{background:#fbf1ee;border-left:4px solid #C1622D;padding:.6em 1em;margin:1em 0}
+.muted{color:#666;font-size:.9em}nav ol{columns:2}code{background:#f3f3f3;padding:0 .25em}
+@media print{body{max-width:none;margin:0}h2{page-break-before:always}h2:first-of-type{page-break-before:auto}
+img{page-break-inside:avoid}}
+"""
+
+
+def _esc(x):
+    return html.escape(str(x))
+
+
+def _table(headers, rows, num_cols=()):
+    out = ['<table><tr>' + ''.join(f'<th>{_esc(h)}</th>' for h in headers) + '</tr>']
+    for r in rows:
+        cells = []
+        for i, v in enumerate(r):
+            cls = ' class="num"' if i in num_cols else ''
+            cells.append(f'<td{cls}>{v}</td>')
+        out.append('<tr>' + ''.join(cells) + '</tr>')
+    out.append('</table>')
+    return '\n'.join(out)
+
+
+def _fmt(v, nd=None):
+    if v is None or (isinstance(v, (float, np.floating)) and not np.isfinite(v)):
+        return '—'
+    if nd is not None:
+        return f'{v:.{nd}f}'
+    if isinstance(v, (float, np.floating)) and float(v).is_integer():
+        v = int(v)   # whole numbers read back from CSV as floats (51.0 → 51)
+    if isinstance(v, (int, np.integer)):
+        return f'{v:,}'
+    if isinstance(v, (float, np.floating)):
+        return f'{v:g}'
+    return str(v)
+
+
+class _Figures:
+    """Saves figures as PNG files and returns base64 <img> tags."""
+
+    def __init__(self, out_dir):
+        self.out_dir = out_dir
+        os.makedirs(out_dir, exist_ok=True)
+
+    def tag(self, fig, name, alt, dpi=130):
+        buf = io.BytesIO()
+        fig.savefig(buf, format='png', dpi=dpi, bbox_inches='tight', pad_inches=0.1)
+        plt.close(fig)
+        data = buf.getvalue()
+        with open(os.path.join(self.out_dir, f'{name}.png'), 'wb') as f:
+            f.write(data)
+        return (f'<img alt="{_esc(alt)}" src="data:image/png;base64,'
+                f'{base64.b64encode(data).decode("ascii")}">')
+
+
+def _source_text(attrs, zarr_path):
+    src = attrs.get('source') or {}
+    if src.get('type') == 'omero':
+        return (f"OMERO {src.get('host')} — Image:{src.get('image_id')} "
+                f"({src.get('image_name', '')}), group {src.get('group_id', '?')}")
+    if src.get('type') == 'file':
+        return src.get('path', '')
+    return f"(not recorded) — results in {zarr_path}"
+
+
+def _segmenter_text(meta, shape_layers):
+    seg = meta.get('segmenter')
+    if not seg:
+        if 'nucleus_boundaries' in shape_layers:
+            seg = 'instanseg'
+        elif 'stardist_boundaries' in shape_layers:
+            seg = 'stardist'
+    if seg == 'instanseg':
+        model = meta.get('instanseg_model')
+        return 'InstanSeg' + (f' ({model})' if model else '') + ' — nuclei + whole cells'
+    if seg == 'stardist':
+        exp = meta.get('cell_expansion_um')
+        cells = ('nuclei expanded by ' + f'{exp:g} µm' if exp else
+                 'nuclei, expanded to cells' if 'cell_boundaries' in shape_layers else 'nuclei only')
+        return f'Stardist (2D_versatile_fluo) — {cells}'
+    return '(not recorded)'
+
+
+def build_html(data, res, figs):
+    meta, attrs, summary = data['meta'], data['attrs'], data['summary']
+    get = lambda k: meta.get(k, summary.get(k))   # noqa: E731 — stored in the Zarr, else summary.json
+    n_cells = len(data['cluster'])
+    markers = res['markers']
+    nuclear = [c for c, k in res['classes'].items() if k == 'nuclear']
+    controls = [c for c, k in res['classes'].items() if k == 'control']
+    comm = res['comm']
+    px = meta.get('pixel_size_um') or attrs.get('pixel_size_um')
+
+    parts = [f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
+             f'<meta name="viewport" content="width=device-width,initial-scale=1">'
+             f'<title>CellSurvey overview</title><style>{CSS}</style></head><body>']
+    parts.append('<h1>CellSurvey overview report</h1>')
+    parts.append(f'<p class="muted">Generated {datetime.datetime.now():%Y-%m-%d %H:%M} from '
+                 f'<code>{_esc(data["zarr_path"])}</code></p>')
+
+    # --- Header -------------------------------------------------------------
+    area_note = ''
+    if data['area_px'] is not None and px:
+        med_area = float(np.nanmedian(data['area_px'])) * px ** 2
+        area_note = f' (median cell area {med_area:,.0f} µm²)'
+    rows = [
+        ('Source image', _esc(_source_text(attrs, data['zarr_path']))),
+        ('Segmentation', _esc(_segmenter_text(meta, data['shape_layers']))),
+        ('Pixel size', f'{px:.4f} µm/px' if px else '—'),
+        ('Cells analysed', f'{n_cells:,}{area_note}'),
+        ('Marker channels', _esc(', '.join(markers)) + f' ({len(markers)})'),
+        ('Nuclear / control channels', _esc(', '.join(nuclear + controls) or 'none')
+         + ' — shown as background or excluded from the marker sections'),
+        ('Clustering', f"k-means, {len(res['clusters'])} clusters, on "
+                       f"<code>{_esc(get('cluster_on') or 'intensities')}</code> features"),
+        ('Communities', (f"Louvain at resolution {_fmt(get('community_resolution'))}, Delaunay edges up to "
+                         f"{_fmt(get('max_edge_distance_um'))} µm, minimum {_fmt(get('min_community_size'))} "
+                         f"cells: <b>{len(comm['sizes'])} communities</b>, "
+                         f"{comm['n_unassigned']:,} cells unassigned" if comm else 'not available')),
+        ('CellSurvey code', _esc(f"run: {meta.get('code_version') or 'not recorded'}; "
+                                 f"report: {code_version() or 'unknown'}")),
+        ('Report settings', f'"positive" = robust z &gt; {POSITIVE_Z:g}; non-specific = positive in ≥ '
+                            f'{res["n_needed"] if res["n_needed"] else "—"} of {len(markers)} markers; '
+                            f'clusters flagged if &gt; {100 * FLAG_CLUSTER_FRACTION:.0f}% non-specific'),
+    ]
+    parts.append(_table(['', ''], [(f'<b>{a}</b>', b) for a, b in rows]))
+
+    parts.append('<nav><b>Contents</b><ol><li><a href="#read">How to read this</a></li>'
+                 '<li><a href="#markers">Markers</a></li>'
+                 '<li><a href="#clusters">Cell populations (clusters)</a></li>'
+                 '<li><a href="#maps">Where things are</a></li>'
+                 '<li><a href="#communities">Communities</a></li>'
+                 '<li><a href="#quality">Data-quality flags</a></li></ol></nav>')
+
+    # --- How to read ----------------------------------------------------------
+    parts.append('<h2 id="read">How to read this</h2>')
+    parts.append(
+        '<p><b>"z-score"</b> puts every marker on the same ruler. Raw brightness can\'t be compared between '
+        'markers (each is imaged at its own settings, and the slide is lit unevenly), so for each marker a '
+        'typical cell is set to 0, and 1 is one "spread" of the data. Here the spread is the interquartile '
+        'range of the arcsinh-transformed intensity, which resists outliers. A z-score of +2 means '
+        '"noticeably brighter than the typical cell for that marker"; it does <i>not</i> mean the cell is '
+        'definitively positive. That line is a separate judgement call.</p>')
+    parts.append(
+        '<p><b>Two different kinds of grouping</b>, easy to confuse:</p><ul>'
+        '<li><b>Clusters</b> (k-means) group cells by <i>what they express</i>: cells with similar marker '
+        'profiles go together, wherever they sit in the tissue.</li>'
+        '<li><b>Communities</b> group cells by <i>where they are</i>: neighbouring cells go together, '
+        'whatever they express. A cell type that is physically scattered shows up in many communities.</li>'
+        '</ul><p>Both come from the same data; they answer different questions.</p>')
+    parts.append(f'<p class="muted">Cluster names are generated automatically from the (up to two) markers a '
+                 f'cluster has raised (mean robust z ≥ {NAME_MIN_Z:g}); "low X" means no marker is raised but X '
+                 f'is clearly below typical, and "no distinct marker" means neither. Names describe marker '
+                 'profiles, not confirmed cell types, and can repeat when clusters differ mainly in overall '
+                 'brightness; the cluster number always identifies them. The display scale here (robust z) '
+                 'differs slightly from the plain z-score used for clustering.</p>')
+
+    # --- Markers ----------------------------------------------------------------
+    parts.append('<h2 id="markers">1. Markers, and what "positive" means</h2>')
+    mt = res['marker_table']
+    unimodal_note = ('Most markers show one broad pile with a tail rather than two clear peaks ("off" and '
+                     '"on"), so ')
+    parts.append(f'<p>The brightness distribution of every marker on the robust z scale. The <b>orange line</b> '
+                 f'is the illustrative "positive" cutoff used throughout this report (z = {POSITIVE_Z:g}); the '
+                 f'dotted line is the typical cell (z = 0). {unimodal_note}the positive line is a <i>choice</i>, '
+                 'not a property of the data: move it and different cells flip sides. Where the biology '
+                 'depends on it, choose the line deliberately for each marker, or treat the marker as a '
+                 'continuous quantity.</p>')
+    parts.append(figs['marker_distributions'])
+    parts.append(_table(['Marker', '"Positive" cells', '%'],
+                        [(_esc(r.marker), f'{r.n_positive:,}', f'{r.pct_positive:.1f}%') for r in mt.itertuples()],
+                        num_cols=(1, 2)))
+
+    # --- Clusters ---------------------------------------------------------------
+    parts.append('<h2 id="clusters">2. Cell populations (k-means clusters)</h2>')
+    parts.append(f'<p>The cells fall into <b>{len(res["clusters"])} clusters</b>. The heatmap shows each '
+                 'cluster\'s average level of every marker; the table lists its size and the five markers '
+                 'that distinguish it most, i.e. furthest from typical in either direction (+ = higher, '
+                 '− = lower than the typical cell).</p>')
+    parts.append(figs['profile'])
+    rows = []
+    for c in res['clusters']:
+        tops = ', '.join(f'{_esc(m)} ({z:+.2f})' for m, z in res['top'][c])
+        flag = ' ⚠ non-specific' if c in res['flagged'] else ''
+        rows.append((str(c), _esc(res['names'][c]) + flag, f"{int(res['sizes'][c]):,}",
+                     f"{100 * res['sizes'][c] / n_cells:.1f}%", f"{100 * res['ns_frac'][c]:.0f}%", tops))
+    parts.append(_table(['Cluster', 'Name', 'Cells', '%', 'Non-specific',
+                         'Most distinctive markers (mean robust z, largest |z| first)'],
+                        rows, num_cols=(2, 3, 4)))
+    if res['flagged']:
+        parts.append(f'<div class="warn"><b>Cluster(s) {", ".join(map(str, res["flagged"]))}</b> are mostly '
+                     'non-specific cells (bright in many markers at once; likely autofluorescence, debris or '
+                     'edge artefacts). Don\'t read them as real marker-positive populations.</div>')
+
+    k_used = len(res['clusters'])
+    csw = data['cluster_sweep']
+    parts.append('<h3>Choosing the number of clusters</h3>')
+    if csw is not None and 'cluster_sweep' in figs:
+        parts.append('<p>k-means needs the number of clusters (k) chosen in advance. These are the results of '
+                     're-running it with other values of k on the same features. <b>Inertia</b> always falls as '
+                     'k grows; look for the "elbow" where it stops falling quickly. <b>Silhouette</b> (computed '
+                     'on a random sample of cells) measures how well separated the clusters are: higher is '
+                     'better, and values below about 0.25 mean the clusters overlap heavily (common for cell '
+                     'data, where many populations grade into each other).</p>')
+        parts.append(figs['cluster_sweep'])
+        sw = csw.sort_values('n_clusters')
+        cols = [c for c in ('n_clusters', 'silhouette', 'min_cluster_size', 'min_cluster_pct', 'inertia')
+                if c in sw.columns]
+        labels = {'n_clusters': 'k', 'silhouette': 'silhouette', 'min_cluster_size': 'smallest cluster (cells)',
+                  'min_cluster_pct': 'smallest cluster (%)', 'inertia': 'inertia'}
+        fmt = {'silhouette': lambda v: _fmt(v, 3), 'min_cluster_pct': lambda v: _fmt(v, 2),
+               'inertia': lambda v: f'{v:,.0f}'}
+        rows = []
+        for _, r in sw.iterrows():
+            row = [fmt.get(c, _fmt)(r[c]) for c in cols]
+            if int(r['n_clusters']) == k_used:
+                row[0] = f'<b>{row[0]} (this run)</b>'
+            rows.append(row)
+        parts.append(_table([labels[c] for c in cols], rows, num_cols=tuple(range(len(cols)))))
+        if 'silhouette' in sw.columns and sw['silhouette'].notna().any():
+            best = sw.loc[sw['silhouette'].idxmax()]
+            here = sw[sw['n_clusters'] == k_used]
+            text = f'The best-separated choice in this sweep is k = {int(best["n_clusters"])} ' \
+                   f'(silhouette {best["silhouette"]:.3f})'
+            if len(here):
+                text += f'; this run used k = {k_used} (silhouette {float(here["silhouette"].iloc[0]):.3f})'
+            text += ('. Silhouette is only one guide: a higher k can still be useful if it separates a rare, '
+                     'biologically meaningful population; check the cluster profiles above.')
+            parts.append(f'<p>{text}</p>')
+    else:
+        parts.append('<p class="muted">No cluster sweep was found for this result. To see how the clusters change '
+                     'with k, run <code>python -m cellsurvey.stability --zarr &lt;output&gt;_seg.zarr --mode '
+                     'clusters</code>, then re-make this report.</p>')
+
+    # --- Maps -------------------------------------------------------------------
+    parts.append('<h2 id="maps">3. Where things are</h2>')
+    bg = data['background_channel']
+    parts.append('<p>Each cluster\'s cells drawn over the tissue image'
+                 + (f' ({_esc(bg)}, greyscale)' if bg else ' (no image available: points only)')
+                 + '. Large clusters are subsampled for drawing.</p>')
+    parts.append(figs['cluster_maps'])
+    parts.append('<p>The same, all at once: each tile is coloured by its most common cluster '
+                 '(grey = flagged non-specific clusters).</p>')
+    parts.append(figs['overview_map'])
+    parts.append('<p>Cells above the "positive" line for each marker, independent of the clustering. '
+                 'Positive cells that are also non-specific (bright in many markers) are drawn in grey, so '
+                 'artefacts are easy to tell apart from real marker patterns.</p>')
+    parts.append(figs['positive_maps'])
+
+    # --- Communities -----------------------------------------------------------
+    parts.append('<h2 id="communities">4. Communities</h2>')
+    if comm is None:
+        parts.append('<p>No community labels in this result.</p>')
+    else:
+        parts.append(
+            '<p>Communities are built in two steps: a network joins neighbouring cells (Delaunay '
+            'triangulation, edges up to the maximum distance, each weighted by how similar the two cells\' '
+            'features are), then <b>Louvain</b> community detection splits it at a <b>resolution</b> setting. '
+            'Higher resolution gives more, smaller communities. Communities smaller than the minimum size are '
+            'labelled "unassigned" (mostly isolated cells at tissue edges or gaps) and left out below.</p>')
+        sizes = comm['sizes']
+        top10 = sizes.index[:10]
+        dom_counts = comm['dominant'].loc[top10].value_counts()
+        dom_text = ', '.join(f'{_esc(res["names"][c])} (cluster {c}: {n})' for c, n in dom_counts.items())
+        n_pure = int((comm['dominant_share'] > PURE_COMMUNITY).sum())
+        n_flag_dom = int(comm['dominant'].isin(res['flagged']).sum())
+        cover = sizes.iloc[:MAX_COMMUNITY_PANELS].sum() / max(sizes.sum(), 1)
+        bullets = [
+            f'<b>{len(sizes)} communities</b> of at least {_fmt(get("min_community_size"))} cells; the '
+            f'{min(MAX_COMMUNITY_PANELS, len(sizes))} largest hold {100 * cover:.0f}% of assigned cells.',
+            f'The 10 largest are most often dominated by: {dom_text}.',
+            f'{n_pure} of {len(sizes)} communities are more than {100 * PURE_COMMUNITY:.0f}% one cluster'
+            + (' (the tissue is organised into fairly uniform blocks).' if n_pure > len(sizes) / 2
+               else ' (most communities are mixtures of cell types).'),
+        ]
+        if res['flagged']:
+            bullets.append(f'{n_flag_dom} communit{"y is" if n_flag_dom == 1 else "ies are"} dominated by '
+                           'flagged non-specific clusters.')
+        parts.append('<ul>' + ''.join(f'<li>{b}</li>' for b in bullets) + '</ul>')
+        if len(markers) < 12:
+            parts.append(f'<div class="note">With only {len(markers)} marker channels, the similarity weights on '
+                         'the network carry little information, so communities mostly reflect distance (compact '
+                         'patches of tissue) rather than tissue domains. Interpret them with care.</div>')
+        parts.append(figs['outlines'])
+        parts.append(figs['composition'])
+        sweep = data['sweep']
+        if sweep is not None and {'resolution', 'n_communities'} <= set(sweep.columns):
+            cols = [c for c in ('resolution', 'max_edge_distance_um', 'n_communities', 'n_communities_raw',
+                                'n_unassigned_cells') if c in sweep.columns]
+            parts.append('<h3>Resolution sweep</h3><p>From the community sweep run on this result: how the number '
+                         'of communities changes with the parameters.</p>')
+            parts.append(_table(cols, [[_fmt(r[c]) for c in cols] for _, r in sweep.iterrows()],
+                                num_cols=tuple(range(len(cols)))))
+
+    # --- Quality ------------------------------------------------------------------
+    parts.append('<h2 id="quality">5. Data-quality flags</h2>')
+    n_ns = int(res['nonspecific'].sum())
+    mt = res['marker_table']
+    if res['n_needed']:
+        parts.append(f'<p>A cell is counted as <b>non-specific</b> if it is "positive" (robust z &gt; '
+                     f'{POSITIVE_Z:g}) in at least {res["n_needed"]} of the {len(markers)} markers at once. Real '
+                     'cells rarely express that many unrelated markers, so these are likely autofluorescent '
+                     f'cells, debris or edge artefacts. <b>{n_ns:,} cells ({100 * n_ns / n_cells:.1f}%)</b> are '
+                     'non-specific.</p>')
+    else:
+        parts.append('<p>Too few marker channels to assess non-specific cells.</p>')
+    parts.append(figs['quality'])
+    mt = res['marker_table']
+    status_text = {'clean': 'clean', 'suspect': '⚠ suspect', 'dominated': '⚠⚠ dominated',
+                   'too few': f'too few positive cells to judge (&lt; {MIN_POSITIVES})'}
+    rows = [(_esc(r.marker), f'{r.n_positive:,}', f'{r.pct_positive:.1f}%',
+             f'{r.pct_nonspecific:.0f}%' if r.n_positive else '—', status_text[r.status])
+            for r in mt.itertuples()]
+    parts.append('<p>For each marker: how many cells are above the "positive" line, and how many of those '
+                 f'positives are non-specific cells (suspect above {100 * MARKER_SUSPECT:.0f}%, dominated above '
+                 f'{100 * MARKER_DOMINATED:.0f}%). A suspect marker\'s "positive" cells shouldn\'t be counted '
+                 'naively.</p>')
+    parts.append(_table(['Marker', 'Positive cells', '%', 'of which non-specific', 'Status'], rows,
+                        num_cols=(1, 2, 3)))
+    notes = []
+    if controls:
+        notes.append(f'Control / autofluorescence channels found by name: {_esc(", ".join(controls))}. They are '
+                     'left out of the marker sections above, but the clustering currently uses every channel, '
+                     'so they can still shape the clusters (a channel-exclusion option is planned).')
+    if comm is not None and comm['n_unassigned']:
+        notes.append(f'{comm["n_unassigned"]:,} cells ({100 * comm["n_unassigned"] / n_cells:.1f}%) are in '
+                     'communities below the minimum size ("unassigned").')
+    if notes:
+        parts.append('<ul>' + ''.join(f'<li>{n}</li>' for n in notes) + '</ul>')
+
+    parts.append('<p class="muted">Produced by CellSurvey (<code>python -m cellsurvey.report</code>). '
+                 'PNG copies of every figure are saved next to this file in <code>report/</code>.</p>')
+    parts.append('</body></html>')
+    return '\n'.join(parts)
+
+
+# =============================================================================
+# Entry points
+# =============================================================================
+
+def write_report(zarr_path, plot_dir, summary_path=None, filename='report.html', seed=42, sweep_dir=None):
+    """Build ``<plot_dir>/report.html`` (and ``<plot_dir>/report/*.png``) from ``zarr_path``. Returns the path.
+
+    ``sweep_dir``: where to look for this run's sweep CSVs (default: the Zarr's directory).
+    """
+    t0 = datetime.datetime.now()
+    os.makedirs(plot_dir, exist_ok=True)
+    if summary_path is None:
+        summary_path = os.path.join(plot_dir, 'summary.json')
+    print(f"Report: reading {zarr_path} ...")
+    data = load_report_data(zarr_path, summary_path, sweep_dir)
+    res = compute(data)
+    rng = np.random.default_rng(seed)
+    out = _Figures(os.path.join(plot_dir, 'report'))
+    figs = {
+        'marker_distributions': out.tag(fig_marker_distributions(res), 'marker_distributions',
+                                        'Marker distributions'),
+        'profile': out.tag(fig_cluster_profile(res), 'cluster_profile', 'Cluster marker profiles'),
+        'cluster_maps': out.tag(fig_cluster_maps(data, res, rng), 'cluster_maps', 'Cluster maps', dpi=110),
+        'overview_map': out.tag(fig_cluster_overview_map(data, res), 'cluster_overview_map', 'All clusters'),
+        'positive_maps': out.tag(fig_positive_maps(data, res, rng), 'positive_maps', 'Positive cells per marker',
+                                 dpi=110),
+        'quality': out.tag(fig_quality(res), 'quality_clusters', 'Non-specific share per cluster'),
+    }
+    if data['cluster_sweep'] is not None:
+        figs['cluster_sweep'] = out.tag(fig_cluster_sweep(data['cluster_sweep'], len(res['clusters'])),
+                                        'cluster_sweep', 'Cluster sweep')
+    if res['comm'] is not None:
+        figs['outlines'] = out.tag(fig_community_outlines(data, res), 'community_outlines', 'Community outlines')
+        figs['composition'] = out.tag(fig_community_composition(res), 'community_composition',
+                                      'Community composition')
+    path = os.path.join(plot_dir, filename)
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(build_html(data, res, figs))
+    secs = (datetime.datetime.now() - t0).total_seconds()
+    print(f"Report written to {path} ({os.path.getsize(path) / 1e6:.1f} MB, {secs:.0f} s)")
+    return path
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Write a self-contained HTML overview report from a "
+                                                 "segmented Zarr (read-only).")
+    parser.add_argument('--zarr', required=True, help='Path to the segmented Zarr (<prefix>_seg.zarr).')
+    parser.add_argument('-p', '--plot-dir', default=None,
+                        help='Output directory (default: the Zarr\'s directory). Its summary.json, if present, '
+                             'supplies run parameters that older Zarrs don\'t store.')
+    parser.add_argument('--summary', default=None,
+                        help='Path to the run\'s summary.json (default: <plot-dir>/summary.json).')
+    parser.add_argument('--output', default='report.html', help='Report file name (default: report.html).')
+    parser.add_argument('--sweep-dir', default=None,
+                        help='Directory holding this run\'s sweep CSVs from python -m cellsurvey.stability '
+                             '(default: the Zarr\'s directory).')
+    args = parser.parse_args()
+    zarr_path = args.zarr.rstrip('/\\')
+    if not os.path.exists(zarr_path):
+        parser.error(f"Zarr not found: {zarr_path}")
+    plot_dir = args.plot_dir or (os.path.dirname(os.path.abspath(zarr_path)) or '.')
+    try:
+        write_report(zarr_path, plot_dir, summary_path=args.summary, filename=args.output,
+                     sweep_dir=args.sweep_dir)
+    except ValueError as e:
+        parser.error(str(e))
+
+
+if __name__ == '__main__':
+    main()
