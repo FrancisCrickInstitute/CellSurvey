@@ -676,7 +676,7 @@ The outcome should also inform the clustering features (Known issues: k-means ne
 
 ## Planned: OMERO input
 
-**Status** (2026-11-19): **implemented on `feature/omero`** (`cellsurvey/omero_source.py`; plan steps 1–3 + reader). Tested locally against a fake server. The **first real-server test** on Image 602778 (below) got the metadata right but failed on pixel reads (one shared `RawPixelsStore`). The per-thread-store fix has so far only been checked against the fake server, so a **real-server re-test is pending** (also the first timed read of an uncached slide). User docs: `docs/omero.md`.
+**Status** (2026-11-21): **implemented, HPC-tested and merged into `main`** (fast-forwarded from `feature/omero` at `dd5a3ea`, which also brought in all of `feature/instanseg`). Code: `cellsurvey/omero_source.py` (plan steps 1–3 + reader); user docs: `docs/omero.md`. History: tested locally against a fake server; the first real-server test on Image 602778 (below) got the metadata right but failed on pixel reads (one shared `RawPixelsStore`); after the per-thread-store fix, the HPC checklist (tests 1–6) and the whole-slide resume check of the follow-up steps 1–3 all passed. Only batch-job (`sbatch`) login hasn't been exercised. Open follow-ups: the post-merge to-do list (steps 5–9) in Known issues.
 
 **Goal**: read the input image directly from an OMERO server instead of requiring a local OME-TIFF.
 
@@ -822,7 +822,7 @@ Already checked: `sopa.io.ome_tif` is a thin wrapper (dask array → `Image2DMod
 
 ### HPC test checklist (before merging `feature/omero` → `main`)
 
-**Status**: **all tests 1–6 passed (2026-11-20)**. Test 6 ran interactively on a GPU node rather than as an `sbatch` job, so batch-job login is the only part not exercised. `feature/omero` is ready to fast-forward into `main`. History: on the first pass, test 1 failed only because `$OMERO` was empty in that shell, so the path became `/Image:602780` (now caught with a clear "Input image not found … must start with omero://" error). Test 3 exposed an old bug (zero blobs → float `gene` column → `sopa.aggregate` crash), now fixed (see stage 2). Second pass, after the fixes: all of 1–5 passed.
+**Status**: **all tests 1–6 passed (2026-11-20)**. Test 6 ran interactively on a GPU node rather than as an `sbatch` job, so batch-job login is the only part not exercised. **Merged into `main` on 2026-11-21** (after the follow-up steps 1–3 also passed on the HPC). History: on the first pass, test 1 failed only because `$OMERO` was empty in that shell, so the path became `/Image:602780` (now caught with a clear "Input image not found … must start with omero://" error). Test 3 exposed an old bug (zero blobs → float `gene` column → `sopa.aggregate` crash), now fixed (see stage 2). Second pass, after the fixes: all of 1–5 passed.
 
 Minor, harmless log noise seen (possible follow-ups, not blockers):
 - TF startup messages at the end of a resumed (no-segmentation) run come from `umap-learn` importing TensorFlow for its optional ParametricUMAP. Not our import; default env only.
