@@ -97,7 +97,7 @@ The pipeline is split into modules under the `cellsurvey/` package. `run.py` is 
    - **Clustering features**: `utils.build_clustering_features(intensity_df, counts_df, --cluster-on, cell_area_um2)` builds the scaled per-cell features (`intensities`: z-scored; `spots`: spots per 100 µm² of cell area → `log1p` → z-scored, columns suffixed `' (spots)'`; `both`: the two groups, each divided by √(number of its columns)). k-means runs on these with `cluster_data(..., scale=False)`, and cluster labels are attached to `obs`.
    - **Same features everywhere**: the network edge weights (stage 7), UMAP/Leiden (stage 10, via `obsm['X_cellsurvey']` + `use_rep`) and the stability sweeps use them too. `cluster_on` is recorded in `summary.json` and `table.uns['cellsurvey']`.
 
-7. **Network analysis** (`cli.py` → `network_analysis.py`): Extracts centroids from the cell boundaries GeoDataFrame. Builds a `scipy.spatial.Delaunay` triangulation, filters edges by `max_edge_distance`. Constructs a `networkx.Graph` from the filtered edges; edges are weighted by the similarity of the two cells' clustering features (`1 + Pearson corr` across features). Runs `nx.community.louvain_communities()` with the `community_resolution` parameter and fixed seed 42. Returns a dict with `cell_ids`, `community_labels`, and `cluster_labels` arrays. Embeds `kmeans_cluster` and `community` labels into the cell-layer GeoDataFrame and the AnnData table obs, and maps them onto the nuclei layer via `nucleus_id` (unlinked nuclei get -1), and writes `summary.json` (cell/cluster/community/edge counts) to `--plot_dir`. The segmented Zarr is written at this stage (single write after all labels are computed).
+7. **Network analysis** (`cli.py` → `network_analysis.py`): Extracts centroids from the cell boundaries GeoDataFrame. Builds a `scipy.spatial.Delaunay` triangulation, filters edges by `max_edge_distance`. Constructs a `networkx.Graph` from the filtered edges; edges are weighted by the similarity of the two cells' clustering features (`1 + Pearson corr` across features). Runs `nx.community.louvain_communities()` with the `community_resolution` parameter and fixed seed 42. `filter_small_communities` then relabels communities smaller than `--min-community-size` (default 10) as `-1` ("unassigned") and renumbers the rest by size (0 = largest); the stability sweep does the same, using the value stored in `table.uns['cellsurvey']['min_community_size']` by default (`utils.resolve_min_community_size`). Returns a dict with `cell_ids`, `community_labels`, and `cluster_labels` arrays. Embeds `kmeans_cluster` and `community` labels into the cell-layer GeoDataFrame and the AnnData table obs, and maps them onto the nuclei layer via `nucleus_id` (unlinked nuclei get -1), and writes `summary.json` (cell/cluster/community/edge counts; `n_communities` counts communities at or above the minimum, plus `n_communities_raw`, `min_community_size` and `n_unassigned_cells`) to `--plot_dir`. The segmented Zarr is written at this stage (single write after all labels are computed).
 
 8. **Spot-to-cell assignment** (`cli.py` → `utils.py`): Spatial join of spots to cell boundaries using GeoPandas (`gpd.sjoin` with `predicate='within'`). Returns `None` if no spots are present in the dataset (no guard needed in `cli.py` — `export_to_qupath` handles `None`).
 
@@ -134,6 +134,7 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 | `--n-clusters` | `10` | Number of k-means clusters |
 | `--cluster-on` | `intensities` | Features for k-means, network edge weights and UMAP/Leiden: `intensities`, `spots` (spot density; needs spots) or `both` (groups weighted equally). Also in the stability sweep, where it defaults to the mode recorded in the Zarr (`utils.resolve_cluster_on`; `intensities` for older Zarrs) |
 | `--community-resolution` | `0.1` | Louvain community detection resolution |
+| `--min-community-size` | `10` | Communities with fewer cells are labelled `-1` (unassigned); the rest are numbered by size, 0 = largest. `1` keeps all. Also in the stability sweep, where it defaults to the value stored in the Zarr (10 for older Zarrs) |
 | `--max-edge-distance` | `50` | Max edge length (µm) for the Delaunay network |
 | `--radius-min` | `0` | Min radius (µm) for spatial neighbors graph |
 | `--radius-max` | `280` | Max radius (µm) for spatial neighbors graph |
@@ -265,7 +266,7 @@ Open:
   **To-do plan for these findings (2026-11-20; not started).** Steps 1–4 are small and planned *before* fast-forwarding `feature/omero` into `main`; steps 5–8 are larger and can go on a new branch after the merge. Each step lists how to check it.
 
   *Before the merge:*
-  1. **Minimum community size + size-ordered labels** (`network_analysis.py`; also the stability sweep):
+  1. **Minimum community size + size-ordered labels** (`network_analysis.py`; also the stability sweep). **Done (2026-11-21), HPC check pending**: `--min-community-size` (default 10), `filter_small_communities`, the new `summary.json` / sweep-summary fields, the value stored in `uns` (the sweep reads it), and the GeoJSON colour count no longer counting `-1`. Synthetic test (3 tissue blobs + 40 isolated cells, through a Zarr round trip): 50 raw communities → 3, 47 cells unassigned, sizes descending, the GeoJSON's `Unassigned` count matches, and the sweep at the run's parameters reproduces its labels exactly. Decisions: minimum 10, renumber by size. Original plan:
      - add `--min-community-size`; proposed default 10 cells;
      - relabel smaller communities as `-1` ("unassigned", grey in the GeoJSON, which already handles `-1`; nuclei mapping and plots must handle it);
      - renumber the rest by size (0 = largest);
@@ -279,7 +280,7 @@ Open:
 
   → One resume run on `omero_602778` checks steps 1–3 together (resumes skip segmentation, ~20 min). Then fast-forward into `main`.
 
-  **Decisions open for steps 1–2**: the minimum community size (10?); renumbering by size (yes?); the `cell_density.png` cap (20, fixed or a flag?).
+  **Decisions (2026-11-21)**: minimum community size 10; renumber by size; `cell_density.png` capped at a fixed 20 communities.
 
   *After the merge:*
   5. **Stop Sopa writing into `<prefix>.zarr`**:
