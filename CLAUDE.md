@@ -4,6 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **`AGENTS.md` is the canonical, detailed project reference.** It covers the full CLI flag table, every pipeline stage, gotchas, planned work (stability sweep phases 2–3, normalisation, overview report, Cellpose) and notes on related tools. Read the relevant section before making non-trivial changes. When a change alters behaviour, flags, layer names or plans, update `AGENTS.md` too (and `README.md` / `docs/` if users will see the change).
 
+**`WORKING_AGREEMENT.md` says what Claude may do without asking, what needs a "yes" first, and what never to do.** Follow it; the hard limits are also enforced by `.claude/settings.json`. When Dave states a new rule ("from now on you can…", "never…"), add it there (and to `settings.json` if it's a command pattern).
+
+@WORKING_AGREEMENT.md
+
 ## What this is
 
 CellSurvey is a spatial-biology pipeline built on Sopa / SpatialData. It takes a multichannel OME-TIFF, optionally detects RNA spots, segments it (Stardist or InstanSeg), aggregates per-cell channel intensities, then runs k-means clustering, a Delaunay network with Louvain communities, and Scanpy neighbourhood/UMAP/Leiden plots. It exports a QuPath GeoJSON file. `run.py` is a thin shim; all logic lives in `cellsurvey/`, and `cli.main()` orchestrates the stages in order.
