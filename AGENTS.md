@@ -266,7 +266,7 @@ Open:
   **To-do plan for these findings (2026-11-20; not started).** Steps 1–4 are small and planned *before* fast-forwarding `feature/omero` into `main`; steps 5–8 are larger and can go on a new branch after the merge. Each step lists how to check it.
 
   *Before the merge:*
-  1. **Minimum community size + size-ordered labels** (`network_analysis.py`; also the stability sweep). **Done (2026-11-21), HPC check pending**: `--min-community-size` (default 10), `filter_small_communities`, the new `summary.json` / sweep-summary fields, the value stored in `uns` (the sweep reads it), and the GeoJSON colour count no longer counting `-1`. Synthetic test (3 tissue blobs + 40 isolated cells, through a Zarr round trip): 50 raw communities → 3, 47 cells unassigned, sizes descending, the GeoJSON's `Unassigned` count matches, and the sweep at the run's parameters reproduces its labels exactly. Decisions: minimum 10, renumber by size. Original plan:
+  1. **Minimum community size + size-ordered labels** (`network_analysis.py`; also the stability sweep). **Done (2026-11-21); HPC check passed (below)**: `--min-community-size` (default 10), `filter_small_communities`, the new `summary.json` / sweep-summary fields, the value stored in `uns` (the sweep reads it), and the GeoJSON colour count no longer counting `-1`. Synthetic test (3 tissue blobs + 40 isolated cells, through a Zarr round trip): 50 raw communities → 3, 47 cells unassigned, sizes descending, the GeoJSON's `Unassigned` count matches, and the sweep at the run's parameters reproduces its labels exactly. Decisions: minimum 10, renumber by size. Original plan:
      - add `--min-community-size`; proposed default 10 cells;
      - relabel smaller communities as `-1` ("unassigned", grey in the GeoJSON, which already handles `-1`; nuclei mapping and plots must handle it);
      - renumber the rest by size (0 = largest);
@@ -274,8 +274,8 @@ Open:
      - the sweep applies the same minimum, so counts match.
 
      Check: resume `omero_602778` → ~50 communities instead of 1,723.
-  2. **`cell_density.png`** (`cli.py`; after step 1). **Done (2026-11-21), HPC check pending**: moved into `plot_cell_density` (plain arrays, so it can be tested without a run); the 20 largest communities chosen by size (not label order), `-1` never plotted; a 4-column grid with constrained layout instead of one column. Synthetic test at slide scale (617,527 cells, 10 clusters, 52 communities + 5,109 unassigned): 2000 × 3200 px, ~6 s; labels out of size order and an all-unassigned run also render correctly. Original plan: plot the k-means clusters plus only the largest communities (proposed default 20), state the number left out in the title, and loop over actual labels rather than `range(n_communities)`. Check: normal image size, drawn in seconds.
-  3. **Area in µm²** (`cli.py`, morphology plot): `area_px × pixel_size_um²`, axis labelled µm². **Done (2026-11-21), HPC check pending.** Also fixed in `cell_density.png` (found while testing step 2):
+  2. **`cell_density.png`** (`cli.py`; after step 1). **Done (2026-11-21); HPC check passed (below)**: moved into `plot_cell_density` (plain arrays, so it can be tested without a run); the 20 largest communities chosen by size (not label order), `-1` never plotted; a 4-column grid with constrained layout instead of one column. Synthetic test at slide scale (617,527 cells, 10 clusters, 52 communities + 5,109 unassigned): 2000 × 3200 px, ~6 s; labels out of size order and an all-unassigned run also render correctly. Original plan: plot the k-means clusters plus only the largest communities (proposed default 20), state the number left out in the title, and loop over actual labels rather than `range(n_communities)`. Check: normal image size, drawn in seconds.
+  3. **Area in µm²** (`cli.py`, morphology plot): `area_px × pixel_size_um²`, axis labelled µm². **Done (2026-11-21); HPC check passed (below).** Also fixed in `cell_density.png` (found while testing step 2):
      - the maps were **upside down** relative to the image (`origin='lower'`, so y increased upwards); now `origin='upper'` with a flipped extent;
      - each community panel **zoomed to its own extent**, hiding where it sits; all panels now share the whole-tissue range, which also skips NaN centroids that would have crashed `histogram2d`'s automatic range.
 
@@ -283,6 +283,14 @@ Open:
   4. **Docs**: this file, `docs/outputs.md` and `docs/parameters.md` (new flag(s), new `summary.json` fields, the "unassigned" label).
 
   → One resume run on `omero_602778` checks steps 1–3 together (resumes skip segmentation, ~20 min). Then fast-forward into `main`.
+
+  **HPC check of steps 1–3: passed (2026-11-21)**, a resume of `omero_602778` (outputs in `out/omero_602778_plots_v2`):
+  - **Step 1**: 1,723 raw communities → **116** of ≥ 10 cells; 1,607 tiny ones (**2,521 cells, 0.4%**) labelled `-1`. `summary.json` has `n_communities: 116`, `n_communities_raw: 1723`, `min_community_size: 10` and `n_unassigned_cells: 2521`. (The plan's "~50" counted only the 52 communities holding 99.1% of cells; the next ~60 also have ≥ 10 cells.)
+  - **Step 2**: `cell_density.png` is **2.5 MB, drawn in 17 s** (was 65 MB, ~4 min). 10 clusters + the 20 largest communities; the title reads "96 smaller communities not shown; 2521 unassigned cells not shown". Tissue is upright and communities are numbered by size.
+  - **Step 3**: the axis reads "Cell area (µm²)", with per-cluster medians of ~30–150 µm². The largest is cluster 0 (~150 µm², consistent with MAP2 neurons).
+  - **Timing**: from `summary.json` (14:53) to the last plot (15:17:58). The cell-type distance heatmap took ~13 min and UMAP/Leiden ~11 min; those two now dominate a resume.
+  - **New: the process didn't exit after the last plot**. All outputs were written, but the terminal didn't return to the prompt. Likely a non-daemon background thread (dask/numba/igraph?). Not yet diagnosed: get a `py-spy dump --pid <pid>` or the Ctrl-C traceback next time. It may also have happened, unnoticed, on earlier whole-slide runs.
+  - **Observation (for the overview report / community method)**: the 20 largest communities are compact, similar-sized blobs (~2–3 mm) tiling the tissue, and ignore the anatomy that the clusters show clearly (the white-matter tract in clusters 1/4, the layers in cluster 0). With only 8 features, the `1 + Pearson r` edge weights carry little information (see "Correlation edge weights are weak with few features"), so Louvain mostly partitions by graph distance. Don't read communities on low-plex panels as tissue domains yet.
 
   **Decisions (2026-11-21)**: minimum community size 10; renumber by size; `cell_density.png` capped at a fixed 20 communities.
 
