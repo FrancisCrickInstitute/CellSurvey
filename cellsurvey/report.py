@@ -818,7 +818,9 @@ def build_html(data, res, figs):
             here = sw[sw['n_clusters'] == k_used]
             text = f'The best-separated choice in this sweep is k = {int(best["n_clusters"])} ' \
                    f'(silhouette {best["silhouette"]:.3f})'
-            if len(here):
+            if int(best['n_clusters']) == k_used:
+                text += ', which is what this run used'
+            elif len(here):
                 text += f'; this run used k = {k_used} (silhouette {float(here["silhouette"].iloc[0]):.3f})'
             text += ('. Silhouette is only one guide: a higher k can still be useful if it separates a rare, '
                      'biologically meaningful population; check the cluster profiles above.')
