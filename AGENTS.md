@@ -311,6 +311,12 @@ Open:
      - mainly a visual review: the GeoJSON in QuPath, or a `--keep-unnucleated` run;
      - code support: record the dropped count in `summary.json`, and optionally export the dropped cells as a separate GeoJSON layer for review;
      - then decide whether the default should change.
+  9. **`-i` and `-o` are redundant on `--resume-from`** (noted 2026-11-21; implement after the resume check of steps 1–3). A resumed run takes the image, pixel size and provenance from the Zarr and never opens the source, but argparse still requires `-i` and `-o`. Proposal:
+     - require **exactly one of `-i` or `--resume-from`** (argparse: `-i` no longer `required`; check in `main()`);
+     - both together only for the old-Zarr fallback (no stored pixel size → read it from the source); otherwise warn that `-i` is ignored. An old Zarr with no stored pixel size, no `-i` and no `--pixel-size` stops with a clear message asking for `--pixel-size`;
+     - on resume, `-o` becomes optional, defaulting to the resume Zarr's prefix (it only sets the default GeoJSON path; `_seg.zarr` already follows the resume Zarr); an explicit `-o` still chooses the GeoJSON location.
+
+     Touches the argparse setup and checks in `cli.py`, the resume pixel-size fallback, the flag table and commands here and in `CLAUDE.md`, `docs/parameters.md` and `README.md`. Check: resume with only `--resume-from` + `-p`; resume of a pre-pixel-size Zarr with and without `--pixel-size`; a new run still requires `-i`.
 - **Windows: `UnicodeEncodeError` when output is redirected**: with stdout piped or sent to a file, Windows Python encodes with cp1252, and printing channel names such as `αSMA` crashes the run. Workaround: `PYTHONIOENCODING=utf-8`. Fix: `sys.stdout.reconfigure(encoding='utf-8')` (and stderr) at the top of `run.py`. Interactive consoles and Linux are unaffected.
 - **`python -m cellsurvey.stability` warns `'cellsurvey.stability' found in sys.modules…`** (harmless, pre-existing): `cellsurvey/__init__.py` imports `stability` (and `cli`), so running the module with `-m` loads it twice. Fix: import lazily in `__init__`, or give the sweep its own entry point.
 - **Windows: Stardist on CPU is extremely slow**: a local run on `test_crop` used more than an hour of CPU time in segmentation (4 patches), against about 14 s on an HPC CPU node. Not investigated; win-64 is only for local testing.
