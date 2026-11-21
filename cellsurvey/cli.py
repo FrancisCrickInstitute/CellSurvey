@@ -31,6 +31,7 @@ from cellsurvey.image_source import open_image_source, stored_pixel_size, is_ome
 from cellsurvey.network_analysis import run_network_analysis
 from cellsurvey.segmentation import expand_nuclei, run_stardist, run_instanseg
 from cellsurvey.export import export_to_qupath
+from cellsurvey.report import write_report, code_version
 
 # cell_density.png shows only this many of the largest communities.
 MAX_DENSITY_COMMUNITIES = 20
@@ -109,6 +110,10 @@ def main():
                         help='Font size for plots (default: 20)')
     parser.add_argument('--axes-linewidth', type=int, default=3,
                         help='Axes line width for plots (default: 3)')
+    parser.add_argument('--no-report', action='store_true',
+                        help='Skip the HTML overview report (<plot_dir>/report.html), written by default at '
+                             'the end of the run. It can be made later with: '
+                             'python -m cellsurvey.report --zarr <output>_seg.zarr -p <plot_dir>')
     args = parser.parse_args()
 
     plt.rcParams['font.size'] = args.font_size
@@ -447,7 +452,13 @@ def main():
     sdata.tables['table'].obs['community'] = pd.Categorical(result['community_labels'])
     # Persist the pixel size so read-only consumers (stability sweep) can convert µm params.
     store_pixel_size(sdata, pixel_size_um)
-    store_table_meta(sdata, cluster_on=args.cluster_on, min_community_size=args.min_community_size)
+    # Run parameters, so the report (and anyone reading the Zarr) needn't rely on summary.json.
+    store_table_meta(sdata, cluster_on=args.cluster_on, min_community_size=args.min_community_size,
+                     n_clusters=int(args.n_clusters), community_resolution=float(args.community_resolution),
+                     max_edge_distance_um=float(args.max_edge_distance), segmenter=args.segmenter,
+                     **({'instanseg_model': args.instanseg_model} if args.segmenter == 'instanseg'
+                        else {'cell_expansion_um': float(args.cell_expansion)}),
+                     code_version=code_version() or 'unknown')
 
     # Also attach cluster/community to the nuclei layer via the nucleus_id
     # recorded on each cell (survives sopa.aggregate's re-indexing). Nuclei not
@@ -570,6 +581,15 @@ def main():
         plt.tight_layout()
         plt.savefig(os.path.join(args.plot_dir, 'morphology_by_cluster.png'))
         plt.close(fig)
+
+    # Overview report, from the _seg.zarr just written. Last, and never fatal: a
+    # failure here mustn't lose a finished run (it can be re-made standalone).
+    if not args.no_report:
+        try:
+            write_report(seg_zarr_path, args.plot_dir)
+        except Exception as e:
+            print(f"WARNING: overview report failed ({type(e).__name__}: {e}). Re-make it with: "
+                  f"python -m cellsurvey.report --zarr {seg_zarr_path} -p {args.plot_dir}", file=sys.stderr)
 
 
 def plot_cell_density(x, y, cluster_labels, community_labels, exp_weights, n_clusters, bins, path,

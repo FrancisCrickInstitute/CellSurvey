@@ -91,6 +91,47 @@ All plots are PNG files written to `--plot_dir`.
 | `cluster_intensity_heatmap.png` | The clustering features (`--cluster-on`) per k-means cluster: channel intensities and/or log spot densities (labelled `(spots)`), each z-scored across all cells (0 = average cell; red = higher, blue = lower). The colour scale is capped at ±3, so more extreme values show as the darkest colour. |
 | `morphology_by_cluster.png` | Cell area (µm²) by cluster (only present if an `area` column exists). |
 
+## Overview report
+
+`report.html` in `--plot_dir` is a single, self-contained web page summarising
+the run for a biologist. It has all figures embedded, so it can be emailed,
+opened in any browser, or printed to PDF. It contains:
+
+- **Header**: the source image (file path, or OMERO server and Image ID),
+  segmentation method, pixel size, number of cells, which channels count as
+  markers (nuclear and control channels such as `DAPI`, `TRITC`, `Cy5` or `AF`
+  are recognised by name), the clustering and community parameters, and the
+  CellSurvey code version.
+- **How to read this**: z-scores, and the difference between *clusters* (what
+  cells express) and *communities* (where cells sit).
+- **Cell populations**: a heatmap of each k-means cluster's average marker
+  levels, and a table of cluster sizes and distinguishing markers. Clusters get
+  automatic names from the markers they have raised (e.g. `GFAP`,
+  `PSYN/PTAU`), `low X`, or `no distinct marker`. These describe marker
+  profiles, not confirmed cell types.
+- **Where the clusters are**: each cluster drawn over the tissue image (the
+  nuclear channel), and one map coloured by the most common cluster in each
+  area.
+- **Communities**: outlines of the largest communities over the tissue,
+  their composition by cluster, a short generated summary, and the resolution
+  sweep if one was run for this result (see [Parameters](parameters.md)).
+- **Data-quality flags**: cells that are bright in many unrelated markers at
+  once ("non-specific": likely autofluorescence or debris), clusters made
+  mostly of them, markers whose "positive" cells are largely non-specific, and
+  control channels.
+
+Marker levels in the report use a robust z-score (arcsinh, then median and
+interquartile range), which resists outliers. It is for display and differs
+slightly from the z-score used for clustering. PNG copies of the figures are
+saved in `--plot_dir/report/`.
+
+The report is written at the end of every run (`--no-report` skips it). To
+re-make it from an existing result without re-running anything:
+
+```bash
+pixi run python -m cellsurvey.report --zarr <output>_seg.zarr -p <plot_dir>
+```
+
 ## QuPath GeoJSON
 
 | File | What it is |

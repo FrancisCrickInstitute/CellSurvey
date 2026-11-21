@@ -105,6 +105,19 @@ Key segmentation options:
 pixi run python run.py -i ~/data/sample.tiff -o ~/results/output -p ~/results/plots/
 ```
 
+## Overview report
+
+Every run ends by writing `report.html` to the plot directory: a single,
+self-contained web page (figures embedded) that summarises the result for a
+biologist. It covers cluster profiles with automatic names, maps of each cluster
+over the tissue image, communities, and data-quality flags. Open it in a browser,
+email it, or print it to PDF. Skip it with `--no-report`, or re-make it from an
+existing result without re-running anything:
+
+```bash
+pixi run python -m cellsurvey.report --zarr ~/results/output_seg.zarr -p ~/results/plots/
+```
+
 ## Stability sweep
 
 To explore how clustering responds to its parameters without re-running the

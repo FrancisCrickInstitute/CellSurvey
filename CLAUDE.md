@@ -30,6 +30,9 @@ pixi run python run.py -i <input.tiff> -o <output_prefix> -p <plot_dir> --resume
 pixi run python -m cellsurvey.stability --zarr <output>_seg.zarr --resolutions 0.1,0.05 --max-edge-distances 25,50,100   # µm
 pixi run python -m cellsurvey.stability --zarr <output>_seg.zarr --mode clusters
 
+# Overview report (written by default at the end of a run; --no-report skips it). Re-make it read-only:
+pixi run python -m cellsurvey.report --zarr <output>_seg.zarr -p <plot_dir>
+
 # Docker (build arg PIXI_ENV selects the env)
 docker build -t cellsurvey .
 docker build --build-arg PIXI_ENV=instanseg -t cellsurvey-instanseg .

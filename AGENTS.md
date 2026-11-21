@@ -142,6 +142,7 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 | `--geojson-path` | `<output_file>.geojson` | Output path for QuPath GeoJSON |
 | `--font-size` | `20` | Font size for plots |
 | `--axes-linewidth` | `3` | Axes line width for plots |
+| `--no-report` | — | Skip the HTML overview report (`<plot_dir>/report.html`, written by default as the last step; re-make it with `python -m cellsurvey.report`) |
 
 ## Key gotchas
 
@@ -560,7 +561,27 @@ where `dapi_cell` is that cell's DAPI mean intensity. Applied **after aggregatio
 
 ## Planned: Overview report
 
-**Status**: planned (2026-11-21), not started.
+**Status**: **v1 ("core") implemented (2026-11-21) on `feature/overview-report`**: `cellsurvey/report.py`, written by default as the last pipeline step (`--no-report` to skip) and standalone via `python -m cellsurvey.report --zarr <prefix>_seg.zarr -p <plot_dir>`. HPC run of the full pipeline pending (the report was generated locally from `omero_602778_seg.zarr`; see "v1 implementation" below). Still to do: marker distributions, per-marker "positive" maps, the spots section, and checking the numbers against `overview_analysis.py` on the COMET whole-cell dataset.
+
+### v1 implementation (2026-11-21)
+- **What's in it**:
+  - header (source, segmentation, pixel size, cells and median area, marker / nuclear / control channels, clustering, communities, code versions, report settings);
+  - "How to read this";
+  - cluster profile heatmap + table (size, %, non-specific %, top 5 markers);
+  - per-cluster maps and an all-clusters "dominant cluster per tile" map, over the dimmed tissue image;
+  - community outlines (20 largest), composition bars (30 largest), a generated narrative, and the resolution sweep (only if it matches the run, see below);
+  - data-quality flags: non-specific cells, flagged clusters, per-marker positives and their non-specific share, control channels, unassigned cells.
+- **Reads only the `_seg.zarr`** (`read_zarr(selection=('images','tables'))`, ~30 s for 617k cells over the Z: share): intensities via `extract_feature_tables`, centroids from `table.obsm['spatial']` (no polygons loaded), background = the nuclear channel from the largest pyramid level with sides ≤ 4000 px (`scale4`, 3240 × 2760, for 602778), metadata from `uns`/`attrs`, plus `<plot_dir>/summary.json` for older Zarrs.
+- **The pipeline now stores the run parameters in `table.uns['cellsurvey']`**: `n_clusters`, `community_resolution`, `max_edge_distance_um`, `segmenter`, `instanseg_model` or `cell_expansion_um`, and `code_version` (git short SHA, `-dirty` if modified). So reports on new runs don't need `summary.json`.
+- **Channel classes by name** (first word, upper-case): nuclear `DAPI`/`Hoechst`/`DRAQ5`/`SYTOX`; controls `TRITC`/`Cy3`/`Cy5`/`Cy7`/`FITC`/`AF`/autofluorescence/blank/empty/background. Controls and nuclear channels are left out of the marker sections (but still used by clustering; see `--exclude-channels` in Known issues).
+- **Cluster names**: the (up to two) markers with mean robust z ≥ 0.5, else `low X/Y` (markers ≤ −0.75), else `no distinct marker`; `non-specific` for flagged clusters. Names can repeat (clusters that differ mainly in overall brightness); the number always identifies them. (Naming from the plain top-2 markers, as in the example, labelled near-zero profiles like "IBA1/CNPASE".)
+- **Other decisions made while building it**:
+  - markers need ≥ 100 positive cells to be judged clean / suspect / dominated (CNPASE on 602778 had 32 positives, 78% non-specific: "too few");
+  - the tissue background is dimmed (45%) and the cluster palette has no greys (grey = flagged) so points stay visible;
+  - small clusters are drawn with bigger points;
+  - overview-map tiles need ≥ 3 cells (no speckle from debris outside the tissue).
+- **Sweep matching**: `python -m cellsurvey.stability` writes fixed names (`community_sweep*.csv`) into the Zarr's directory, so runs sharing `out/` overwrite each other's sweeps (602778's folder held `test_crop`'s). The report only shows a sweep if `community_sweep.csv` has one row per cell of this run. **To-do**: name sweep outputs after the Zarr (`<prefix>_community_sweep.csv`).
+- **Checks so far**: generated from `omero_602778_seg.zarr` in ~50 s (4.3 MB HTML; figures checked visually), plus synthetic edge cases (no background, no communities, a flagged non-specific cluster, control-channel names `TRITC (1) - TRITC`/`AF`).
 
 **Goal**: every run writes a single, self-contained **overview report** (`<plot_dir>/report.html`) that a biologist can open in a browser, email, or print to PDF. It should say who is in the tissue (clusters), where they are (spatial maps over the tissue image), how the tissue is organised (communities), and which results to distrust (data-quality flags). Today the outputs are loose PNGs plus `summary.json`, with no explanation.
 
@@ -1313,6 +1334,7 @@ Ten tips spanning experimental design → platform selection → data structure 
 │   ├── blob_detection.py             # detect_spots ((c,y,x) DataArray → spots PointsModel) → detect_blobs_tiled → detect_blobs_in_tile
 │   ├── network_analysis.py           # run_network_analysis (µm → px) + compute_louvain_communities + delaunay_edges (scipy Delaunay + networkx Louvain, expr-similarity weights, summary.json)
 │   ├── stability.py                  # run_stability_sweep (community) + run_cluster_sweep (k-means), read-only → CSV
+│   ├── report.py                     # HTML overview report from <prefix>_seg.zarr (write_report; python -m cellsurvey.report)
 │   ├── image_source.py               # ImageSource + open_image_source (stage-1 input: local TIFF or omero://) → to_spatialdata / write / close; stored_pixel_size
 │   ├── omero_source.py               # OMERO reader: parse_omero_url, connect (login order), fileset check, per-thread RawPixelsStore tiles → lazy dask array
 │   ├── segmentation.py               # run_stardist / run_instanseg, link_nuclei_to_cells, get_pixel_size, expand_nuclei (watershed)

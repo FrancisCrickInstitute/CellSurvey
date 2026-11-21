@@ -168,6 +168,7 @@ segmentation. Combined with the segmented-Zarr reuse (see
 | `--geojson-path` | `<output>.geojson` | Output path for the QuPath GeoJSON (default: next to the Zarr stores, named after `-o`). |
 | `--font-size` | `20` | Font size for plots. |
 | `--axes-linewidth` | `3` | Axes line width for plots. |
+| `--no-report` | off | Skip the HTML overview report (`<plot_dir>/report.html`; see [Outputs](outputs.md#overview-report)). It can be made later with `python -m cellsurvey.report --zarr <output>_seg.zarr -p <plot_dir>`. |
 
 !!! note "Where things go"
     Plots and `summary.json` are written to `--plot_dir`; the GeoJSON goes next

@@ -9,4 +9,5 @@ from cellsurvey.segmentation import (get_pixel_size, expand_nuclei, run_stardist
                                      link_nuclei_to_cells)
 from cellsurvey.image_source import ImageSource, open_image_source
 from cellsurvey.export import export_to_qupath
+from cellsurvey.report import write_report
 from cellsurvey.cli import main
