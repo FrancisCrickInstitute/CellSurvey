@@ -79,9 +79,36 @@ def compute_louvain_communities(coords, imat, comm_detect_res=0.1, max_edge_dist
     return community_labels, len(edges)
 
 
+def filter_small_communities(labels, min_size):
+    """Relabel communities smaller than ``min_size`` cells as -1 and renumber the rest by size.
+
+    The largest community becomes 0, the next 1, and so on (ties keep their
+    original order). Existing -1 labels stay -1. Returns a new int array.
+    """
+    labels = np.asarray(labels, dtype=int)
+    out = np.full(labels.shape, -1, dtype=int)
+    valid = labels >= 0
+    if not valid.any():
+        return out
+    uniq, counts = np.unique(labels[valid], return_counts=True)
+    keep = counts >= min_size
+    kept, kept_counts = uniq[keep], counts[keep]
+    order = np.lexsort((kept, -kept_counts))  # size descending, then original label
+    mapping = np.full(uniq.max() + 1, -1, dtype=int)
+    mapping[kept[order]] = np.arange(len(kept))
+    out[valid] = mapping[labels[valid]]
+    return out
+
+
+def n_labels(labels):
+    """Number of distinct labels, not counting -1."""
+    labels = np.asarray(labels)
+    return int(len(np.unique(labels[labels >= 0])))
+
+
 def run_network_analysis(sdata, intensity_matrix=None, cell_boundaries=None, index_name='cell_id',
                output_dir='.', comm_detect_res=0.1, max_edge_distance=50, pixel_size_um=None,
-               summary_extra=None):
+               min_community_size=1, summary_extra=None):
     """Delaunay network + Louvain communities on the cell layer.
 
     ``max_edge_distance`` is in µm and converted to pixels with
@@ -89,6 +116,9 @@ def run_network_analysis(sdata, intensity_matrix=None, cell_boundaries=None, ind
     ``.uns`` is used (see :func:`cellsurvey.utils.store_pixel_size`).
     ``intensity_matrix`` (cells × features, indexed by cell id) weights the
     edges by feature correlation; the pipeline passes its clustering features.
+    Communities smaller than ``min_community_size`` cells are labelled -1
+    ("unassigned") and the rest are numbered by size, 0 = largest (see
+    :func:`filter_small_communities`).
     ``summary_extra`` is merged into ``summary.json``.
     """
     if cell_boundaries is None:
@@ -118,14 +148,20 @@ def run_network_analysis(sdata, intensity_matrix=None, cell_boundaries=None, ind
             if cell_id in intensity_matrix.index:
                 imat[pos_idx] = intensity_matrix.loc[cell_id].values
 
-    community_labels, n_edges = compute_louvain_communities(
+    raw_labels, n_edges = compute_louvain_communities(
         coords, imat, comm_detect_res=comm_detect_res,
         max_edge_distance=max_edge_distance_px, seed=42)
     print(f"Delaunay network: {n_edges} edges (filtered to max distance "
           f"{max_edge_distance} µm = {max_edge_distance_px:.1f} px)")
 
-    n_communities = len(set(community_labels)) - (1 if -1 in community_labels else 0)
-    print(f"Found {n_communities} communities")
+    community_labels = filter_small_communities(raw_labels, min_community_size)
+    n_communities_raw = n_labels(raw_labels)
+    n_communities = n_labels(community_labels)
+    n_unassigned = int((community_labels < 0).sum())
+    print(f"Found {n_communities_raw} communities; {n_communities} have at least "
+          f"{min_community_size} cells. The other {n_communities_raw - n_communities} "
+          f"({n_unassigned} cells, {100 * n_unassigned / max(n_cells, 1):.1f}%) are "
+          f"labelled -1 (unassigned). Communities are numbered by size, 0 = largest.")
 
     # Embed community and cluster labels into the shapes GeoDataFrame
     boundaries['kmeans_cluster'] = cluster_labels
@@ -134,8 +170,11 @@ def run_network_analysis(sdata, intensity_matrix=None, cell_boundaries=None, ind
     # Write summary statistics
     stats = {
         'n_cells': int(n_cells),
-        'n_clusters': int(len(set(cluster_labels)) - (1 if -1 in cluster_labels else 0)),
+        'n_clusters': n_labels(cluster_labels),
         'n_communities': int(n_communities),
+        'n_communities_raw': int(n_communities_raw),
+        'min_community_size': int(min_community_size),
+        'n_unassigned_cells': n_unassigned,
         'n_edges': int(n_edges),
         'max_edge_distance_um': max_edge_distance,
         'max_edge_distance_px': float(max_edge_distance_px),

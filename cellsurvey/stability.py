@@ -25,9 +25,10 @@ import spatialdata
 
 from sklearn.cluster import KMeans
 
-from cellsurvey.network_analysis import compute_louvain_communities
+from cellsurvey.network_analysis import compute_louvain_communities, filter_small_communities, n_labels
 from cellsurvey.utils import (resolve_shape_keys, resolve_pixel_size, resolve_cluster_on,
-                              extract_feature_tables, build_clustering_features, CLUSTER_ON_CHOICES)
+                              resolve_min_community_size, extract_feature_tables,
+                              build_clustering_features, CLUSTER_ON_CHOICES)
 
 
 def _fmt(v):
@@ -63,20 +64,25 @@ def extract_coords(sdata, cell_boundaries=None):
 
 
 def run_stability_sweep(sdata, resolutions, max_edge_distances,
-                        cell_boundaries=None, seed=42, pixel_size_um=None, cluster_on=None):
+                        cell_boundaries=None, seed=42, pixel_size_um=None, cluster_on=None,
+                        min_community_size=None):
     """Recompute Louvain communities across a parameter grid.
 
     ``max_edge_distances`` are in µm, converted to pixels with ``pixel_size_um``
     (µm/px) or, if that is None, the pixel size stored in the table's ``.uns``.
     Edges are weighted by the ``cluster_on`` features, as in the pipeline
-    (``None``: the mode the run recorded in the Zarr).
+    (``None``: the mode the run recorded in the Zarr). As in the pipeline,
+    communities smaller than ``min_community_size`` cells become -1 and the
+    rest are numbered by size (``None``: the value recorded in the Zarr).
 
     Returns a dict with keys ``cell_ids``, ``coords``, ``labels`` (an
-    ``(n_cells, n_sweeps)`` int array, one column per parameter combo), and
+    ``(n_cells, n_sweeps)`` int array, one column per parameter combo),
     ``params`` (the list of ``(resolution, max_edge_distance_um)`` tuples
-    matching the columns).
+    matching the columns), ``n_communities_raw`` (Louvain's count per sweep,
+    before the minimum size) and ``min_community_size``.
     """
     pixel_size_um = resolve_pixel_size(sdata, pixel_size_um)
+    min_community_size, _ = resolve_min_community_size(sdata, min_community_size)
     cell_ids, coords = extract_coords(sdata, cell_boundaries)
     features = extract_features(sdata, cluster_on, pixel_size_um)
 
@@ -85,23 +91,29 @@ def run_stability_sweep(sdata, resolutions, max_edge_distances,
         if cell_id in features.index:
             imat[pos_idx] = features.loc[cell_id].values
 
-    labels, params = [], []
+    labels, params, n_raw = [], [], []
     for max_edge_distance in max_edge_distances:
         for resolution in resolutions:
-            community_labels, n_edges = compute_louvain_communities(
+            raw_labels, n_edges = compute_louvain_communities(
                 coords, imat, comm_detect_res=resolution,
                 max_edge_distance=max_edge_distance / pixel_size_um, seed=seed)
-            n_comm = len(set(community_labels)) - (1 if -1 in community_labels else 0)
+            community_labels = filter_small_communities(raw_labels, min_community_size)
+            n_comm = n_labels(community_labels)
+            n_unassigned = int((community_labels < 0).sum())
             print(f"resolution={resolution}, max_edge_distance={max_edge_distance} µm: "
-                  f"{n_edges} edges, {n_comm} communities")
+                  f"{n_edges} edges, {n_comm} communities of >= {min_community_size} cells "
+                  f"({n_labels(raw_labels)} before the minimum; {n_unassigned} cells unassigned)")
             labels.append(community_labels)
             params.append((resolution, max_edge_distance))
+            n_raw.append(n_labels(raw_labels))
 
     return {
         "cell_ids": cell_ids,
         "coords": coords,
         "labels": np.column_stack(labels) if labels else np.zeros((len(coords), 0), dtype=int),
         "params": params,
+        "n_communities_raw": n_raw,
+        "min_community_size": min_community_size,
     }
 
 
@@ -119,14 +131,17 @@ def sweep_to_csv(result, output_path):
 
 
 def sweep_summary(result, output_path):
-    """Write one row per sweep with the resulting community count."""
+    """Write one row per sweep with the community counts and unassigned cells."""
     rows = []
-    for (resolution, max_edge_distance), col in zip(result["params"], result["labels"].T):
-        n_comm = len(set(col)) - (1 if -1 in col else 0)
+    n_raw = result.get("n_communities_raw") or [None] * len(result["params"])
+    for (resolution, max_edge_distance), col, raw in zip(result["params"], result["labels"].T, n_raw):
         rows.append({
             "resolution": resolution,
             "max_edge_distance_um": max_edge_distance,
-            "n_communities": n_comm,
+            "n_communities": n_labels(col),
+            "n_communities_raw": raw,
+            "min_community_size": result.get("min_community_size"),
+            "n_unassigned_cells": int((col < 0).sum()),
         })
     pd.DataFrame(rows).to_csv(output_path, index=False)
 
@@ -202,6 +217,10 @@ def main():
                         help="Louvain resolutions to sweep (community mode).")
     parser.add_argument("--max-edge-distances", default="50",
                         help="Max edge distances in µm to sweep (community mode).")
+    parser.add_argument("--min-community-size", type=int, default=None,
+                        help="Communities with fewer cells become -1 (unassigned), as in the pipeline "
+                             "(community mode; default: the value the run used, recorded in the Zarr; "
+                             "10 for Zarrs that predate it).")
     parser.add_argument("--pixel-size", type=float, default=None,
                         help="Pixel size in µm/px (default: the value stored in the Zarr by the pipeline; "
                              "required for Zarrs written before pixel sizes were stored).")
@@ -242,10 +261,15 @@ def main():
             pixel_size_um = resolve_pixel_size(sdata, args.pixel_size)
         except ValueError as e:
             parser.error(str(e))
+        if args.min_community_size is not None and args.min_community_size < 1:
+            parser.error("--min-community-size must be at least 1")
+        min_size, min_origin = resolve_min_community_size(sdata, args.min_community_size)
+        print(f"Minimum community size: {min_size} cells ({min_origin})")
         try:
             result = run_stability_sweep(sdata, resolutions, max_edge_distances,
                                          cell_boundaries=args.cell_boundaries,
-                                         pixel_size_um=pixel_size_um, cluster_on=cluster_on)
+                                         pixel_size_um=pixel_size_um, cluster_on=cluster_on,
+                                         min_community_size=min_size)
         except ValueError as e:
             parser.error(str(e))
         output = args.output or os.path.join(zarr_dir, "community_sweep.csv")

@@ -23,6 +23,8 @@ stores. The segmented store contains:
 
 - `cell_boundaries` — whole-cell polygons, with `kmeans_cluster` and
   `community` labels and a `nucleus_id` column linking each cell to its nucleus.
+  Cells in communities smaller than `--min-community-size` have community `-1`
+  (unassigned).
   With Stardist these are nuclei expanded by `--cell-expansion`; with InstanSeg
   they are segmented directly.
 - A nuclei layer — `stardist_boundaries` (Stardist) or `nucleus_boundaries`
@@ -51,6 +53,9 @@ Written to `--plot_dir`. A small JSON summary of the network analysis:
   "n_cells": 12345,
   "n_clusters": 10,
   "n_communities": 7,
+  "n_communities_raw": 31,
+  "min_community_size": 10,
+  "n_unassigned_cells": 58,
   "n_edges": 36950,
   "max_edge_distance_um": 50,
   "max_edge_distance_px": 178.57,
@@ -64,7 +69,11 @@ Written to `--plot_dir`. A small JSON summary of the network analysis:
 ```
 
 Useful for a quick sanity check of how many cells, clusters, and communities
-were found. `n_edges` counts unique Delaunay edges after the distance filter (at
+were found. `n_communities` counts communities of at least
+`--min-community-size` cells; `n_communities_raw` is Louvain's count before
+that minimum, and `n_unassigned_cells` the cells in the smaller communities,
+which are labelled `-1`. Communities are numbered by size (0 = largest), so
+`community_sizes` lists them largest first. `n_edges` counts unique Delaunay edges after the distance filter (at
 most about 3× `n_cells`). The pixel size is also stored in the segmented Zarr
 (`table.uns['cellsurvey']['pixel_size_um']`) so the stability sweep can convert
 µm distances.
@@ -91,7 +100,8 @@ All plots are PNG files written to `--plot_dir`.
 The GeoJSON contains:
 
 - **Cell boundaries** (from `cell_boundaries`, or the nuclei layer in a
-  nuclei-only run) as annotations, coloured by community, with cluster and
+  nuclei-only run) as annotations, coloured by community (unassigned cells are
+  grey, classified `Unassigned`), with cluster and
   per-marker mean-intensity measurements (`Cell: <channel> mean`) attached, and,
   with `--detect-blobs`, the raw spot count per spot channel
   (`Cell: <channel> spot count`).

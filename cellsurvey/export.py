@@ -20,8 +20,10 @@ def export_to_qupath(cell_ids, community_labels, cluster_labels, output_path, sd
     cell_to_community = dict(zip(cell_ids, community_labels))
     cell_to_cluster = dict(zip(cell_ids, cluster_labels))
 
-    unique_communities = np.unique(community_labels)
-    community_colors = get_colors_for_communities(len(unique_communities))
+    # Communities are numbered 0..n-1; -1 (unassigned) is grey below.
+    community_labels = np.asarray(community_labels)
+    n_communities = int(community_labels.max()) + 1 if (community_labels >= 0).any() else 0
+    community_colors = get_colors_for_communities(n_communities)
 
     features = []
 

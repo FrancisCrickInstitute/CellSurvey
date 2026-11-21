@@ -54,6 +54,7 @@ passed, and detects RNA spots on the channels you specify.
 | `--n-clusters` | `10` | Number of k-means clusters. |
 | `--cluster-on` | `intensities` | What cells are compared on: `intensities`, `spots` or `both` (see below). |
 | `--community-resolution` | `0.1` | Louvain community resolution. |
+| `--min-community-size` | `10` | Communities with fewer cells are labelled `-1` (unassigned). `1` keeps every community. |
 | `--max-edge-distance` | `50` | Max edge length in **µm** for the Delaunay network. |
 
 !!! info "What cells are compared on: `--cluster-on`"
@@ -86,6 +87,13 @@ passed, and detects RNA spots on the channels you specify.
       and the outer boundary). Much smaller values disconnect cells in sparse
       tissue, which then become single-cell communities. Use the
       [community sweep](#community-sweep) to check how sensitive your data is.
+    - `--min-community-size` tidies up those fragments. Cells with no
+      neighbour within `--max-edge-distance` (at tissue edges, in gaps, or
+      debris) each form their own tiny community. On one whole slide, 1,182 of
+      1,723 communities were single cells, while 52 communities held 99% of the
+      cells. Communities smaller than this size are labelled `-1`
+      ("unassigned", grey in QuPath), and the rest are **numbered by size**:
+      community 0 is the largest.
 
 ## Spatial analysis
 
@@ -189,7 +197,14 @@ stored, pass `--pixel-size`.
 
 This writes `community_sweep.csv` (one column per combination,
 `community_r<res>_d<dist>` with the distance in µm, plus `cell_id`/`x`/`y`) and
-`community_sweep_summary.csv` (community count per combination).
+`community_sweep_summary.csv` (per combination: the number of communities of at
+least the minimum size, Louvain's count before that minimum, and the number of
+unassigned cells).
+
+Like the pipeline, the sweep labels communities smaller than
+`--min-community-size` as `-1` and numbers the rest by size. By default it uses
+the value the pipeline run used, which is recorded in the Zarr, so the counts
+match `summary.json`. Zarrs written before it was recorded default to `10`.
 
 ### Cluster sweep
 

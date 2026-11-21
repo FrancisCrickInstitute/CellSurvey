@@ -104,6 +104,30 @@ def resolve_cluster_on(sdata, cluster_on=None, table_key='table'):
     return 'intensities', 'default (none stored in the Zarr)'
 
 
+# Louvain communities smaller than this (in cells) are relabelled -1
+# ("unassigned"): on whole slides most raw communities are isolated cells with
+# no Delaunay neighbour within --max-edge-distance.
+DEFAULT_MIN_COMMUNITY_SIZE = 10
+
+
+def resolve_min_community_size(sdata, min_community_size=None, table_key='table'):
+    """Return ``(size, origin)``: the minimum community size to use and where it came from.
+
+    An explicit value wins. Otherwise the value the pipeline recorded in
+    ``table.uns['cellsurvey']['min_community_size']`` is used, so sweeps count
+    communities the same way as the run they test. Zarrs written before it was
+    recorded fall back to :data:`DEFAULT_MIN_COMMUNITY_SIZE`.
+    """
+    if min_community_size is not None:
+        return int(min_community_size), 'given'
+    stored = None
+    if table_key in sdata.tables:
+        stored = sdata.tables[table_key].uns.get(_UNS_KEY, {}).get('min_community_size')
+    if stored is not None:
+        return int(stored), 'stored in the Zarr'
+    return DEFAULT_MIN_COMMUNITY_SIZE, 'default (none stored in the Zarr)'
+
+
 def _clean_channel_columns(df):
     df = df.copy()
     df.columns = [remove_channel_suffix(str(c)) for c in df.columns]

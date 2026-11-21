@@ -24,6 +24,7 @@ import sopa
 from cellsurvey.utils import (cluster_data, assign_spots_to_cells, extract_feature_tables,
                               build_clustering_features, resolve_shape_keys, store_pixel_size,
                               store_table_meta, resolve_pixel_size, CLUSTER_ON_CHOICES,
+                              DEFAULT_MIN_COMMUNITY_SIZE,
                               STARDIST_NUCLEI_KEY, NUCLEI_KEY, CELLS_KEY)
 from cellsurvey.blob_detection import detect_spots
 from cellsurvey.image_source import open_image_source, stored_pixel_size, is_omero
@@ -85,6 +86,10 @@ def main():
                              'weighted equally (default: intensities)')
     parser.add_argument('--community-resolution', type=float, default=0.1,
                         help='Resolution for Louvain community detection (default: 0.1)')
+    parser.add_argument('--min-community-size', type=int, default=DEFAULT_MIN_COMMUNITY_SIZE,
+                        help='Communities with fewer cells than this are labelled -1 (unassigned); the rest '
+                             f'are numbered by size, 0 = largest (default: {DEFAULT_MIN_COMMUNITY_SIZE}; '
+                             '1 keeps every community)')
     parser.add_argument('--max-edge-distance', type=float, default=50,
                         help='Max edge length in µm for the Delaunay network (default: 50)')
     parser.add_argument('--radius-min', type=float, default=0,
@@ -112,6 +117,8 @@ def main():
 
     if args.omero_readers < 1:
         parser.error("--omero-readers must be at least 1")
+    if args.min_community_size < 1:
+        parser.error("--min-community-size must be at least 1")
 
     # Spot-based clustering needs spots; a new run only gets them with --detect-blobs.
     # (A resumed run is checked once its table is loaded.)
@@ -412,6 +419,7 @@ def main():
                                 comm_detect_res=args.community_resolution,
                                 max_edge_distance=args.max_edge_distance,
                                 pixel_size_um=pixel_size_um,
+                                min_community_size=args.min_community_size,
                                 output_dir=args.plot_dir,
                                 summary_extra={'cluster_on': args.cluster_on,
                                                'n_features': int(features.shape[1])})
@@ -436,7 +444,7 @@ def main():
     sdata.tables['table'].obs['community'] = pd.Categorical(result['community_labels'])
     # Persist the pixel size so read-only consumers (stability sweep) can convert µm params.
     store_pixel_size(sdata, pixel_size_um)
-    store_table_meta(sdata, cluster_on=args.cluster_on)
+    store_table_meta(sdata, cluster_on=args.cluster_on, min_community_size=args.min_community_size)
 
     # Also attach cluster/community to the nuclei layer via the nucleus_id
     # recorded on each cell (survives sopa.aggregate's re-indexing). Nuclei not

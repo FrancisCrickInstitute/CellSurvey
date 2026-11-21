@@ -177,8 +177,11 @@ Builds a spatial network of neighbouring cells and detects communities.
   remaining edges by the similarity of the two cells' `--cluster-on` features
   (`1 + Pearson correlation`), and runs
   Louvain community detection (`networkx`) at `--community-resolution`.
+  Communities smaller than `--min-community-size` cells (default 10; mostly
+  isolated cells with no neighbour in range) are labelled `-1` (unassigned),
+  and the rest are numbered by size, 0 = largest.
 - **Output**: `kmeans_cluster` and `community` labels, plus `summary.json`
-  (cell / cluster / community / edge counts).
+  (cell / cluster / community / edge counts, and unassigned cells).
 - **Where**: `cellsurvey/network_analysis.py` (`run_network_analysis`).
 
 The network, and all later stages, use `cell_boundaries` when present, else the
