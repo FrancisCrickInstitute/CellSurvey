@@ -753,6 +753,33 @@ Tens of whole slides × ~600k cells is ~10⁷ cells. Tables of intensities are f
 3. Statistics by condition (per-sample proportions; mixed models).
 4. Spatial across samples: shared niches and colocalization meta-analysis.
 
+## Future: anatomy-aware communities (neighbourhood niches)
+
+**Status**: options recorded (2026-11-21), nothing decided or built; Dave to revisit. Related: the Novae trial (cohort section) and the cohort plan's "shared niches" step.
+
+**Problem**: on `omero_602778`, the Louvain communities are compact, similar-sized patches (~2–3 mm) that ignore the anatomy the k-means clusters show clearly (white-matter tract, cortical ribbon, MAP2 layers; see the steps 1–3 HPC check and the report's community outlines).
+
+**Why**: Louvain maximises modularity. On a Delaunay graph every cell has ~6 neighbours (a near-uniform planar graph), and the edge weights (`1 + Pearson r` between two neighbours' features, so 0–2) carry little information with few markers and noisy per-cell profiles (see "Correlation edge weights are weak with few features"). With uninformative weights, modularity on such a graph is maximised by compact, balanced patches; resolution only sets their size. The anatomy isn't in *cell-to-cell similarity*. It's in the **mix of cell types across a neighbourhood**: white matter, cortex and layers are regions with a characteristic composition. So the fix is to build communities from neighbourhood-level information.
+
+**Options**, from most to least recommended:
+1. **Neighbourhood-composition niches** (CODEX "cellular neighbourhoods", Schürch et al. 2020; see the PIPEX reference):
+   - per cell, the fraction of each k-means cluster among cells within a radius (e.g. 50–100 µm) or its k nearest neighbours (`scipy.spatial.cKDTree`);
+   - then k-means on those composition vectors → niche types.
+
+   Cheap (minutes for 617k cells) and interpretable ("niche 2 = 60% MAP2 + 30% no-distinct-marker"). Niche types are shared across the tissue, and across samples if cell types are shared, so this is the building block for the cohort plan. Niches aren't guaranteed contiguous: one type can occur in several places (often desirable, e.g. "all white matter").
+2. **Spatially smoothed markers, then clustering** (the BANKSY idea): augment each cell's features with its neighbours' (distance-weighted) mean, mixed by a weight λ (low λ gives cell types as now; high λ gives domains). Independent of the k-means labels, with one intuitive dial; a little less interpretable than option 1.
+3. **Keep Louvain on a better graph**: weight each Delaunay edge by the similarity of the two cells' *neighbourhood compositions* (option 1's vectors) instead of their own features. Within-region edges become strong and cross-boundary edges weak, so Louvain cuts at anatomical borders and returns **contiguous** domains. This is the smallest change to the current pipeline and keeps "community = contiguous place", but it inherits Louvain's tuning (resolution, minimum size). A natural follow-on to option 1, since it reuses the same vectors.
+4. **Not recommended on their own**: Leiden instead of Louvain, or sharper similarity functions on per-cell features. They change the blobs' look, not what drives them.
+
+**Packages** with the same core ideas, if we'd rather not own the code: CellCharter (scverse; neighbourhood aggregation + Gaussian mixtures), SpaGCN, STAGATE (heavier dependencies); Novae (trial planned).
+
+**Recommended start** (when revisited): option 1 as a new **niche** layer alongside the current communities (not replacing them yet). Choose its parameters (neighbourhood radius × number of niches) with a sweep plus silhouette, in the existing sweep framework, as for k. Then option 3 if contiguous regions are wanted. Before touching the pipeline, a quick scratch prototype on `omero_602778`:
+- compositions at 50 and 100 µm, 6 and 10 niches;
+- maps next to the current communities;
+- a few minutes locally, reading the table from Z:.
+
+Success criterion: niches that follow the white-matter tract, cortical ribbon and layers.
+
 ## Future: per-cell spatial analysis of protein and spot distribution
 
 **Status**: idea only (2026-11-19); nothing planned in detail. The aim is to describe *where* signal sits within each cell, not just how much (today's per-cell mean intensity and spot count).
