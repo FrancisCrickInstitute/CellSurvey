@@ -685,6 +685,74 @@ To investigate, on `test_crop`, the COMET whole-cell dataset and `omero_602778`:
 
 The outcome should also inform the clustering features (Known issues: k-means near-empty clusters) and the Normalisation plan, so that the report and clustering eventually use the same transform. Until this is decided, use the example's transform, so step 1 can be checked against `overview_analysis.py`.
 
+## Future: multi-sample (cohort) analysis
+
+**Status**: early thinking (2026-11-21), nothing decided or built. Goal: analyse many images (samples, patients, conditions, time points) together, and produce one **cohort report** that compares experimental groups, alongside the existing per-sample reports.
+
+### Why it isn't just "run the pipeline N times"
+- **Clusters aren't comparable across samples.** Each run's k-means is fitted to that sample alone, so "cluster 3" in sample A and "cluster 3" in sample B are unrelated. Comparing groups needs **one shared set of cell types** across all samples.
+- **Communities are per-sample by construction** (they're places in one tissue). Comparing tissue organisation across samples needs per-cell **neighbourhood features** that mean the same thing everywhere (e.g. the cluster mix of each cell's k nearest neighbours: the CODEX "cellular neighbourhoods" approach; see the PIPEX reference), clustered jointly into shared niche types.
+- **Batch effects**: staining intensity, exposure and autofluorescence differ between slides and runs. Pooling raw intensities makes clusters follow slides instead of biology. That needs per-sample normalisation. But naive per-sample z-scoring also removes *real* differences, e.g. a condition with more CD8 cells; this trade-off is central.
+- **Statistics: the unit of replication is the sample or patient, not the cell.** 600k cells from one slide are one observation of that patient (pseudoreplication; see the ST "Ten Quick Tips" reference). Group comparisons must be on per-sample summaries, or use mixed models with a patient random effect. Report effect sizes and confidence intervals, not just p-values (see the Morgan shortlist entry).
+
+### Sketch of the architecture
+1. **Sample manifest** (CSV): `sample_id`, `input` (path or `omero://…/Image:<id>`), `condition`, `patient`/`donor`, `batch`/`slide`, plus free covariates (timepoint, sex, …). It could later be generated from an OMERO Dataset or tags (the input already records its OMERO source).
+2. **Per-sample runs stay as they are**: the existing pipeline, one job per sample (e.g. a SLURM array, or Snakemake/Nextflow as the ST tips recommend). Each writes its own `_seg.zarr` and per-sample report. Resuming and the existing provenance (`attrs`/`uns`: pixel size, source, parameters, code version) mean a cohort step can check that all samples used the same parameters and code, and warn otherwise.
+3. **Cohort step** (new, e.g. `python -m cellsurvey.cohort --manifest samples.csv -o cohort/`), read-only on the `_seg.zarr`s:
+   - **Harmonise channels**: same panel? Map channel names (e.g. `CD45RA_885_6000-C1-CY3 - TRITC` vs `CD45RA`); stop or warn on missing markers.
+   - **Normalise per sample** (method open, see below).
+   - **Shared cell types**: fit clustering on a balanced subsample pooled across samples (so a 600k-cell slide doesn't swamp a 50k one), then assign every cell. Or cluster per sample and match clusters across samples (harder to make consistent).
+   - **Shared niches**: neighbourhood-composition features per cell (within each sample's own space), clustered jointly.
+   - **Per-sample summaries**: proportions of each cell type and niche, cell density per mm² of tissue, and later colocalization statistics (e.g. CLQ with a permutation null per sample; see the Spatial Permutation reference).
+   - **Group comparisons**: per-sample proportions by condition (plots + tests: compositional methods such as propeller/scCODA, or a mixed model with patient as a random effect, with FDR correction), and cross-sample meta-analysis of colocalization (the PANORAMIC idea).
+4. **Cohort report** (extends `report.py`, same self-contained HTML style):
+   - sample table with QC: cells, non-specific %, pixel size, segmenter, parameters, flags for outliers;
+   - a joint UMAP coloured by sample / batch / condition (a direct visual check for batch effects);
+   - shared cell-type profiles;
+   - composition per sample (stacked bars grouped by condition) and per-type proportion plots by condition, with statistics;
+   - niche composition by condition;
+   - links to each sample's own report.
+
+### Scale
+Tens of whole slides × ~600k cells is ~10⁷ cells. Tables of intensities are fine (10⁷ × 30 floats ≈ 1.2 GB), but joint clustering, UMAP and neighbourhood computation need subsampling or mini-batch methods (`MiniBatchKMeans`, UMAP on a subsample + transform). Images are never loaded together; per-sample thumbnails come from each Zarr's pyramid.
+
+### Open questions (for Dave)
+- **Study design**: how many samples and patients typically? Several slides or regions per patient (nested replication)? Paired designs (before/after, tumour/normal from one patient)?
+- **Panels**: always the same markers across a study, or overlapping panels?
+- **Normalisation**: per-sample robust scaling, a reference channel (DAPI; see the Normalisation plan), quantile normalisation, or ComBat (which PIPEX notes can over-correct per-cell data)? Ideally decided by testing on a real cohort with known batches.
+- **Where cell types come from**: unsupervised joint clustering only, or also marker-rule/reference annotation (CELESTA / RIBCA / PIPEX-style rules) so cell types have names consistent across studies?
+- **Statistics**: which comparisons matter most (cell-type proportions, niche proportions, colocalization, marker levels within a cell type)? Any covariates to adjust for?
+- **Relation to Novae** (reference above): its built-in batch correction and zero-shot niche labels across slides could replace the "shared niches" step. Worth a trial before building our own.
+
+### Next step: trial Novae on `omero_602778` (planned 2026-11-21, not started)
+**Why first**: if Novae's niches follow tissue anatomy on our data, it could supply both the "shared niches" step here and a better per-sample community method. Our Louvain communities on this slide are distance-driven blobs that ignore the anatomy the clusters show (white-matter tract, cortical layers; see the steps 1–3 HPC check). The trial needs no pipeline changes.
+
+**What the docs say** (checked 2026-11-21, [docs](https://prism-oncology.github.io/novae/); proteins tutorial at `/tutorials/proteins/`):
+- **Proteins mean training from scratch.** There's no protein pretrained model, and zero-shot works through gene names (`var_names`), so it doesn't apply to an antibody panel. Use `novae.Novae(adata)` + `model.fit(adata, accelerator="cuda")` (defaults 20 epochs, early stopping). The tutorial sets `embedding_size = n_vars - 1`. No minimum panel size is stated, but the tutorial has 63 proteins and 602778 has 6 markers, so a weak result may reflect the panel, not the method.
+- **Preprocessing**: `novae.settings.auto_preprocessing = False` (otherwise it applies `normalize_total` + `log1p` when `X.max() > 10`), then `novae.data.quantile_scaling(adata)` (per column, `asinh(X / (5 × Q0.2))`).
+- **Coordinates are implicitly µm**: `novae.spatial_neighbors(adata, radius=…)` builds a Delaunay graph pruned at `radius` in coordinate units; it warns if distances look like pixels (`novae.settings.scale_to_microns`). Convert our pixel centroids (`obsm['spatial']` × `pixel_size_um`) and use a µm radius (e.g. 50, matching `--max-edge-distance`).
+- **Install**: `pip install novae` (Python ≥ 3.12, PyTorch Lightning). A GPU is optional but much faster: inference ~5–20 min on CPU versus 0.5–2 min on GPU (training scales similarly).
+- **Domains**: `model.compute_representations(adata)` (→ `obsm['novae_latent']`), then `model.assign_domains(adata, level=… | n_domains=…, key_added=…)` for several resolutions (hierarchical).
+
+**Plan**:
+1. **Environment**: a throwaway pixi project *outside* the repo on the HPC (as with the OMERO test): `pixi init novae-trial && pixi add "python=3.12" && pixi add --pypi novae`. Check it gets a CUDA torch. Add Novae to the repo (a separate `novae` env, per the TF/Torch note) only if the trial is worth keeping.
+2. **Export** (a small script in the CellSurvey env, read-only on the Zarr): table → `.h5ad` with `X` = per-cell marker intensities (`utils.extract_feature_tables`; decide whether to drop `DAPI`/`AF`), `obsm['spatial']` in µm, and `obs` carrying `kmeans_cluster` and `community` for comparison.
+3. **Run** (GPU node): quantile scaling, `spatial_neighbors(radius=50)`, train, then domains at e.g. `n_domains` = 5, 8, 12 (or levels 3/5/7). Record time and GPU memory for 617k cells.
+4. **Compare**:
+   - domain maps against our cluster and community maps (`report/cluster_maps.png`, `community_outlines.png`);
+   - **do the domains follow anatomy** (white-matter tract, cortical ribbon, the MAP2 layers) rather than tiling by distance?
+   - agreement with communities and clusters (ARI/NMI);
+   - stability across a couple of random seeds.
+5. **Decide**: adopt it (as an optional community method, and the cohort "shared niches" candidate), keep it for larger panels only, or drop it. Record the result here and in the Novae reference.
+
+**Open choices**: which channels to give it (all 8, or the 6 markers without DAPI/AF); the graph radius; how many domains to compare. A larger-panel dataset (e.g. the 29-plex COMET slide) would be the fairer second test.
+
+### Possible phasing
+1. Manifest + a batch runner (SLURM array script) + a cohort table that collects every sample's `summary.json` and QC (cheap, immediately useful).
+2. Shared cell types (pooled, normalised clustering) + the descriptive cohort report (composition by sample and condition, joint UMAP for batch effects).
+3. Statistics by condition (per-sample proportions; mixed models).
+4. Spatial across samples: shared niches and colocalization meta-analysis.
+
 ## Future: per-cell spatial analysis of protein and spot distribution
 
 **Status**: idea only (2026-11-19); nothing planned in detail. The aim is to describe *where* signal sits within each cell, not just how much (today's per-cell mean intensity and spot count).
@@ -1193,6 +1261,7 @@ Segmented imaging (XY + markers)
 - **Synergy with the Planned Stability Sweep**: the sweep's co-occurrence/entropy machinery could quantify Novae's domain stability, giving confidence scores on top of a black-box foundation model.
 - **Trade-offs**: heavy PyTorch + PyTorch Geometric + Lightning stack (a second DL framework alongside TensorFlow/Stardist), though it is the most natural addition since Sopa shares the scverse ecosystem. Foundation model is less transparent than deterministic k-means/Louvain. Primary target modality is transcriptomics (Xenium/MERSCOPE/CosMx); antibody/OME-TIFF + blob-detected transcripts is not the canonical use case and should be validated.
 - **Caveats**: research/foundation model (v1.1.1); may trail dataset-specific methods (GraphST/STAGATE) on tightly-tuned single-sample benchmarks, but wins on generality, cross-slide transfer, and integrated downstream analysis.
+- **Protein panels (checked 2026-11-21)**: there's no protein pretrained model and zero-shot works through gene names, so antibody panels need **training from scratch** (proteins tutorial, 63-protein panel), with `quantile_scaling` instead of auto-preprocessing and coordinates in µm. A trial on `omero_602778` (6 markers) is planned: see "Future: multi-sample (cohort) analysis → Next step: trial Novae".
 
 ## Reference: SACCELERATOR (SpatialHackathon)
 
