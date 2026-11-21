@@ -32,6 +32,9 @@ from cellsurvey.network_analysis import run_network_analysis
 from cellsurvey.segmentation import expand_nuclei, run_stardist, run_instanseg
 from cellsurvey.export import export_to_qupath
 
+# cell_density.png shows only this many of the largest communities.
+MAX_DENSITY_COMMUNITIES = 20
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -523,41 +526,11 @@ def main():
     cluster_labels_arr = obs['kmeans_cluster'].astype(int).to_numpy()
     community_labels_arr = obs['community'].astype(int).to_numpy()
 
-    n_clusters = args.n_clusters
-    n_communities = len(set(community_labels_arr)) - (1 if -1 in community_labels_arr else 0)
-
     exp_weights = np.exp(-cluster_distances)
     exp_weights /= exp_weights.sum(axis=1, keepdims=True)
 
-    n_rows = n_clusters + n_communities
-    n_cols = 1
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(10, 6 * n_rows), squeeze=False)
-
-    for c in range(n_clusters):
-        weights = exp_weights[:, c]
-        density, xedges, yedges = np.histogram2d(x, y, bins=bins, weights=weights)
-        ax = axes[c, 0]
-        im = ax.imshow(np.log1p(density.T * 1000), origin='lower', aspect='auto', cmap='inferno',
-                       extent=[xedges[0], xedges[-1], yedges[0], yedges[-1]])
-        plt.colorbar(im, ax=ax, label='log(weighted density + 1)')
-        count = np.sum(cluster_labels_arr == c)
-        ax.set_title(f'Cluster {c} density ({count} cells)')
-
-    for comm in range(n_communities):
-        mask = community_labels_arr == comm
-        if not mask.any():
-            continue
-        density, xedges, yedges = np.histogram2d(x[mask], y[mask], bins=bins)
-        ax = axes[n_clusters + comm, 0]
-        im = ax.imshow(np.log1p(density.T), origin='lower', aspect='auto', cmap='inferno',
-                       extent=[xedges[0], xedges[-1], yedges[0], yedges[-1]])
-        plt.colorbar(im, ax=ax, label='log(cell count + 1)')
-        count = mask.sum()
-        ax.set_title(f'Community {comm} density ({count} cells)')
-
-    plt.tight_layout()
-    plt.savefig(os.path.join(args.plot_dir, 'cell_density.png'))
-    plt.close()
+    plot_cell_density(x, y, cluster_labels_arr, community_labels_arr, exp_weights, args.n_clusters,
+                      bins, os.path.join(args.plot_dir, 'cell_density.png'))
 
     # Heatmap of the clustering features per k-means cluster: each feature
     # z-scored across all cells (as k-means sees it, but without the --cluster-on
@@ -596,6 +569,60 @@ def main():
         plt.tight_layout()
         plt.savefig(os.path.join(args.plot_dir, 'morphology_by_cluster.png'))
         plt.close()
+
+
+def plot_cell_density(x, y, cluster_labels, community_labels, exp_weights, n_clusters, bins, path,
+                      max_communities=MAX_DENSITY_COMMUNITIES):
+    """Write ``cell_density.png``: one soft-weighted density panel per k-means
+    cluster, plus plain cell-count panels for the ``max_communities`` largest
+    communities (-1, unassigned, is never plotted). The title says how many
+    communities and unassigned cells were left out."""
+    # Pick communities by actual size (not label order).
+    comm_ids, comm_counts = np.unique(community_labels[community_labels >= 0], return_counts=True)
+    plotted_comms = comm_ids[np.lexsort((comm_ids, -comm_counts))][:max_communities]
+    n_comm_omitted = len(comm_ids) - len(plotted_comms)
+
+    # Grid layout: clusters first, then communities starting on a new row.
+    n_cols = 4
+    cluster_rows = -(-n_clusters // n_cols)
+    comm_rows = -(-len(plotted_comms) // n_cols)
+    n_rows = max(cluster_rows + comm_rows, 1)
+    # Constrained layout (not tight_layout) leaves room for the suptitle.
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(5 * n_cols, 4 * n_rows), squeeze=False,
+                             layout='constrained')
+    for ax in axes.ravel():
+        ax.axis('off')
+
+    def _density_panel(ax, density, xedges, yedges, label, title):
+        ax.axis('on')
+        im = ax.imshow(np.log1p(density.T), origin='lower', aspect='auto', cmap='inferno',
+                       extent=[xedges[0], xedges[-1], yedges[0], yedges[-1]])
+        plt.colorbar(im, ax=ax, label=label)
+        ax.set_title(title)
+
+    for c in range(n_clusters):
+        density, xedges, yedges = np.histogram2d(x, y, bins=bins, weights=exp_weights[:, c])
+        _density_panel(axes[c // n_cols, c % n_cols], density * 1000, xedges, yedges,
+                       'log(weighted density + 1)',
+                       f'Cluster {c} density ({np.sum(cluster_labels == c)} cells)')
+
+    for i, comm in enumerate(plotted_comms):
+        mask = community_labels == comm
+        density, xedges, yedges = np.histogram2d(x[mask], y[mask], bins=bins)
+        _density_panel(axes[cluster_rows + i // n_cols, i % n_cols], density, xedges, yedges,
+                       'log(cell count + 1)', f'Community {comm} density ({mask.sum()} cells)')
+
+    title = f'Cell density: {n_clusters} k-means clusters'
+    if len(plotted_comms):
+        title += f', the {len(plotted_comms)} largest communities'
+    if n_comm_omitted:
+        title += f' ({n_comm_omitted} smaller communities not shown)'
+    n_unassigned = int((community_labels < 0).sum())
+    if n_unassigned:
+        title += f'; {n_unassigned} unassigned cells not shown'
+    fig.suptitle(title)
+    fig.savefig(path)
+    plt.close(fig)
 
 
 if __name__ == '__main__':
