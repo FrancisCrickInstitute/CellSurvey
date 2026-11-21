@@ -27,8 +27,8 @@
       "PowerShell(pixi run --no-install * -m py_compile *)",
       "Edit(*.py)",
       "Edit(**/*.py)",
-      "Edit(AGENTS.md)",
-      "Edit(CLAUDE.md)",
+      "Edit(*.md)",
+      "Edit(**/*.md)",
       "WebFetch(domain:github.com)",
       "WebFetch(domain:raw.githubusercontent.com)",
       "WebFetch(domain:pypi.org)"
@@ -71,6 +71,7 @@
       "PowerShell(Move-Item *)",
       "PowerShell(Remove-Item *)",
       "Edit(pixi.toml)",
+      "Edit(WORKING_AGREEMENT.md)",
       "Edit(.claude/**)"
     ],
     "deny": [

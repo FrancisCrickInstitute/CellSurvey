@@ -20,7 +20,7 @@ Sections 1–4 are generic and meant to be copied to other repos (or to `~/.clau
 - **Reading**: any file in the repo; searching (Glob / Grep); `git status`, `log`, `diff`, `show`, `branch` (listing), `fetch`, `check-ignore`, `ls-files`, `rev-parse`.
 - **Editing code and docs in the repo** once Dave has asked for the change (see "Planning is not permission"). No new edits after the requested change is done without checking.
 - **Python files (`.py`) in the repo: OK to create or edit without asking** (added 2026-11-21), while working on something Dave has asked for. This covers the code itself; "Planning is not permission" still applies to *starting* new work.
-- **`AGENTS.md` and `CLAUDE.md`: always OK to edit** (added 2026-11-21): recording findings, test results, plans, notes and doc updates, without asking first. Still say what changed. This doesn't cover the rules in this file (see §3).
+- **Markdown files (`.md`) in the repo: OK to create or edit without asking** (added 2026-11-21; extends the earlier `AGENTS.md`/`CLAUDE.md` rule), e.g. `AGENTS.md`, `CLAUDE.md`, `README.md`, `docs/*.md`: recording findings, test results, plans, notes and doc updates. Still say what changed. **Exception: this file (`WORKING_AGREEMENT.md`)**: changing its rules needs a "yes" first (see §3), except recording a rule Dave has just stated.
 - **Scratch work**: writing and running throwaway scripts, test data and outputs in the session's scratchpad directory (never in the repo).
 - **Checks**: compiling (`python -m py_compile`) and running small local test scripts in the existing environments without installing anything (`pixi run --no-install …`).
 - **Web lookups**: reading documentation and package pages (PyPI, GitHub, project docs) to check APIs.
