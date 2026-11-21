@@ -556,7 +556,7 @@ From the example, kept and generalised:
 - **Header** (new; not in the example): the source (file path, or OMERO host + Image ID + name), date, CellSurvey version/commit, segmenter and model, pixel size, cell count, channels, the key parameters (`--n-clusters`, `--cluster-on`, `--community-resolution`, `--max-edge-distance`, `--cell-expansion`), and counts from `summary.json` (cells dropped as unnucleated or dim, communities, edges).
 - **"How to read this"**: the plain-language explanation of z-scores and of *clusters* (what cells express) versus *communities* (where cells sit). This text can be reused almost word for word.
 - **Marker distributions**: one log-scale histogram per marker on a robust z scale (arcsinh, then median/IQR), with an illustrative "positive" line at z = +2, the percentage above it, and the warning that most markers are unimodal, so the cutoff is a choice.
-- **Cluster profiles**: a heatmap of mean z per cluster (this supersedes or absorbs `cluster_intensity_heatmap.png`), plus a table of size, percentage, the top 5 markers and an automatic name built from the top 2 markers (e.g. `CD31/Fibronectin`).
+- **Cluster profiles**: a heatmap of mean z per cluster (in addition to `cluster_intensity_heatmap.png`, which stays), plus a table of size, percentage, the top 5 markers and an automatic name built from the top 2 markers (e.g. `CD31/Fibronectin`).
 - **Spatial maps over the tissue image** (DAPI in greyscale):
   - one panel per cluster;
   - one map of all clusters, with each hexbin coloured by its dominant cluster;
@@ -572,6 +572,15 @@ From the example, kept and generalised:
   - Flag clusters that are more than 50% non-specific. Say "non-specific / likely autofluorescence or debris" rather than asserting they are debris.
   - For each marker, report the share of "positive" cells that are non-specific: clean, suspect (> 25%) or dominated (> 50%).
   - Also list background or control channels found by name (`TRITC`, `Cy5`, `AF`, …) and unassigned cells or tiny communities.
+
+New, not in the example:
+- **Spots section** (only when the table has spot counts, i.e. after `--detect-blobs`):
+  - a per-channel distribution of spot density (spots per 100 µm² of cell area, matching `build_clustering_features`);
+  - the share of spots assigned to cells;
+  - spot density per cluster (a heatmap like the marker one);
+  - a map per spot channel over the tissue image (a hexbin of spot density).
+  
+  The section is shown whatever `--cluster-on` is set to; the header says which features the clusters were built from.
 
 Left in cellsurvey-analysis (project-specific interpretation, not pipeline output): the thymus feasibility questions, the measurement-compartment table, CD68 and lineage attributions, and the CD31 community investigation. A later option could let users pass a panel file (marker → lineage, channels to treat as autofluorescent) to restore lineage names, but that's not part of v1.
 
@@ -603,12 +612,24 @@ Left in cellsurvey-analysis (project-specific interpretation, not pipeline outpu
 
 Check: `test_crop` (local TIFF, Stardist; with and without `--detect-blobs`), a resume of `omero_602778` (whole-slide scale and timing), a nuclei-only run (`--cell-expansion 0`), and the standalone command on an older `_seg.zarr`.
 
-### Open questions
-- Should the report replace `cluster_intensity_heatmap.png` and `cell_density.png`, or sit alongside them?
-- The z cutoff (2?) and N for non-specific: fixed, or flags (`--report-positive-z`)?
-- Arcsinh cofactor: the example uses 1 on raw intensities, which is close to `log` for `uint16`. Is that suitable for 8-bit or float inputs?
-- With `--cluster-on spots|both`, add a spots section (spot-density distributions and maps)?
-- On by default? The proposal is yes, since it's cheap next to segmentation.
+### Decisions (2026-11-21)
+- **Alongside the existing plots**: `cluster_intensity_heatmap.png`, `cell_density.png` and the other PNGs stay as they are. The report is an addition.
+- **Fixed thresholds for now**: positive at z > 2; non-specific if z > 2 in at least `max(3, ceil(25%))` of the markers; clusters flagged if more than 50% non-specific; markers suspect above 25% and dominated above 50%. These are module constants, not flags, and the report header states them.
+- **A spots section**, as described above.
+- **On by default**, with `--no-report` to skip.
+
+### Open: the intensity transform (needs investigating before step 1 is final)
+The example uses `arcsinh(x)` (cofactor 1), then median/IQR. Note that for x ≫ 1, `arcsinh(x) ≈ log(2x)`, and median/IQR removes any constant shift, so the result is then independent of per-channel gain (exposure). Inputs are always integer (Sopa casts float TIFFs to `uint8`, and the OMERO reader rejects floats). So the question is how the cofactor compares with each channel's background:
+- for `uint16` with background in the hundreds, cofactor 1 is effectively `log`;
+- for `uint8`, or dim channels near 0, the near-linear part of arcsinh (|x| ≲ cofactor) matters, and low-end noise may be stretched.
+
+To investigate, on `test_crop`, the COMET whole-cell dataset and `omero_602778`: compare plain z (what k-means uses), `log1p`, arcsinh with cofactor 1 and 5 (the cytometry convention), and a per-channel cofactor (e.g. a low percentile of that channel, as an estimate of background). For each, look at:
+- histogram shape (does a second peak become visible?);
+- the per-marker share above z = 2;
+- the non-specific cell count and the cluster flags;
+- how stable these are when the image is converted to `uint8`.
+
+The outcome should also inform the clustering features (Known issues: k-means near-empty clusters) and the Normalisation plan, so that the report and clustering eventually use the same transform. Until this is decided, use the example's transform, so step 1 can be checked against `overview_analysis.py`.
 
 ## Future: per-cell spatial analysis of protein and spot distribution
 
