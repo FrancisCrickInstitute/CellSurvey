@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-**`AGENTS.md` is the canonical, detailed project reference.** It covers the full CLI flag table, every pipeline stage, gotchas, planned work (stability sweep phases 2–3, normalisation, Cellpose) and notes on related tools. Read the relevant section before making non-trivial changes. When a change alters behaviour, flags, layer names or plans, update `AGENTS.md` too (and `README.md` / `docs/` if users will see the change).
+**`AGENTS.md` is the canonical, detailed project reference.** It covers the full CLI flag table, every pipeline stage, gotchas, planned work (stability sweep phases 2–3, normalisation, overview report, Cellpose) and notes on related tools. Read the relevant section before making non-trivial changes. When a change alters behaviour, flags, layer names or plans, update `AGENTS.md` too (and `README.md` / `docs/` if users will see the change).
 
 ## What this is
 

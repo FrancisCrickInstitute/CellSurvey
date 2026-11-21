@@ -539,6 +539,77 @@ where `dapi_cell` is that cell's DAPI mean intensity. Applied **after aggregatio
 - Normalisation amplifies noise in low-DAPI cells; the zero/epsilon guard is essential.
 - Changing the matrix changes clustering/community results, so existing `_seg.zarr` outputs become non-comparable once enabled (same breaking-change consideration as cell segmentation).
 
+## Planned: Overview report
+
+**Status**: planned (2026-11-21), not started.
+
+**Goal**: every run writes a single, self-contained **overview report** (`<plot_dir>/report.html`) that a biologist can open in a browser, email, or print to PDF. It should say who is in the tissue (clusters), where they are (spatial maps over the tissue image), how the tissue is organised (communities), and which results to distrust (data-quality flags). Today the outputs are loose PNGs plus `summary.json`, with no explanation.
+
+**Model**: the hand-written overview in [cellsurvey-analysis `explorations/cellsurvey_wholecell`](https://github.com/FrancisCrickInstitute/cellsurvey-analysis/tree/main/explorations/cellsurvey_wholecell):
+- `overview_analysis.py` reads an exported `cells.csv`, plus the DAPI channel from a downsampled pyramid level (`s4`) of the `_seg.zarr`, and the sweep CSVs. It writes figures and a Markdown report.
+- `make_report_html.py` converts that Markdown into one HTML file with the figures embedded as base64.
+- `overview_analysis_filtered.py` repeats the analysis after removing the debris and collagen clusters. It re-clusters and rebuilds communities itself, and its docstring calls this an *approximation* of CellSurvey that should eventually move upstream.
+
+### What to keep (generic) and what to leave out (dataset-specific)
+
+From the example, kept and generalised:
+- **Header** (new; not in the example): the source (file path, or OMERO host + Image ID + name), date, CellSurvey version/commit, segmenter and model, pixel size, cell count, channels, the key parameters (`--n-clusters`, `--cluster-on`, `--community-resolution`, `--max-edge-distance`, `--cell-expansion`), and counts from `summary.json` (cells dropped as unnucleated or dim, communities, edges).
+- **"How to read this"**: the plain-language explanation of z-scores and of *clusters* (what cells express) versus *communities* (where cells sit). This text can be reused almost word for word.
+- **Marker distributions**: one log-scale histogram per marker on a robust z scale (arcsinh, then median/IQR), with an illustrative "positive" line at z = +2, the percentage above it, and the warning that most markers are unimodal, so the cutoff is a choice.
+- **Cluster profiles**: a heatmap of mean z per cluster (this supersedes or absorbs `cluster_intensity_heatmap.png`), plus a table of size, percentage, the top 5 markers and an automatic name built from the top 2 markers (e.g. `CD31/Fibronectin`).
+- **Spatial maps over the tissue image** (DAPI in greyscale):
+  - one panel per cluster;
+  - one map of all clusters, with each hexbin coloured by its dominant cluster;
+  - a map of "positive" cells for each marker. The example's hand-picked lineage list becomes all markers, capped at about 30 panels.
+- **Communities**:
+  - outlines over the tissue image, drawn as smoothed density contours per community;
+  - a stacked bar of composition by cluster, grouped by dominant cluster;
+  - a short auto-generated narrative: which clusters dominate the largest communities, how many communities are over 80% one cluster, and how many are dominated by flagged clusters;
+  - a resolution → community-count table when `community_sweep_summary.csv` exists next to the Zarr.
+- **Data-quality flags**: a generic version of the example's debris analysis.
+  - The example flags debris with a fixed 4-marker signature (CD68 + FoxP3 + LamininA5 + H2AX). That doesn't transfer to other panels.
+  - Use the example's other test instead: a cell is **non-specific** if it is bright (z > 2) in at least N markers, with N scaled to the panel (e.g. `max(3, 25%)` of the markers).
+  - Flag clusters that are more than 50% non-specific. Say "non-specific / likely autofluorescence or debris" rather than asserting they are debris.
+  - For each marker, report the share of "positive" cells that are non-specific: clean, suspect (> 25%) or dominated (> 50%).
+  - Also list background or control channels found by name (`TRITC`, `Cy5`, `AF`, …) and unassigned cells or tiny communities.
+
+Left in cellsurvey-analysis (project-specific interpretation, not pipeline output): the thymus feasibility questions, the measurement-compartment table, CD68 and lineage attributions, and the CD31 community investigation. A later option could let users pass a panel file (marker → lineage, channels to treat as autofluorescent) to restore lineage names, but that's not part of v1.
+
+### Design
+- **New module `cellsurvey/report.py`**, which only reads the `_seg.zarr`, like the stability sweep. It's called at the end of `cli.main()` by default (`--no-report` to skip), and can also run standalone, `python -m cellsurvey.report --zarr <prefix>_seg.zarr -p <dir>`, so a report can be regenerated or restyled without re-running anything. It must not import TF, Torch or omero-py.
+- **Inputs**, all taken from the `_seg.zarr`:
+  - per-cell intensities via `utils.extract_feature_tables` (never `.X` directly);
+  - `obs` `kmeans_cluster` / `community` / area;
+  - centroids from the cell layer (`resolve_shape_keys`);
+  - `table.uns['cellsurvey']` and `attrs['cellsurvey']` (pixel size, `cluster_on`, source);
+  - optionally, the sweep CSVs next to the Zarr.
+- **Tissue background**: read one channel from the image pyramid. Pick the level whose longest side is ≤ ~4000 px, rather than a hard-coded `s4`. Find DAPI by name (shared with the Normalisation plan's auto-detect), falling back to the first `--seg-channels` channel. If the image isn't readable, fall back to points on white, as the example does. To check: whether the `_seg.zarr` holds the image, or only `<prefix>.zarr` does (see the "Sopa writes into `<prefix>.zarr`" finding). Coordinates are pixels with y pointing down, so use `imshow(origin='upper')`; the example's `origin='lower'` reflects its CSV's frame.
+- **Output**: build the HTML directly (Python string templates + `html.escape`; no Markdown step, no new dependency) with figures embedded as base64 PNG, light print-friendly CSS, and a contents list. Also keep the PNGs in `<plot_dir>/report/`. Record the report's settings (z cutoff, N for non-specific) in its header.
+- **Scale** (617k cells on Image 602778): everything is vectorised (`histogram2d`, `hexbin`, `groupby`). Cap the panels: the top 20 communities by size, ≤ 30 markers. Rasterise scatter plots (subsample to ~200k points for the per-cluster panels) so figures stay small, and target an HTML file of a few MB. Time it on `omero_602778`; aim for under 2 min.
+- **Robust z vs clustering features**: the report's arcsinh + median/IQR z is for display and differs from the plain z-score k-means uses (`build_clustering_features`). State this in the report. Revisit if the clustering moves to robust scores (see Known issues: k-means near-empty clusters, and the Normalisation plan).
+
+### Dependencies and related work
+- **Builds on Known issues to-do steps 1–2** (minimum community size, `-1` for unassigned, size-ordered labels, capped `cell_density.png`). Without them, the community sections are swamped by single-cell communities (1,723 on 602778). The report must treat `-1` as "unassigned", never as a community.
+- **`--exclude-channels`** (Known issues, k-means): the report should leave the same channels out of the marker sections, as the example drops DAPI and the TRITC/Cy5 controls.
+- **The filtered variant** (`overview_analysis_filtered.py`) is a request for CellSurvey itself: exclude flagged cells (and chosen clusters or channels) *before* clustering and communities, so the analysis repo needn't re-implement them. Later, the report's non-specific flag could feed an opt-in `--exclude-nonspecific` that labels those cells `-1` and re-runs clustering without them.
+- **Export to OMERO** (Future section): `report.html` is a natural FileAnnotation to attach to the source image (option 1).
+
+### Implementation plan
+1. `report.py`: loading (table, centroids, metadata, background level) and the computations (robust z, cluster profiles, automatic names, non-specific flags, community composition), with no plotting. Check: the numbers match `overview_analysis.py` on the COMET whole-cell dataset it was written for (same cluster sizes, top markers and debris percentages; set N so its definition matches).
+2. Figures, one function per figure, each a pure function of the computed tables.
+3. HTML assembly, plus the header from `summary.json` / `uns`.
+4. CLI: `--no-report` in `cli.py`, and the standalone `python -m cellsurvey.report` entry point.
+5. Docs: this section, the flag table, `docs/outputs.md` (and a sample screenshot), `README.md`.
+
+Check: `test_crop` (local TIFF, Stardist; with and without `--detect-blobs`), a resume of `omero_602778` (whole-slide scale and timing), a nuclei-only run (`--cell-expansion 0`), and the standalone command on an older `_seg.zarr`.
+
+### Open questions
+- Should the report replace `cluster_intensity_heatmap.png` and `cell_density.png`, or sit alongside them?
+- The z cutoff (2?) and N for non-specific: fixed, or flags (`--report-positive-z`)?
+- Arcsinh cofactor: the example uses 1 on raw intensities, which is close to `log` for `uint16`. Is that suitable for 8-bit or float inputs?
+- With `--cluster-on spots|both`, add a spots section (spot-density distributions and maps)?
+- On by default? The proposal is yes, since it's cheap next to segmentation.
+
 ## Future: per-cell spatial analysis of protein and spot distribution
 
 **Status**: idea only (2026-11-19); nothing planned in detail. The aim is to describe *where* signal sits within each cell, not just how much (today's per-cell mean intensity and spot count).
