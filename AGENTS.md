@@ -103,7 +103,7 @@ The pipeline is split into modules under the `cellsurvey/` package. `run.py` is 
 
 9. **QuPath GeoJSON export** (`cli.py` → `export.py`): Exports cell boundaries and spot detections as GeoJSON features with community/cluster assignments and measurements (`Cell: <channel> mean` intensities and, with spots, `Cell: <channel> spot count`) for QuPath visualization. Takes `cell_ids`, `community_labels`, and `cluster_labels` as direct arrays. Output path is `--geojson-path` (default `<output_file>.geojson`, i.e. beside the Zarrs; derived from `-o` even when resuming).
 
-10. **Spatial neighborhood analysis** (`cli.py`): Computes spatial neighbors radius graph, mean hop distance heatmap between clusters (`cell_type_to_cell_type.png`), UMAP embedding with k-means coloring (`umap_kmeans_cluster.png`), and Leiden clustering with `igraph` backend (`umap_leiden.png`); neighbours/UMAP/Leiden use the clustering features (`use_rep='X_cellsurvey'`), not Scanpy's count normalisation of `.X`. Also emits density maps (`cell_density.png`, `cli.plot_cell_density`: a 4-column grid of one panel per k-means cluster, then the `MAX_DENSITY_COMMUNITIES` = 20 largest communities by size; the suptitle states how many communities and unassigned cells were left out), a heatmap of the clustering features per cluster (`cluster_intensity_heatmap.png`, z-scored without the `both` group weighting), and a morphology-by-cluster plot (`morphology_by_cluster.png`, only if an `area` column is present). All plots are saved to `--plot_dir`.
+10. **Spatial neighborhood analysis** (`cli.py`): Computes spatial neighbors radius graph, mean hop distance heatmap between clusters (`cell_type_to_cell_type.png`), UMAP embedding with k-means coloring (`umap_kmeans_cluster.png`), and Leiden clustering with `igraph` backend (`umap_leiden.png`); neighbours/UMAP/Leiden use the clustering features (`use_rep='X_cellsurvey'`), not Scanpy's count normalisation of `.X`. Also emits density maps (`cell_density.png`, `cli.plot_cell_density`: a 4-column grid of one panel per k-means cluster, then the `MAX_DENSITY_COMMUNITIES` = 20 largest communities by size; the suptitle states how many communities and unassigned cells were left out; every panel shares the whole-tissue extent and is drawn with y increasing downwards, like the image), a heatmap of the clustering features per cluster (`cluster_intensity_heatmap.png`, z-scored without the `both` group weighting), and a morphology-by-cluster plot (`morphology_by_cluster.png`, cell area converted from Sopa's px² to µm²; only if an `area` column is present). All plots are saved to `--plot_dir`.
 
 ### CLI arguments
 
@@ -261,7 +261,7 @@ Open:
   - **GeoJSON is 1.9 GB** for 617k cells (8 channels): heavy for QuPath. See the PIPEX note on compressed `.pbf` export, or offer gzip / cells-only / no-measurements options.
   - **InstanSeg runs the model twice** (once per layer, each computing both outputs; see `_instanseg_paired_patch`): ~26 + ~48 min here. Caching each patch's cell mask from the first pass (e.g. in the Sopa cache dir) and returning it in the second would roughly halve the GPU time.
   - **27% of InstanSeg cells had no nucleus** and were dropped (226,499), against 9% on `test_crop`. Plausible for brain tissue (fragments of processes), but check visually (e.g. the GeoJSON in QuPath) before relying on the default.
-  - **`morphology_by_cluster.png` plots area in px²**: now that the pixel size is always known, convert it to µm².
+  - ~~**`morphology_by_cluster.png` plots area in px²**~~: now µm² (to-do step 3).
 
   **To-do plan for these findings (2026-11-20; not started).** Steps 1–4 are small and planned *before* fast-forwarding `feature/omero` into `main`; steps 5–8 are larger and can go on a new branch after the merge. Each step lists how to check it.
 
@@ -275,7 +275,11 @@ Open:
 
      Check: resume `omero_602778` → ~50 communities instead of 1,723.
   2. **`cell_density.png`** (`cli.py`; after step 1). **Done (2026-11-21), HPC check pending**: moved into `plot_cell_density` (plain arrays, so it can be tested without a run); the 20 largest communities chosen by size (not label order), `-1` never plotted; a 4-column grid with constrained layout instead of one column. Synthetic test at slide scale (617,527 cells, 10 clusters, 52 communities + 5,109 unassigned): 2000 × 3200 px, ~6 s; labels out of size order and an all-unassigned run also render correctly. Original plan: plot the k-means clusters plus only the largest communities (proposed default 20), state the number left out in the title, and loop over actual labels rather than `range(n_communities)`. Check: normal image size, drawn in seconds.
-  3. **Area in µm²** (`cli.py`, morphology plot): `area_px × pixel_size_um²`, axis labelled µm².
+  3. **Area in µm²** (`cli.py`, morphology plot): `area_px × pixel_size_um²`, axis labelled µm². **Done (2026-11-21), HPC check pending.** Also fixed in `cell_density.png` (found while testing step 2):
+     - the maps were **upside down** relative to the image (`origin='lower'`, so y increased upwards); now `origin='upper'` with a flipped extent;
+     - each community panel **zoomed to its own extent**, hiding where it sits; all panels now share the whole-tissue range, which also skips NaN centroids that would have crashed `histogram2d`'s automatic range.
+
+     Checked with a synthetic layout (a top-left blob and an L along the left and bottom edges): it renders as in QuPath.
   4. **Docs**: this file, `docs/outputs.md` and `docs/parameters.md` (new flag(s), new `summary.json` fields, the "unassigned" label).
 
   → One resume run on `omero_602778` checks steps 1–3 together (resumes skip segmentation, ~20 min). Then fast-forward into `main`.

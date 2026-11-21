@@ -552,23 +552,24 @@ def main():
     plt.savefig(os.path.join(args.plot_dir, 'cluster_intensity_heatmap.png'))
     plt.close()
 
-    # Morphological features per cluster — cell area
+    # Morphology per cluster: cell area. Sopa's obs['area'] is in px² (shape
+    # coordinates are pixels), so convert to µm² for the plot.
     obs_df = sdata.tables['table'].obs
-    morph_cols = [c for c in obs_df.columns if c in ('area',)]
-    if morph_cols:
-        import matplotlib.gridspec as gridspec
-        n_morph = len(morph_cols)
-        fig = plt.figure(figsize=(max(8, n_morph * 4), 6))
-        for i, col in enumerate(morph_cols):
-            ax = fig.add_subplot(1, n_morph, i + 1)
-            # Violin, not swarm: swarmplot places every point individually and
-            # takes many hours at whole-slide scale (100k+ cells per cluster).
-            sns.violinplot(data=obs_df, x='kmeans_cluster', y=col, ax=ax, cut=0, inner='quartile')
-            ax.set_title(f'{col} by cluster')
-            ax.set_xlabel('Cluster')
+    if 'area' in obs_df.columns:
+        morph_df = pd.DataFrame({
+            'kmeans_cluster': obs_df['kmeans_cluster'],
+            'area_um2': obs_df['area'].astype(float) * pixel_size_um ** 2,
+        })
+        fig, ax = plt.subplots(figsize=(8, 6))
+        # Violin, not swarm: swarmplot places every point individually and
+        # takes many hours at whole-slide scale (100k+ cells per cluster).
+        sns.violinplot(data=morph_df, x='kmeans_cluster', y='area_um2', ax=ax, cut=0, inner='quartile')
+        ax.set_title('Cell area by cluster')
+        ax.set_xlabel('Cluster')
+        ax.set_ylabel('Cell area (µm²)')
         plt.tight_layout()
         plt.savefig(os.path.join(args.plot_dir, 'morphology_by_cluster.png'))
-        plt.close()
+        plt.close(fig)
 
 
 def plot_cell_density(x, y, cluster_labels, community_labels, exp_weights, n_clusters, bins, path,
@@ -595,20 +596,27 @@ def plot_cell_density(x, y, cluster_labels, community_labels, exp_weights, n_clu
 
     def _density_panel(ax, density, xedges, yedges, label, title):
         ax.axis('on')
-        im = ax.imshow(np.log1p(density.T), origin='lower', aspect='auto', cmap='inferno',
-                       extent=[xedges[0], xedges[-1], yedges[0], yedges[-1]])
+        # Image coordinates: y increases downwards (as in QuPath/napari), so
+        # the smallest y goes at the top.
+        im = ax.imshow(np.log1p(density.T), origin='upper', aspect='auto', cmap='inferno',
+                       extent=[xedges[0], xedges[-1], yedges[-1], yedges[0]])
         plt.colorbar(im, ax=ax, label=label)
         ax.set_title(title)
 
+    # Every panel spans the whole tissue, so communities are shown in place
+    # rather than each zoomed to its own extent.
+    finite = np.isfinite(x) & np.isfinite(y)
+    extent = [[x[finite].min(), x[finite].max()], [y[finite].min(), y[finite].max()]] if finite.any() else None
+
     for c in range(n_clusters):
-        density, xedges, yedges = np.histogram2d(x, y, bins=bins, weights=exp_weights[:, c])
+        density, xedges, yedges = np.histogram2d(x, y, bins=bins, range=extent, weights=exp_weights[:, c])
         _density_panel(axes[c // n_cols, c % n_cols], density * 1000, xedges, yedges,
                        'log(weighted density + 1)',
                        f'Cluster {c} density ({np.sum(cluster_labels == c)} cells)')
 
     for i, comm in enumerate(plotted_comms):
         mask = community_labels == comm
-        density, xedges, yedges = np.histogram2d(x[mask], y[mask], bins=bins)
+        density, xedges, yedges = np.histogram2d(x[mask], y[mask], bins=bins, range=extent)
         _density_panel(axes[cluster_rows + i // n_cols, i % n_cols], density, xedges, yedges,
                        'log(cell count + 1)', f'Community {comm} density ({mask.sum()} cells)')
 

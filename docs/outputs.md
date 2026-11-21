@@ -87,9 +87,9 @@ All plots are PNG files written to `--plot_dir`.
 | `cell_type_to_cell_type.png` | Mean hop distance between k-means clusters in the spatial network. |
 | `umap_kmeans_cluster.png` | UMAP embedding of cells coloured by k-means cluster. |
 | `umap_leiden.png` | UMAP embedding coloured by Leiden cluster. |
-| `cell_density.png` | Spatial density maps: one panel per k-means cluster, then one for each of the 20 largest communities. The title says how many smaller communities and unassigned cells are not shown. |
+| `cell_density.png` | Spatial density maps: one panel per k-means cluster, then one for each of the 20 largest communities. The title says how many smaller communities and unassigned cells are not shown. Every panel spans the whole tissue and is oriented like the image (y increasing downwards, as in QuPath). |
 | `cluster_intensity_heatmap.png` | The clustering features (`--cluster-on`) per k-means cluster: channel intensities and/or log spot densities (labelled `(spots)`), each z-scored across all cells (0 = average cell; red = higher, blue = lower). The colour scale is capped at ±3, so more extreme values show as the darkest colour. |
-| `morphology_by_cluster.png` | Cell area by cluster (only present if an `area` column exists). |
+| `morphology_by_cluster.png` | Cell area (µm²) by cluster (only present if an `area` column exists). |
 
 ## QuPath GeoJSON
 
