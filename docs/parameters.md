@@ -178,8 +178,11 @@ segmentation. Combined with the segmented-Zarr reuse (see
 
 You can explore how clustering responds to its parameters without re-running the
 expensive segmentation, using the read-only sweep over an existing segmented
-Zarr. Results are written to CSVs in the same directory as the Zarr; the Zarr
-itself is never modified.
+Zarr. Results are written to CSVs in the same directory as the Zarr, named after
+the run (`<run>` = the Zarr name without `_seg.zarr`, so runs sharing a folder
+don't overwrite each other's sweeps); `--output` / `--summary` choose other
+paths. The Zarr itself is never modified. The [overview report](outputs.md#overview-report)
+picks up a run's sweeps automatically (re-make it after sweeping).
 
 ### Community sweep
 
@@ -196,9 +199,9 @@ Edge distances are in µm (default `50`). The sweep reads the pixel size the
 pipeline stored in the Zarr; for a `_seg.zarr` written before pixel sizes were
 stored, pass `--pixel-size`.
 
-This writes `community_sweep.csv` (one column per combination,
+This writes `<run>_community_sweep.csv` (one column per combination,
 `community_r<res>_d<dist>` with the distance in µm, plus `cell_id`/`x`/`y`) and
-`community_sweep_summary.csv` (per combination: the number of communities of at
+`<run>_community_sweep_summary.csv` (per combination: the number of communities of at
 least the minimum size, Louvain's count before that minimum, and the number of
 unassigned cells).
 
@@ -217,8 +220,18 @@ pixi run python -m cellsurvey.stability \
   --mode clusters
 ```
 
-This writes `cluster_sweep.csv` (a `cluster_k<k>` column per value) and
-`cluster_sweep_summary.csv` (the k-means inertia per `k`, for an elbow plot).
+This writes `<run>_cluster_sweep.csv` (a `cluster_k<k>` column per value) and
+`<run>_cluster_sweep_summary.csv`, with per `k`:
+
+- the k-means **inertia** (for an elbow plot);
+- the mean **silhouette** score (how well separated the clusters are; higher is
+  better), computed on a random sample of 20,000 cells, because the exact score
+  compares every pair of cells;
+- the size of the **smallest cluster** (cells and %), which shows when a higher
+  `k` starts splitting off tiny groups.
+
+The cluster sweep only reads the table, not the cell outlines, so it's quick even
+on whole slides (about 2 minutes for 617k cells and 8 values of `k`).
 
 ### Which shapes are swept
 

@@ -31,6 +31,11 @@ from cellsurvey.utils import (resolve_shape_keys, resolve_pixel_size, resolve_cl
                               build_clustering_features, CLUSTER_ON_CHOICES)
 
 
+# Silhouette scores compare every pair of cells, so they're computed on a random
+# sample (20k cells → 4e8 distances, a few seconds per k).
+SILHOUETTE_SAMPLE = 20_000
+
+
 def _fmt(v):
     """Render a number as a tidy column-name token (drop a trailing ``.0``)."""
     return str(int(v)) if float(v) == int(v) else str(v)
@@ -146,8 +151,21 @@ def sweep_summary(result, output_path):
     pd.DataFrame(rows).to_csv(output_path, index=False)
 
 
-def _coords_for_cell_ids(sdata, cell_ids, cell_boundaries=None):
-    """Return an (n, 2) array of centroids aligned to ``cell_ids``."""
+def _coords_for_cell_ids(sdata, cell_ids, cell_boundaries=None, table_key="table"):
+    """Return an (n, 2) array of centroids aligned to ``cell_ids``.
+
+    Uses the table's ``obsm['spatial']`` (Sopa's centroids, one row per table
+    cell) when no shape layer is requested, so the polygons needn't be loaded.
+    """
+    table = sdata.tables.get(table_key) if hasattr(sdata.tables, 'get') else sdata.tables[table_key]
+    if cell_boundaries is None and table is not None and "spatial" in table.obsm:
+        xy = np.asarray(table.obsm["spatial"], dtype=float)[:, :2]
+        pos = pd.Series(np.arange(table.n_obs), index=table.obs.index.astype(str))
+        idx = pos.reindex([str(c) for c in cell_ids]).to_numpy()
+        out = np.full((len(cell_ids), 2), np.nan)
+        ok = ~np.isnan(idx)
+        out[ok] = xy[idx[ok].astype(int)]
+        return out
     boundaries = sdata.shapes[cell_boundaries or resolve_shape_keys(sdata)[1]]
     lookup = {cid: (g.centroid.x, g.centroid.y)
               for cid, g in zip(boundaries.index.values, boundaries.geometry)}
@@ -162,21 +180,31 @@ def run_cluster_sweep(sdata, n_clusters_list, cell_boundaries=None, seed=42, clu
     (``None``: the mode the run recorded in the Zarr).
     Returns a dict with keys ``cell_ids``, ``coords``, ``labels`` (an
     ``(n_cells, n_sweeps)`` int array, one column per ``k``), ``params`` (the
-    list of ``k`` values), and ``inertias``.
+    list of ``k`` values), ``inertias``, ``silhouettes`` (mean silhouette on a
+    random sample of up to ``SILHOUETTE_SAMPLE`` cells; higher = better
+    separated clusters) and ``min_cluster_sizes`` (cells in the smallest cluster).
     """
+    from sklearn.metrics import silhouette_score
+
     features = extract_features(sdata, cluster_on, pixel_size_um)
     scaled = features.to_numpy()
     cell_ids = features.index.values
     coords = _coords_for_cell_ids(sdata, cell_ids, cell_boundaries)
+    sample = min(SILHOUETTE_SAMPLE, len(scaled))
 
-    labels, inertias, k_values = [], [], []
+    labels, inertias, k_values, silhouettes, min_sizes = [], [], [], [], []
     for k in n_clusters_list:
         km = KMeans(n_clusters=k, random_state=seed)
         lab = km.fit_predict(scaled)
+        sil = (float(silhouette_score(scaled, lab, sample_size=sample, random_state=seed))
+               if 1 < k < len(scaled) else float('nan'))
         labels.append(lab)
         inertias.append(float(km.inertia_))
+        silhouettes.append(sil)
+        min_sizes.append(int(np.bincount(lab, minlength=k).min()))
         k_values.append(k)
-        print(f"n_clusters={k}: inertia={km.inertia_:.1f}")
+        print(f"n_clusters={k}: inertia={km.inertia_:.1f}, silhouette={sil:.3f} (sample of {sample:,}), "
+              f"smallest cluster {min_sizes[-1]:,} cells")
 
     return {
         "cell_ids": cell_ids,
@@ -184,6 +212,8 @@ def run_cluster_sweep(sdata, n_clusters_list, cell_boundaries=None, seed=42, clu
         "labels": np.column_stack(labels) if labels else np.zeros((len(cell_ids), 0), dtype=int),
         "params": k_values,
         "inertias": inertias,
+        "silhouettes": silhouettes,
+        "min_cluster_sizes": min_sizes,
     }
 
 
@@ -201,10 +231,35 @@ def cluster_sweep_to_csv(result, output_path):
 
 
 def cluster_sweep_summary(result, output_path):
-    """Write one row per sweep with ``n_clusters`` and the k-means inertia."""
-    rows = [{"n_clusters": k, "inertia": inertia}
-            for k, inertia in zip(result["params"], result["inertias"])]
+    """Write one row per sweep: ``n_clusters``, k-means inertia, silhouette and the smallest cluster."""
+    n_cells = len(result["cell_ids"])
+    rows = []
+    for i, k in enumerate(result["params"]):
+        row = {"n_clusters": k, "inertia": result["inertias"][i]}
+        if "silhouettes" in result:
+            row["silhouette"] = result["silhouettes"][i]
+        if "min_cluster_sizes" in result:
+            row["min_cluster_size"] = result["min_cluster_sizes"][i]
+            row["min_cluster_pct"] = 100 * result["min_cluster_sizes"][i] / max(n_cells, 1)
+        rows.append(row)
     pd.DataFrame(rows).to_csv(output_path, index=False)
+
+
+def sweep_prefix(zarr_path):
+    """Run name for sweep outputs: ``out/run_seg.zarr`` → ``run`` (so runs sharing a folder don't clash)."""
+    name = os.path.basename(os.path.normpath(zarr_path))
+    for suffix in ("_seg.zarr", ".zarr"):
+        if name.endswith(suffix):
+            return name[:-len(suffix)]
+    return name
+
+
+def sweep_paths(zarr_path, mode, folder=None):
+    """Default ``(per-cell CSV, summary CSV)`` for a sweep of ``zarr_path`` (``mode``: communities|clusters)."""
+    folder = folder or os.path.dirname(os.path.abspath(zarr_path))
+    stem = "community" if mode == "communities" else "cluster"
+    base = os.path.join(folder, f"{sweep_prefix(zarr_path)}_{stem}_sweep")
+    return f"{base}.csv", f"{base}_summary.csv"
 
 
 def main():
@@ -233,13 +288,24 @@ def main():
     parser.add_argument("--cell-boundaries", default=None,
                         help="Shape layer to sweep over (default: cell_boundaries if present, else the nuclei layer).")
     parser.add_argument("--output", default=None,
-                        help="Output CSV for per-cell labels (default: <zarr_dir>/<mode>_sweep.csv).")
+                        help="Output CSV for per-cell labels (default: <zarr_dir>/<run>_<community|cluster>"
+                             "_sweep.csv, where <run> is the Zarr name without _seg.zarr).")
     parser.add_argument("--summary", default=None,
-                        help="Output CSV for per-sweep summary (default: <zarr_dir>/<mode>_sweep_summary.csv).")
+                        help="Output CSV for per-sweep summary (default: <zarr_dir>/<run>_<community|cluster>"
+                             "_sweep_summary.csv).")
     args = parser.parse_args()
 
-    sdata = spatialdata.read_zarr(args.zarr)
-    zarr_dir = os.path.dirname(args.zarr) or "."
+    # The cluster sweep needs only the table (coordinates from obsm['spatial']); skip
+    # loading the cell polygons, which takes minutes on whole slides.
+    sdata = None
+    if args.mode == "clusters" and args.cell_boundaries is None:
+        try:
+            sdata = spatialdata.read_zarr(args.zarr, selection=("tables",))
+        except TypeError:
+            sdata = None
+    if sdata is None:
+        sdata = spatialdata.read_zarr(args.zarr)
+    default_output, default_summary = sweep_paths(args.zarr, args.mode)
     cluster_on, origin = resolve_cluster_on(sdata, args.cluster_on)
     print(f"Features: --cluster-on {cluster_on} ({origin})")
 
@@ -250,8 +316,8 @@ def main():
                                        cluster_on=cluster_on, pixel_size_um=args.pixel_size)
         except ValueError as e:
             parser.error(str(e))
-        output = args.output or os.path.join(zarr_dir, "cluster_sweep.csv")
-        summary = args.summary or os.path.join(zarr_dir, "cluster_sweep_summary.csv")
+        output = args.output or default_output
+        summary = args.summary or default_summary
         cluster_sweep_to_csv(result, output)
         cluster_sweep_summary(result, summary)
     else:
@@ -272,8 +338,8 @@ def main():
                                          min_community_size=min_size)
         except ValueError as e:
             parser.error(str(e))
-        output = args.output or os.path.join(zarr_dir, "community_sweep.csv")
-        summary = args.summary or os.path.join(zarr_dir, "community_sweep_summary.csv")
+        output = args.output or default_output
+        summary = args.summary or default_summary
         sweep_to_csv(result, output)
         sweep_summary(result, summary)
 

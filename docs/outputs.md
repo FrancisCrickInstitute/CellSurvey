@@ -104,14 +104,19 @@ opened in any browser, or printed to PDF. It contains:
   CellSurvey code version.
 - **How to read this**: z-scores, and the difference between *clusters* (what
   cells express) and *communities* (where cells sit).
+- **Markers**: the distribution of every marker, with the illustrative
+  "positive" line (robust z > 2) and how many cells are above it, plus a warning
+  that this line is a choice rather than a property of the data.
 - **Cell populations**: a heatmap of each k-means cluster's average marker
-  levels, and a table of cluster sizes and distinguishing markers. Clusters get
-  automatic names from the markers they have raised (e.g. `GFAP`,
-  `PSYN/PTAU`), `low X`, or `no distinct marker`. These describe marker
-  profiles, not confirmed cell types.
-- **Where the clusters are**: each cluster drawn over the tissue image (the
-  nuclear channel), and one map coloured by the most common cluster in each
-  area.
+  levels, and a table of cluster sizes and their most distinctive markers
+  (furthest from typical, in either direction). Clusters get automatic names
+  from the markers they have raised (e.g. `GFAP`, `PSYN/PTAU`), `low X`, or
+  `no distinct marker`. These describe marker profiles, not confirmed cell
+  types. If a cluster sweep was run, an elbow and silhouette plot helps judge
+  the number of clusters.
+- **Where things are**: each cluster drawn over the tissue image (the nuclear
+  channel), one map coloured by the most common cluster in each area, and the
+  "positive" cells for each marker (non-specific cells in grey).
 - **Communities**: outlines of the largest communities over the tissue,
   their composition by cluster, a short generated summary, and the resolution
   sweep if one was run for this result (see [Parameters](parameters.md)).
@@ -131,6 +136,10 @@ re-make it from an existing result without re-running anything:
 ```bash
 pixi run python -m cellsurvey.report --zarr <output>_seg.zarr -p <plot_dir>
 ```
+
+The report looks for this run's sweep results next to the Zarr; if you wrote
+them elsewhere (`--output`/`--summary`), point to that folder with
+`--sweep-dir <folder>`.
 
 ## QuPath GeoJSON
 

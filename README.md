@@ -143,8 +143,10 @@ pixi run python -m cellsurvey.stability \
   --mode clusters
 ```
 
-Each writes per-cell labels (plus a summary CSV with the community count, or the
-k-means inertia) and leaves the Zarr untouched. Both use the `cell_boundaries`
+Each writes per-cell labels plus a summary CSV (community counts, or the k-means
+inertia, silhouette and smallest cluster per `k`), named after the run
+(`<run>_community_sweep*.csv` / `<run>_cluster_sweep*.csv`), and leaves the Zarr
+untouched. The overview report includes them once re-made. Both use the `cell_boundaries`
 layer if present, else the nuclei layer; override with `--cell-boundaries <layer>`.
 
 # Visualising Results
