@@ -25,6 +25,8 @@
       "PowerShell(git ls-files *)",
       "PowerShell(git rev-parse *)",
       "PowerShell(pixi run --no-install * -m py_compile *)",
+      "Edit(AGENTS.md)",
+      "Edit(CLAUDE.md)",
       "WebFetch(domain:github.com)",
       "WebFetch(domain:raw.githubusercontent.com)",
       "WebFetch(domain:pypi.org)"
