@@ -803,6 +803,23 @@ Success criterion: niches that follow the white-matter tract, cortical ribbon an
 - **Caveats**: one slide and 6 markers; niches inherit the k-means clusters (about half the cells are in the two "no distinct marker" clusters); seed stability and other radii / niche counts not yet checked. Low NMI against both communities and clusters means niches are a distinct grouping.
 - **Next** (step 1 of 2): sweep radius 75/100/150/200 µm × 4–8 niches with silhouette and 3 seeds each, with tile-based maps. Then (step 2) integrate as a niche layer alongside communities (`obs`, GeoJSON, report, sweep), with the defaults decided by Dave.
 
+### Prototype 2: radius × niche-count sweep on `omero_602778` (2026-11-22)
+- **Setup**: as prototype 1, but neighbour counts per cluster via one `cKDTree` per cluster and `query_ball_point(..., return_length=True, workers=-1)`, so memory stays flat at any radius (the pair list would be ~70 M pairs at 200 µm). Radius 75/100/150/200 µm × 4–8 niches; k-means with 3 seeds (42, 1, 2), keeping the lowest-inertia fit; silhouette on a fixed 20k-cell sample; seed stability = mean pairwise ARI between the 3 seeds. Maps are tiles coloured by the most common niche. 5.5 min in total (92 s of it reading the Zarr); neighbour counts 2–3 s per radius.
+- **Results** (silhouette / seed ARI):
+
+  | radius (median neighbours) | 4 | 5 | 6 | 7 | 8 |
+  |---|---|---|---|---|---|
+  | 75 µm (27) | 0.31 / 1.00 | 0.28 / 1.00 | 0.29 / 0.86 | 0.28 / 0.76 | 0.27 / 0.79 |
+  | 100 µm (47) | 0.32 / 0.99 | 0.29 / 0.99 | 0.30 / 0.86 | 0.30 / 0.99 | 0.26 / 0.98 |
+  | 150 µm (100) | 0.34 / 0.99 | 0.31 / 0.99 | 0.33 / 0.85 | 0.32 / 1.00 | 0.28 / 0.98 |
+  | 200 µm (174) | 0.36 / 1.00 | 0.33 / 1.00 | 0.34 / 0.84 | 0.33 / 0.99 | 0.29 / 0.70 |
+
+- **Silhouette can't choose the radius**: it rises with radius at every niche count, because a bigger window averages more cells and makes compositions smoother, hence more separable. The radius is a resolution choice instead: at 200 µm boundaries are blocky and thin structures (the superficial layer, the tract rim) start to merge; at 75 µm maps are speckled and 7–8 niches are unstable (ARI 0.76–0.79). **100–150 µm** looks like the useful range here.
+- **Within a radius**, the niche counts nest cleanly: 4 = tract core, tract rim/lower body, and grey matter in two; 5 splits grey matter into deep vs superficial bands; 7 adds an intermediate cortical band and separates the tract's upper rim. 4, 5 and 7 are stable at ≥ 100 µm (ARI ≥ 0.98).
+- **6 niches is consistently less stable (ARI ~0.85 at every radius)**: its maps look identical to 5's, with the 6th niche being the ~1% vessel/edge niche, which only some seeds find. The same 1% niche appears in every 7- and 8-niche solution. So 6 is a poor default despite its silhouette bump.
+- **Outputs** (scratchpad, not kept): `sweep_r<radius>.png`, `sweep_metrics.png`, `best_r*_k*.png`, `niche_sweep_summary.csv`.
+- **Open for Dave (before step 2)**: the default radius (100 or 150 µm) and number of niches (5 or 7), or choosing the niche count per run from the sweep (highest silhouette among settings with seed ARI ≥ 0.95).
+
 ## Future: per-cell spatial analysis of protein and spot distribution
 
 **Status**: idea only (2026-11-19); nothing planned in detail. The aim is to describe *where* signal sits within each cell, not just how much (today's per-cell mean intensity and spot count).
