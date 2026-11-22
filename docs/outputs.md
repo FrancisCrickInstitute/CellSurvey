@@ -22,17 +22,18 @@ Both are [SpatialData](https://www.nature.com/articles/s41592-024-02212-x) Zarr
 stores. The segmented store contains:
 
 - `cell_boundaries` — whole-cell polygons, with `kmeans_cluster`,
-  `community` and `niche` labels and a `nucleus_id` column linking each cell to its nucleus.
+  `community`, `niche` and `niche_region` labels and a `nucleus_id` column linking each cell to its nucleus.
   Cells in communities smaller than `--min-community-size` have community `-1`
-  (unassigned); `niche` is `-1` for cells not in the table (and absent with
-  `--n-niches 0`).
+  (unassigned); `niche` and `niche_region` are `-1` for cells not in the table
+  (`niche_region` also for small isolated islands), and both are absent with
+  `--n-niches 0`.
   With Stardist these are nuclei expanded by `--cell-expansion`; with InstanSeg
   they are segmented directly.
 - A nuclei layer — `stardist_boundaries` (Stardist) or `nucleus_boundaries`
-  (InstanSeg) — with the same `kmeans_cluster`, `community` and `niche` labels,
-  copied from each nucleus's cell. Nuclei not linked to a cell get `-1`.
+  (InstanSeg) — with the same `kmeans_cluster`, `community`, `niche` and
+  `niche_region` labels, copied from each nucleus's cell. Nuclei not linked to a cell get `-1`.
 - `table` — an AnnData table of cells, measured over `cell_boundaries`, with
-  `kmeans_cluster`, `community` and `niche` in `obs` and the run's parameters in
+  `kmeans_cluster`, `community`, `niche` and `niche_region` in `obs` and the run's parameters in
   `uns['cellsurvey']`.
   Without spots, `.X` holds the per-cell mean intensities (cells × markers).
   With `--detect-blobs`, `.X` holds the **spot counts** per spot channel and the
@@ -71,12 +72,18 @@ Written to `--plot_dir`. A small JSON summary of the network analysis:
   "n_niches": 7,
   "niche_radius_um": 100.0,
   "niche_n_clusters": 10,
-  "niche_sizes": { "0": 3100, "1": 2800, "...": "..." }
+  "niche_sizes": { "0": 3100, "1": 2800, "...": "..." },
+  "n_niche_regions": 12,
+  "min_region_size": 1000,
+  "n_region_unassigned_cells": 40,
+  "niche_region_sizes": { "0": 2900, "1": 2400, "...": "..." }
 }
 ```
 
-The niche fields are missing when `--n-niches 0` is used. `niche_n_clusters` is
-the number of k-means clusters the niches were built on.
+The niche and region fields are missing when `--n-niches 0` is used.
+`niche_n_clusters` is the number of k-means clusters the niches were built on.
+`n_region_unassigned_cells` counts cells with region `-1` (no niche, or a small
+isolated island).
 
 Useful for a quick sanity check of how many cells, clusters, and communities
 were found. `n_communities` counts communities of at least
@@ -133,8 +140,9 @@ opened in any browser, or printed to PDF. It contains:
 - **Niches**: what niches are, a map coloured by niche over the tissue, what
   each niche is made of (share of each cluster, with automatic names such as
   "mostly 3 (PSYN/CNPASE), 62%"), the radius and number of niches used (with a
-  note that suitable values depend on the tissue), and the niche sweep if one
-  was run.
+  note that suitable values depend on the tissue), the **niche regions** (a map
+  coloured by niche with region borders and numbers, and a table of the largest
+  regions), and the niche sweep if one was run.
 - **Data-quality flags**: cells that are bright in many unrelated markers at
   once ("non-specific": likely autofluorescence or debris), clusters made
   mostly of them, markers whose "positive" cells are largely non-specific, and
@@ -167,7 +175,7 @@ The GeoJSON contains:
 - **Cell boundaries** (from `cell_boundaries`, or the nuclei layer in a
   nuclei-only run) as annotations, coloured by community (unassigned cells are
   grey, classified `Unassigned`), with `Community ID`, `Cluster ID`, `Niche ID`
-  (unless `--n-niches 0`) and per-marker mean-intensity measurements
+  and `Region ID` (unless `--n-niches 0`) and per-marker mean-intensity measurements
   (`Cell: <channel> mean`) attached, and,
   with `--detect-blobs`, the raw spot count per spot channel
   (`Cell: <channel> spot count`).

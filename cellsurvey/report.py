@@ -219,6 +219,7 @@ def load_report_data(zarr_path, summary_path=None, sweep_dir=None):
         'meta': meta, 'attrs': attrs, 'summary': summary, 'sweep': sweep, 'cluster_sweep': cluster_sweep,
         'niche_sweep': niche_sweep,
         'niche': obs['niche'].astype(int).to_numpy() if 'niche' in obs else None,
+        'niche_region': obs['niche_region'].astype(int).to_numpy() if 'niche_region' in obs else None,
         'shape_layers': _shape_layers(zarr_path),
         'background': background, 'scale': scale, 'background_channel': background_channel,
     }
@@ -329,11 +330,27 @@ def compute(data):
             niche = {'ids': ids, 'frac': frac, 'sizes': ct.sum(axis=1),
                      'names': {n: niche_name(frac.loc[n], names) for n in ids},
                      'n_unassigned': int((~valid).sum())}
+    region = None
+    if niche is not None and data.get('niche_region') is not None:
+        rl = np.asarray(data['niche_region'])
+        nl = np.asarray(data['niche'])
+        valid = (rl >= 0) & (nl >= 0)
+        if valid.any():
+            ct = pd.crosstab(rl[valid], nl[valid])
+            sizes_r = pd.Series(np.bincount(rl[rl >= 0]), name='cells')
+            sizes_r = sizes_r[sizes_r > 0].sort_values(ascending=False, kind='stable')
+            region = {
+                'sizes': sizes_r,
+                'niche': ct.idxmax(axis=1),                       # majority niche of each region
+                'purity': ct.max(axis=1) / ct.sum(axis=1),        # share of its cells in that niche
+                'n_unassigned': int((rl < 0).sum()),
+                'per_niche': ct.idxmax(axis=1).value_counts().reindex(niche['ids']).fillna(0).astype(int),
+            }
     return {
         'markers': markers, 'classes': classes, 'Z': Z, 'clusters': clusters, 'sizes': sizes,
         'profile': profile, 'top': top, 'names': names, 'flagged': flagged, 'ns_frac': ns_frac,
         'nonspecific': nonspecific, 'n_needed': n_needed, 'marker_table': pd.DataFrame(marker_rows),
-        'comm': comm, 'niche': niche,
+        'comm': comm, 'niche': niche, 'region': region,
     }
 
 
@@ -505,6 +522,71 @@ def fig_niche_composition(res):
     ax.set_yticklabels([f"niche {n} ({int(niche['sizes'][n]):,})" for n in frac.index], fontsize=8)
     ax.set_title('What each niche is made of (% of its cells in each k-means cluster)', fontsize=11)
     fig.colorbar(im, ax=ax, shrink=0.8, label='fraction of the niche\'s cells')
+    return fig
+
+
+MAX_REGION_LABELS = 30
+
+
+def fig_region_map(data, res, bins=260):
+    """Niche regions: tiles coloured by their region's niche, black lines between regions, the largest numbered."""
+    niche, region = res['niche'], res['region']
+    xs, ys = _display_xy(data)
+    rl = np.asarray(data['niche_region'])
+    keep = np.isfinite(xs) & np.isfinite(ys) & (rl >= 0)
+    if data['background'] is not None:
+        h, w = data['background'].shape
+        rng_x, rng_y = (0, w), (0, h)
+    else:
+        f = np.isfinite(xs) & np.isfinite(ys)
+        rng_x, rng_y = (xs[f].min(), xs[f].max()), (ys[f].min(), ys[f].max())
+    long_side = max(rng_x[1] - rng_x[0], rng_y[1] - rng_y[0])
+    nx_ = max(1, int(bins * (rng_x[1] - rng_x[0]) / long_side))
+    ny_ = max(1, int(bins * (rng_y[1] - rng_y[0]) / long_side))
+    tx = np.clip(((xs[keep] - rng_x[0]) / max(rng_x[1] - rng_x[0], 1e-9) * nx_).astype(int), 0, nx_ - 1)
+    ty = np.clip(((ys[keep] - rng_y[0]) / max(rng_y[1] - rng_y[0], 1e-9) * ny_).astype(int), 0, ny_ - 1)
+    # Most common region per tile (sparse tile × region counts).
+    from scipy.sparse import coo_matrix
+    counts = coo_matrix((np.ones(len(tx)), (ty * nx_ + tx, rl[keep])),
+                        shape=(ny_ * nx_, int(rl.max()) + 1)).tocsr()
+    occupied = (np.asarray(counts.sum(axis=1)).ravel() >= MIN_CELLS_PER_TILE).reshape(ny_, nx_)
+    dominant = np.asarray(counts.argmax(axis=1)).ravel().reshape(ny_, nx_)
+    niche_of = region['niche']
+    colours = [NICHE_COLOURS[i % len(NICHE_COLOURS)] for i in range(len(niche['ids']))]
+    lut = np.zeros((int(rl.max()) + 1, 3))
+    for r, n in niche_of.items():
+        lut[r] = colours[niche['ids'].index(n)]
+    rgba = np.zeros((ny_, nx_, 4))
+    rgba[..., :3] = lut[dominant]
+    rgba[..., 3] = np.where(occupied, 0.8, 0.0)
+    # Region borders: occupied tiles whose right or lower neighbour belongs to another region.
+    border = np.zeros((ny_, nx_), dtype=bool)
+    diff_x = (dominant[:, 1:] != dominant[:, :-1]) & occupied[:, 1:] & occupied[:, :-1]
+    diff_y = (dominant[1:, :] != dominant[:-1, :]) & occupied[1:, :] & occupied[:-1, :]
+    border[:, 1:] |= diff_x
+    border[1:, :] |= diff_y
+    rgba[border] = (0, 0, 0, 0.9)
+
+    fig, ax = plt.subplots(figsize=(9, 9 * (rng_y[1] - rng_y[0]) / max(rng_x[1] - rng_x[0], 1)))
+    _tissue_axes(ax, data, xs, ys)
+    ax.imshow(rgba, origin='upper', extent=(rng_x[0], rng_x[1], rng_y[1], rng_y[0]), interpolation='nearest')
+    halo = [patheffects.withStroke(linewidth=2.5, foreground='white')]
+    for r in region['sizes'].index[:MAX_REGION_LABELS]:
+        m = keep & (rl == r)
+        if not m.any():
+            continue
+        # Label on the region's cell nearest its median point (a curved band's median can lie outside it).
+        mx, my = np.median(xs[m]), np.median(ys[m])
+        i = np.argmin((xs[m] - mx) ** 2 + (ys[m] - my) ** 2)
+        ax.text(xs[m][i], ys[m][i], str(r), fontsize=8, ha='center', va='center',
+                weight='bold', color='black', path_effects=halo)
+    handles = [mpatches.Patch(color=colours[i], label=f"niche {n}: {niche['names'][n]}")
+               for i, n in enumerate(niche['ids'])]
+    ax.legend(handles=handles, fontsize=7, loc='upper left', bbox_to_anchor=(1.01, 1), frameon=False)
+    n_reg = len(region['sizes'])
+    ax.set_title(f"{n_reg} niche regions, coloured by niche"
+                 + (f" (the {MAX_REGION_LABELS} largest numbered)" if n_reg > MAX_REGION_LABELS else ''),
+                 fontsize=11)
     return fig
 
 
@@ -811,7 +893,10 @@ def build_html(data, res, figs):
                          f"{comm['n_unassigned']:,} cells unassigned" if comm else 'not available')),
         ('Niches', (f"<b>{len(res['niche']['ids'])} niches</b> from each cell's mix of the "
                     f"{_fmt(get('niche_n_clusters') or len(res['clusters']))} k-means clusters within "
-                    f"{_fmt(get('niche_radius_um'))} µm" if res['niche'] else 'not computed')),
+                    f"{_fmt(get('niche_radius_um'))} µm"
+                    + (f"; <b>{len(res['region']['sizes'])} niche regions</b> of at least "
+                       f"{_fmt(get('min_region_size'))} cells" if res['region'] else '')
+                    if res['niche'] else 'not computed')),
         ('CellSurvey code', _esc(f"run: {meta.get('code_version') or 'not recorded'}; "
                                  f"report: {code_version() or 'unknown'}")),
         ('Report settings', f'"positive" = robust z &gt; {POSITIVE_Z:g}; non-specific = positive in ≥ '
@@ -1018,6 +1103,41 @@ def build_html(data, res, figs):
         rows = [(str(n), _esc(niche['names'][n]), f"{int(niche['sizes'][n]):,}",
                  f"{100 * niche['sizes'][n] / n_cells:.1f}%") for n in niche['ids']]
         parts.append(_table(['Niche', 'Made of (most common clusters)', 'Cells', '%'], rows, num_cols=(2, 3)))
+
+        region = res['region']
+        parts.append('<h3>Niche regions</h3>')
+        if region is None:
+            parts.append('<p class="muted">No niche regions in this result (they were added in a later CellSurvey '
+                         'version; re-run with <code>--resume-from</code> to compute them).</p>')
+        else:
+            min_size = get('min_region_size')
+            n_reg = len(region['sizes'])
+            parts.append(
+                '<p>A niche can occur in several places; <b>niche regions</b> split each niche into its separate, '
+                'connected pieces, so each region is one place in the tissue (e.g. "this stretch of white matter"). '
+                f'Pieces smaller than {_fmt(min_size)} cells are merged into the neighbouring region they border '
+                'most, so a region can contain a few cells of other niches. Unlike communities, region borders '
+                'follow the niche borders. Regions are numbered by size (0 = largest) and coloured by their niche; '
+                'black lines mark the borders between regions.</p>')
+            parts.append(f'<div class="note">This result has <b>{n_reg} regions</b> of at least {_fmt(min_size)} '
+                         f'cells ({region["n_unassigned"]:,} cells unassigned). The minimum size '
+                         '(<code>--min-region-size</code>) is a starting point: lower values give more, smaller '
+                         'regions, higher values merge more. Regions inherit every niche setting above.</div>')
+            parts.append(figs['region_map'])
+            top_r = region['sizes'].index[:MAX_REGION_LABELS]
+            rows = []
+            for r in top_r:
+                n = region['niche'][r]
+                rows.append((str(r), f"{n}: {_esc(niche['names'][n])}", f"{int(region['sizes'][r]):,}",
+                             f"{100 * region['sizes'][r] / n_cells:.1f}%", f"{100 * region['purity'][r]:.0f}%"))
+            parts.append(_table(['Region', 'Niche', 'Cells', '% of cells', 'Cells in that niche'], rows,
+                                num_cols=(2, 3, 4)))
+            if n_reg > len(top_r):
+                parts.append(f'<p class="muted">Showing the {len(top_r)} largest of {n_reg} regions.</p>')
+            per = region['per_niche']
+            parts.append('<p class="muted">Regions per niche: ' + ', '.join(
+                f'niche {n}: {int(per[n])}' for n in per.index) + '.</p>')
+
         nsw = data['niche_sweep']
         parts.append('<h3>Choosing the radius and number of niches</h3>')
         if nsw is not None and 'niche_sweep' in figs:
@@ -1122,6 +1242,8 @@ def write_report(zarr_path, plot_dir, summary_path=None, filename='report.html',
     if res['niche'] is not None:
         figs['niche_map'] = out.tag(fig_niche_map(data, res), 'niche_map', 'Niche map')
         figs['niche_composition'] = out.tag(fig_niche_composition(res), 'niche_composition', 'Niche composition')
+        if res['region'] is not None:
+            figs['region_map'] = out.tag(fig_region_map(data, res), 'niche_region_map', 'Niche regions')
         if data['niche_sweep'] is not None:
             radius = data['meta'].get('niche_radius_um', data['summary'].get('niche_radius_um'))
             figs['niche_sweep'] = out.tag(fig_niche_sweep(data['niche_sweep'], radius, len(res['niche']['ids'])),

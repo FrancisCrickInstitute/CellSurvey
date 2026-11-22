@@ -12,6 +12,10 @@ Suitable radius / niche counts depend heavily on the tissue, panel, cell
 density and structures of interest: the defaults are starting points to check
 with the niche sweep (``python -m cellsurvey.stability --mode niches``).
 
+**Niche regions** split niches into contiguous places: connected pieces of
+same-niche cells on the Delaunay graph, with small pieces merged into a
+neighbour (:func:`niche_regions`).
+
 numpy / scipy / scikit-learn only (no Sopa).
 """
 
@@ -23,6 +27,8 @@ from sklearn.cluster import KMeans
 
 DEFAULT_NICHE_RADIUS_UM = 100.0
 DEFAULT_N_NICHES = 7
+# Niche regions smaller than this (cells) are merged into a neighbouring region.
+DEFAULT_MIN_REGION_SIZE = 1000
 # Silhouette compares every pair of cells, so it's computed on a fixed random sample.
 SILHOUETTE_SAMPLE = 20_000
 
@@ -114,6 +120,139 @@ def assign_niches(composition, n_niches, seed=42, n_init=4):
     """
     labels, _ = _fit(composition, n_niches, seed, n_init)
     return renumber_by_size(labels)
+
+
+def _sym_adjacency(edges, n):
+    """Symmetric CSR adjacency (values 1) from an ``(m, 2)`` edge array."""
+    import scipy.sparse as sp
+    a, b = edges[:, 0], edges[:, 1]
+    A = sp.coo_matrix((np.ones(len(a)), (a, b)), shape=(n, n)).tocsr()
+    return (A + A.T).tocsr()
+
+
+def smooth_labels(labels, edges, n_passes=1):
+    """Majority vote of each cell's label over itself and its graph neighbours, ``n_passes`` times.
+
+    Ties keep the cell's own label. ``labels`` must be non-negative integers.
+    """
+    import scipy.sparse as sp
+    labels = np.asarray(labels, dtype=int).copy()
+    n = len(labels)
+    if n == 0 or n_passes < 1:
+        return labels
+    k = int(labels.max()) + 1
+    M = _sym_adjacency(edges, n) + sp.identity(n, format='csr')
+    rows = np.arange(n)
+    for _ in range(n_passes):
+        onehot = sp.csr_matrix((np.ones(n), (rows, labels)), shape=(n, k))
+        counts = (M @ onehot).toarray()
+        counts[rows, labels] += 0.5          # tie-break in favour of the cell's own label
+        new = counts.argmax(axis=1)
+        if np.array_equal(new, labels):
+            break
+        labels = new
+    return labels
+
+
+def merge_small_regions(regions, edges, min_size, max_rounds=100):
+    """Merge regions under ``min_size`` cells into the neighbouring region they share most edges with.
+
+    Each round, every small region moves into the larger neighbouring region
+    (ties broken by id) it shares most edges with; rounds repeat until no small
+    region can move. Small regions
+    with no neighbour (isolated islands) become -1. Returns labels renumbered by
+    size (0 = largest).
+    """
+    import scipy.sparse as sp
+    regions = np.asarray(regions, dtype=int).copy()
+    a, b = edges[:, 0], edges[:, 1]
+    for _ in range(max_rounds):
+        valid = regions >= 0
+        if not valid.any():
+            break
+        sizes = np.bincount(regions[valid])
+        small = (sizes < min_size) & (sizes > 0)
+        if not small.any():
+            break
+        ra, rb = regions[a], regions[b]
+        cross = (ra != rb) & (ra >= 0) & (rb >= 0)
+        src = np.concatenate([ra[cross], rb[cross]])
+        dst = np.concatenate([rb[cross], ra[cross]])
+        # Only into a larger neighbour (ties by id): no merge cycles, and a small region
+        # never pulls a bigger one into itself.
+        keep = small[src] & ((sizes[dst] > sizes[src]) | ((sizes[dst] == sizes[src]) & (dst > src)))
+        if not keep.any():
+            break
+        shared = sp.coo_matrix((np.ones(int(keep.sum())), (src[keep], dst[keep])),
+                               shape=(len(sizes), len(sizes))).tocsr()
+        target = np.asarray(shared.argmax(axis=1)).ravel()
+        has_neighbour = np.diff(shared.indptr) > 0
+        mapping = np.arange(len(sizes))
+        movers = np.flatnonzero(small & has_neighbour)
+        if not len(movers):
+            break
+        mapping[movers] = target[movers]
+        for _ in range(64):                  # follow chains (a → b → c) to their end
+            nxt = mapping[mapping]
+            if np.array_equal(nxt, mapping):
+                break
+            mapping = nxt
+        regions = np.where(valid, mapping[np.maximum(regions, 0)], -1)
+    valid = regions >= 0
+    if valid.any():
+        sizes = np.bincount(regions[valid])
+        regions[valid & (sizes[np.maximum(regions, 0)] < min_size)] = -1
+    return renumber_by_size(regions)
+
+
+def niche_regions(xy_um, niche_labels, max_edge_distance_um, min_size=DEFAULT_MIN_REGION_SIZE,
+                  smooth_passes=1):
+    """Split niches into contiguous regions ("this stretch of tract", "this patch of deep cortex").
+
+    1. A Delaunay graph of the cells, edges up to ``max_edge_distance_um`` (as the network).
+    2. ``smooth_passes`` majority votes of the niche labels over each cell's
+       neighbours, which removes speckle at niche borders.
+    3. Connected components of same-niche cells.
+    4. Regions under ``min_size`` cells merged into the neighbouring region
+       they share most edges with (see :func:`merge_small_regions`).
+
+    Regions are contiguous by construction and numbered by size (0 = largest).
+    Cells with niche -1 or non-finite coordinates get -1, as do small islands
+    with no neighbour. A merged-in fragment keeps its region's label, so a
+    region can hold a few cells of other niches; its niche is the majority one.
+
+    Returns ``(regions, info)``; ``info`` has ``n_components`` (before merging).
+    """
+    from scipy.sparse.csgraph import connected_components
+    from cellsurvey.network_analysis import delaunay_edges
+
+    xy = np.asarray(xy_um, dtype=float)[:, :2]
+    niche_labels = np.asarray(niche_labels, dtype=int)
+    valid = (niche_labels >= 0) & np.isfinite(xy).all(axis=1)
+    out = np.full(len(niche_labels), -1, dtype=int)
+    idx = np.flatnonzero(valid)
+    if len(idx) == 0:
+        return out, {'n_components': 0}
+    edges = delaunay_edges(xy[idx], max_edge_distance_um).astype(int)
+    lab = smooth_labels(niche_labels[idx], edges, smooth_passes)
+    same = lab[edges[:, 0]] == lab[edges[:, 1]]
+    n_components, comp = connected_components(_sym_adjacency(edges[same], len(idx)), directed=False)
+    out[idx] = merge_small_regions(comp, edges, min_size)
+    return out, {'n_components': int(n_components)}
+
+
+def region_niches(regions, niche_labels):
+    """Majority niche of each region: a dict ``region → niche`` (regions ≥ 0 only)."""
+    regions = np.asarray(regions, dtype=int)
+    niche_labels = np.asarray(niche_labels, dtype=int)
+    keep = (regions >= 0) & (niche_labels >= 0)
+    if not keep.any():
+        return {}
+    import scipy.sparse as sp
+    ct = sp.coo_matrix((np.ones(int(keep.sum())), (regions[keep], niche_labels[keep]))).tocsr()
+    major = np.asarray(ct.argmax(axis=1)).ravel()
+    present = np.diff(ct.indptr) > 0
+    return {int(r): int(major[r]) for r in np.flatnonzero(present)}
 
 
 def niche_profiles(composition, niche_labels):

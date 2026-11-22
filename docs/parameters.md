@@ -136,6 +136,27 @@ communities. Because they're built on the k-means clusters, changing
       the useful setting is usually the one whose niches match structures you
       can recognise.
 
+### Niche regions
+
+| Flag | Default | What it controls |
+|---|---|---|
+| `--min-region-size` | `1000` | Niche regions smaller than this many cells are merged into a neighbouring region. |
+
+A niche can occur in several places. **Niche regions** split each niche into its
+separate, connected pieces, so each region is one place in the tissue (e.g. "this
+stretch of white matter"). Cells are joined by the same Delaunay network as the
+communities, with edges up to `--max-edge-distance`. One smoothing step first
+removes speckle at niche borders. Pieces smaller than `--min-region-size` cells
+are then merged into the larger neighbouring region they border most, so a region
+can contain a few cells of other niches. Small, isolated islands with no
+neighbour are labelled `-1`. Regions are numbered by size (0 = largest).
+
+Unlike communities, whose borders ignore the anatomy, region borders follow the
+niche borders. Regions inherit every niche setting, so check the niches first.
+On one brain section, 1,000 cells gave about 36 regions with clean maps, and 200
+cells gave about 200, many of them small pieces along niche borders. The minimum
+is counted in cells, so on a sparser slide the same value covers a larger area.
+
 ## Spatial analysis
 
 | Flag | Default | What it controls |

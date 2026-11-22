@@ -183,6 +183,18 @@ Groups cells by the mix of cell types around them.
   `Niche ID` in the GeoJSON, and the niche settings in `summary.json`.
 - **Where**: `cellsurvey/niches.py`.
 
+Each niche is then split into **niche regions**, its separate connected pieces
+on the Delaunay network (edges up to `--max-edge-distance`):
+
+1. One majority-vote smoothing step removes speckle at niche borders.
+2. Connected same-niche cells form pieces.
+3. Pieces under `--min-region-size` cells (default 1,000) are merged into the
+   larger neighbouring region they border most.
+
+So each region is one contiguous place, numbered by size. It's stored as
+`niche_region` (table, cells and nuclei) and as `Region ID` in the GeoJSON.
+See [Niche regions](parameters.md#niche-regions).
+
 ## 7. Network analysis
 
 Builds a spatial network of neighbouring cells and detects communities.

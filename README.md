@@ -103,6 +103,7 @@ Key analysis options:
 
 * `--n-clusters`: Number of k-means clusters (default `10`).
 * `--n-niches` / `--niche-radius`: **Neighbourhood niches**, which group cells by the mix of cluster types within a radius (defaults `7` niches at `100` µm; `--n-niches 0` skips them). Niches often follow anatomical regions and layers. The defaults are starting points: suitable values depend heavily on the tissue, so check them with the niche sweep below.
+* `--min-region-size`: Each niche is also split into **niche regions**, its separate connected pieces (one contiguous place each). Pieces smaller than this many cells are merged into a neighbouring region (default `1000`).
 
 ## Full Example
 
@@ -115,8 +116,8 @@ pixi run python run.py -i ~/data/sample.tiff -o ~/results/output -p ~/results/pl
 Every run ends by writing `report.html` to the plot directory: a single,
 self-contained web page (figures embedded) that summarises the result for a
 biologist. It covers marker distributions, cluster profiles with automatic names,
-maps of each cluster over the tissue image, communities, niches, and data-quality
-flags. Open it in a browser,
+maps of each cluster over the tissue image, communities, niches and niche
+regions, and data-quality flags. Open it in a browser,
 email it, or print it to PDF. Skip it with `--no-report`, or re-make it from an
 existing result without re-running anything:
 

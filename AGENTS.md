@@ -98,6 +98,13 @@ The pipeline is split into modules under the `cellsurvey/` package. `run.py` is 
    - **Same features everywhere**: the network edge weights (stage 7), UMAP/Leiden (stage 10, via `obsm['X_cellsurvey']` + `use_rep`) and the stability sweeps use them too. `cluster_on` is recorded in `summary.json` and `table.uns['cellsurvey']`.
 
 6b. **Neighbourhood niches** (`cli.py` → `niches.py`; skipped with `--n-niches 0`): for each cell, the fraction of each k-means cluster among cells within `--niche-radius` µm (default 100; itself included), then k-means (`--n-niches`, default 7, seed 42) on those compositions, renumbered by size. Stored as `obs['niche']`, on the cell shapes and nuclei, in `uns['cellsurvey']` (`n_niches`, `niche_radius_um`, `niche_n_clusters`) and `summary.json`. Niches depend on the k-means labels (they change with `--n-clusters`). Defaults are starting points: check them with `stability --mode niches`.
+   **Niche regions** (`niches.niche_regions`, same step): niches split into contiguous places.
+   - A Delaunay graph of the table's centroids (µm), with edges up to `--max-edge-distance`.
+   - One majority-smoothing pass of the niche labels over neighbours.
+   - Connected components of same-niche cells.
+   - Pieces under `--min-region-size` cells (default 1,000) merged into the larger neighbouring region they share most edges with; isolated small islands → `-1`.
+
+   Numbered by size. Stored as `obs['niche_region']`, on the cell shapes and nuclei, as a GeoJSON `Region ID`, in `uns` (`min_region_size`) and in `summary.json` (`n_niche_regions`, `min_region_size`, `n_region_unassigned_cells`, `niche_region_sizes`).
 
 7. **Network analysis** (`cli.py` → `network_analysis.py`): Extracts centroids from the cell boundaries GeoDataFrame. Builds a `scipy.spatial.Delaunay` triangulation, filters edges by `max_edge_distance`. Constructs a `networkx.Graph` from the filtered edges; edges are weighted by the similarity of the two cells' clustering features (`1 + Pearson corr` across features). Runs `nx.community.louvain_communities()` with the `community_resolution` parameter and fixed seed 42. `filter_small_communities` then relabels communities smaller than `--min-community-size` (default 10) as `-1` ("unassigned") and renumbers the rest by size (0 = largest); the stability sweep does the same, using the value stored in `table.uns['cellsurvey']['min_community_size']` by default (`utils.resolve_min_community_size`). Returns a dict with `cell_ids`, `community_labels`, and `cluster_labels` arrays. Embeds `kmeans_cluster` and `community` labels into the cell-layer GeoDataFrame and the AnnData table obs, and maps them onto the nuclei layer via `nucleus_id` (unlinked nuclei get -1), and writes `summary.json` (cell/cluster/community/edge counts; `n_communities` counts communities at or above the minimum, plus `n_communities_raw`, `min_community_size` and `n_unassigned_cells`) to `--plot_dir`. The segmented Zarr is written at this stage (single write after all labels are computed).
 
@@ -139,6 +146,7 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 | `--min-community-size` | `10` | Communities with fewer cells are labelled `-1` (unassigned); the rest are numbered by size, 0 = largest. `1` keeps all. Also in the stability sweep, where it defaults to the value stored in the Zarr (10 for older Zarrs) |
 | `--n-niches` | `7` | Neighbourhood niches: k-means on each cell's mix of k-means clusters within `--niche-radius`; numbered by size. `0` skips niches. A starting point: check with `stability --mode niches` |
 | `--niche-radius` | `100` | Niche neighbourhood radius (µm). Context-dependent: check with the niche sweep |
+| `--min-region-size` | `1000` | Niche regions (contiguous pieces of each niche on the Delaunay graph, edges ≤ `--max-edge-distance`) smaller than this many cells are merged into a neighbouring region. A starting point |
 | `--max-edge-distance` | `50` | Max edge length (µm) for the Delaunay network |
 | `--radius-min` | `0` | Min radius (µm) for spatial neighbors graph |
 | `--radius-max` | `280` | Max radius (µm) for spatial neighbors graph |
@@ -759,7 +767,7 @@ Tens of whole slides × ~600k cells is ~10⁷ cells. Tables of intensities are f
 
 ## Future: anatomy-aware communities (neighbourhood niches)
 
-**Status**: options recorded (2026-11-21). Option 1 prototyped and swept (2026-11-22). **Step 2 implemented (2026-11-22) on `feature/overview-report`**: niches are part of the pipeline (`cellsurvey/niches.py`, `--n-niches`/`--niche-radius`, report section, `stability --mode niches`; see "Step 2 implementation" below). HPC resume check pending. Related: the Novae trial (cohort section) and the cohort plan's "shared niches" step.
+**Status**: options recorded (2026-11-21). Option 1 prototyped and swept (2026-11-22). **Step 2 implemented (2026-11-22) on `feature/overview-report`**: niches are part of the pipeline (`cellsurvey/niches.py`, `--n-niches`/`--niche-radius`, report section, `stability --mode niches`; see "Step 2 implementation" below). HPC resume check pending. **Step 3 (contiguous regions) prototyped and implemented (2026-11-22)**: "niche regions" (B) follow the anatomy and composition-weighted Louvain (A) doesn't. Regions are now a layer alongside niches and communities (`niche_regions`, `--min-region-size`, `obs['niche_region']`, GeoJSON `Region ID`, report subsection); see "Step 3 prototype" and "Step 3 implementation" below. HPC check pending, together with step 2. Related: the Novae trial (cohort section) and the cohort plan's "shared niches" step.
 
 **Problem**: on `omero_602778`, the Louvain communities are compact, similar-sized patches (~2–3 mm) that ignore the anatomy the k-means clusters show clearly (white-matter tract, cortical ribbon, MAP2 layers; see the steps 1–3 HPC check and the report's community outlines).
 
@@ -875,6 +883,75 @@ Implemented as planned below. Specifics:
 Revisit together with `--exclude-nonspecific`, on a slide with a real debris cluster (e.g. the COMET example).
 
 Implementation notes (from review, 2026-11-22): convert centroids to µm (`obsm['spatial']` × `pixel_size_um`) before the neighbour search. Niches are built on the k-means labels, so they change with `--n-clusters`; record the k they came from (`uns`, `summary.json`) and show it in the report.
+
+### Step 3 prototype: contiguous regions (2026-11-22, scratchpad `proto_regions.py`, nothing in the repo)
+**Aim**: split niches (types that can recur anywhere) into contiguous *places* that follow the anatomy, which the Louvain communities don't do.
+- **Setup**: `omero_602778`, k = 8, niches at 100 µm × 7. Delaunay edges ≤ 50 µm (the run's `max_edge_distance`; 1.65 M edges, 12 s).
+- **A. Composition-weighted Louvain** (option 3):
+  - each edge weighted `exp(−L1(mix_a, mix_b) / τ)`;
+  - networkx Louvain (seed 42), communities < 10 cells set to `-1`;
+  - τ = the median edge L1 (0.097) or a quarter of it, at resolutions 0.1 and 0.01.
+- **B. Niche regions**:
+  - optional majority smoothing of the niche labels over Delaunay neighbours (0, 1 or 3 passes; ties keep the cell's own label);
+  - connected components of same-niche cells (`scipy.sparse.csgraph.connected_components`);
+  - regions below a minimum size (50 / 200 / 1,000 cells) merged into the neighbouring region they share most edges with, repeated until none are left (isolated leftovers → `-1`).
+- **Results** (purity = share of cells whose region's majority niche is their own niche; "top 10" = share of cells in the 10 largest regions):
+
+  | method | regions | top 10 | largest | purity | time |
+  |---|---|---|---|---|---|
+  | current communities (Louvain, res 0.1) | 116 | 34% | 24k | 0.61 | — |
+  | A, τ = median, res 0.1 | 163 | 27% | 25k | 0.66 | 161 s |
+  | A, τ = median, res 0.01 | 91 | 69% | 68k | 0.55 | 162 s |
+  | A, τ = median/4, res 0.1 | 1,006 | 11% | 7k | 0.74 | 126 s |
+  | A, τ = median/4, res 0.01 | 424 | 33% | 38k | 0.69 | 125 s |
+  | B, no smoothing, min 200 | 216 | 64% | 130k | 0.84 | < 1 s |
+  | B, 1 pass, min 200 | 205 | 68% | 130k | 0.84 | < 1 s |
+  | B, 1 pass, min 1,000 | 36 | 76% | 136k | 0.76 | < 1 s |
+  | B, 1 pass, min 50 | 709 | 64% | 125k | 0.90 | < 1 s |
+
+- **A fails**: every setting gives compact blobs much like the current communities. The boundaries follow the anatomy only in places (e.g. part of the tract edge at res 0.01). As predicted, neighbours' 100 µm windows overlap so much that edge L1 is small everywhere (median 0.10, 99th percentile 0.37), and modularity still splits large uniform regions. Sharper weights (τ/4) just give more, smaller blobs. It is also slow (~2.5 min per run with networkx).
+- **B works** (success criterion met):
+  - the tract body is one region (~130k cells);
+  - its arms and rim are separate regions;
+  - the cortical bands come out as strips along the tract and the surface;
+  - the superficial layer is split into stretches along the edge.
+
+  It takes under 1 s after the niches and Delaunay. The minimum size is the only real setting: 200 cells gives ~205 regions (many small ones along niche borders); 1,000 cells gives ~36 regions with clean maps. Smoothing halves the raw fragments (15.8k → 7.8k components) but hardly changes the result after merging. Merging lowers purity (0.90 at min 50 → 0.76 at min 1,000), because absorbed fragments of other niches count against the region.
+- **Caveats**: one slide; regions inherit every niche choice (radius, count, k), so a poor niche setting gives poor regions; a niche that spans the slide becomes one very large region (by design, e.g. the whole tract body).
+- **Outputs** (scratchpad, not kept): `regions/{niches,baseline_communities,A_*,B_*}.png`, `metrics_{A,B}.json`.
+- **Recommendation**: implement B.
+- **Decisions (Dave, 2026-11-22)**, all as recommended:
+  - minimum region size 1,000 cells (`--min-region-size`), a starting point; counted in cells like `--min-community-size`, so it means a different area on a sparser slide;
+  - one fixed smoothing pass, no flag;
+  - regions as a **new layer** (`niche_region`), with Louvain communities unchanged for now; whether regions replace communities is to be decided after the HPC check;
+  - GeoJSON classification stays by community, plus a `Region ID` measurement.
+
+### Step 3 implementation (2026-11-22)
+- **`cellsurvey/niches.py`**: `niche_regions(xy_um, niche_labels, max_edge_distance_um, min_size=1000, smooth_passes=1)` → `(regions, {'n_components'})`. Helpers:
+  - `smooth_labels` (sparse majority vote; ties keep the cell's own label);
+  - `merge_small_regions`: each round, every small region moves into the *larger* neighbouring region (ties by id) it shares most edges with, so there are no merge cycles and a small region never absorbs a bigger one; chains are followed; isolated leftovers → `-1`; renumbered by size;
+  - `region_niches` (majority niche per region).
+
+  Uses `network_analysis.delaunay_edges` on the table's centroids in µm. Cells with niche `-1` are left out.
+- **Pipeline** (`cli.py`), in the niche step:
+  - `--min-region-size` (default 1,000, ≥ 1);
+  - the edge limit is `--max-edge-distance`, as for the network;
+  - `obs['niche_region']`, on the cell shapes and, via `nucleus_id`, on the nuclei (the shape and nuclei mapping is now a loop over `niche` and `niche_region`);
+  - `uns['cellsurvey']['min_region_size']`;
+  - `summary.json` gets `n_niche_regions`, `min_region_size`, `n_region_unassigned_cells` and `niche_region_sizes`;
+  - `--n-niches 0` also removes stale `niche_region` labels.
+- **GeoJSON**: `Region ID` (`export_to_qupath(region_labels=…)`).
+- **Report**: a "Niche regions" subsection in section 5:
+  - an explanation and a note box (count, minimum size, unassigned cells);
+  - `fig_region_map` (tiles coloured by the region's niche, black lines at region borders, the 30 largest numbered on a cell of the region);
+  - a table of the 30 largest (region, niche, cells, %, share of its cells in that niche);
+  - regions per niche.
+
+  The header's Niches row adds the region count. An older result without `niche_region` gets a "re-run with `--resume-from`" note.
+- **Checks**:
+  - **Synthetic** (two separate blocks of one niche, a middle niche and a strip, 3% speckle, an isolated island, cells with no niche): 4 regions (ARI 0.998 against the 4 places); each region contiguous; numbered by size; island and no-niche cells `-1`; merge chains; degenerate inputs; GeoJSON `Region ID`; the report subsection; an older Zarr without regions.
+  - **`omero_602778` in memory**: 36 regions from 7,786 pieces in 12 s (mostly Delaunay); 4,680 cells (0.8%) unassigned. The largest is the tract body (135k cells, 89% in its niche). Regions per niche: 0: 12, 1: 1, 2: 4, 3: 6, 4: 3, 5: 8, 6: 2. The report map matches the prototype.
+- **To check on the HPC**: the same resume run as step 2 (regions come with it), then the report.
 
 ## Future: per-cell spatial analysis of protein and spot distribution
 
@@ -1540,7 +1617,7 @@ Ten tips spanning experimental design → platform selection → data structure 
 │   ├── blob_detection.py             # detect_spots ((c,y,x) DataArray → spots PointsModel) → detect_blobs_tiled → detect_blobs_in_tile
 │   ├── network_analysis.py           # run_network_analysis (µm → px) + compute_louvain_communities + delaunay_edges (scipy Delaunay + networkx Louvain, expr-similarity weights, summary.json)
 │   ├── stability.py                  # run_stability_sweep (community) + run_cluster_sweep (k-means), read-only → CSV
-│   ├── niches.py                     # neighbourhood niches: neighbourhood_composition, assign_niches, sweep_niches, table_centroids_um
+│   ├── niches.py                     # neighbourhood niches: neighbourhood_composition, assign_niches, sweep_niches, table_centroids_um; niche regions: niche_regions
 │   ├── report.py                     # HTML overview report from <prefix>_seg.zarr (write_report; python -m cellsurvey.report)
 │   ├── image_source.py               # ImageSource + open_image_source (stage-1 input: local TIFF or omero://) → to_spatialdata / write / close; stored_pixel_size
 │   ├── omero_source.py               # OMERO reader: parse_omero_url, connect (login order), fileset check, per-thread RawPixelsStore tiles → lazy dask array
