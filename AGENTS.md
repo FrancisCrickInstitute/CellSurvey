@@ -818,7 +818,20 @@ Success criterion: niches that follow the white-matter tract, cortical ribbon an
 - **Within a radius**, the niche counts nest cleanly: 4 = tract core, tract rim/lower body, and grey matter in two; 5 splits grey matter into deep vs superficial bands; 7 adds an intermediate cortical band and separates the tract's upper rim. 4, 5 and 7 are stable at ≥ 100 µm (ARI ≥ 0.98).
 - **6 niches is consistently less stable (ARI ~0.85 at every radius)**: its maps look identical to 5's, with the 6th niche being the ~1% vessel/edge niche, which only some seeds find. The same 1% niche appears in every 7- and 8-niche solution. So 6 is a poor default despite its silhouette bump.
 - **Outputs** (scratchpad, not kept): `sweep_r<radius>.png`, `sweep_metrics.png`, `best_r*_k*.png`, `niche_sweep_summary.csv`.
-- **Open for Dave (before step 2)**: the default radius (100 or 150 µm) and number of niches (5 or 7), or choosing the niche count per run from the sweep (highest silhouette among settings with seed ARI ≥ 0.95).
+- **Decisions (Dave, 2026-11-22)**: defaults **100 µm** and **7 niches** for now, both flags. **Suitable values are heavily context-dependent** (tissue, panel, cell density, the structures of interest, and the k-means clusters they're built on), so the docs must present them as starting points to check with the niche sweep, not as recommended values. No automatic choice per run: on 602778 "highest silhouette among stable settings" would pick 4, since silhouette favours fewer niches and larger radii.
+
+### Step 2 plan: niches in the pipeline (proposed 2026-11-22, awaiting go-ahead)
+1. **New module `cellsurvey/niches.py`** (no Sopa; numpy/scipy/sklearn only):
+   - `neighbourhood_composition(xy_um, cluster_labels, radius_um)`: one `cKDTree` per cluster, `query_ball_point(return_length=True, workers=-1)`, rows normalised (each cell counts itself). Cells with label `-1` are neither counted nor given a composition.
+   - `assign_niches(composition, n_niches, seed=42)`: k-means (`n_init=4`), renumbered by size (0 = largest, as communities).
+2. **`cli.py`**: flags `--niche-radius` (µm, default 100) and `--n-niches` (default 7; `0` skips niches). Run after k-means, independently of the network. Store `obs['niche']` (categorical), the parameters in `uns['cellsurvey']` (`niche_radius_um`, `n_niches`), and the label on the cell shapes and, via `nucleus_id`, on the nuclei (`-1` if unlinked), as for communities. `summary.json`: `n_niches`, `niche_radius_um`, `niche_sizes`.
+3. **GeoJSON**: a `Niche ID` measurement on each cell (classification stays by community, so existing QuPath workflows don't change).
+4. **Report**: a "Niches" section after communities: what niches are (plain language, and how they differ from clusters and communities); the tile map; the composition heatmap with automatic names from each niche's dominant clusters (e.g. "mostly 3: PSYN/CNPASE"); the radius and niche count used, with the context-dependence caveat and a pointer to the sweep; and the run's niche-sweep table and plots if a matching sweep exists.
+5. **Sweep**: `python -m cellsurvey.stability --mode niches --niche-radii 75,100,150 --n-niches 4,5,6,7,8`, writing `<run>_niche_sweep*.csv` (per-cell labels; summary with silhouette, seed ARI and smallest niche per setting). Read-only and table-only (centroids from `obsm['spatial']`), as the cluster sweep.
+6. **Docs**: flags in the table here, `docs/parameters.md` (a "Niches" section with a "values are context-dependent; use the sweep" admonition, plus guidance on reading the sweep: silhouette rises with radius so it can't pick the radius; prefer stable settings), `docs/outputs.md`, `docs/pipeline.md`, `README.md`.
+7. **Checks**: synthetic tests (known layout → expected niches, `-1` handling, renumbering, nuclei mapping, a Zarr round trip); then on the HPC a resume of `omero_602778` (the niche map should match prototype 2's 100 µm × 7) plus a niche sweep.
+
+Open: should niches be computed before or after the flagged non-specific clusters are known? (The report flags them; the pipeline doesn't yet.) Proposal for v1: use all clusters, and revisit with `--exclude-nonspecific`.
 
 ## Future: per-cell spatial analysis of protein and spot distribution
 
