@@ -755,7 +755,7 @@ Tens of whole slides × ~600k cells is ~10⁷ cells. Tables of intensities are f
 
 ## Future: anatomy-aware communities (neighbourhood niches)
 
-**Status**: options recorded (2026-11-21), nothing decided or built; Dave to revisit. Related: the Novae trial (cohort section) and the cohort plan's "shared niches" step.
+**Status**: options recorded (2026-11-21). **Option 1 prototyped (2026-11-22)**: on `omero_602778` it follows the anatomy at 100 µm × 6 niches (see "Prototype 1" below); parameter sweep next, nothing in the pipeline yet. Related: the Novae trial (cohort section) and the cohort plan's "shared niches" step.
 
 **Problem**: on `omero_602778`, the Louvain communities are compact, similar-sized patches (~2–3 mm) that ignore the anatomy the k-means clusters show clearly (white-matter tract, cortical ribbon, MAP2 layers; see the steps 1–3 HPC check and the report's community outlines).
 
@@ -779,6 +779,29 @@ Tens of whole slides × ~600k cells is ~10⁷ cells. Tables of intensities are f
 - a few minutes locally, reading the table from Z:.
 
 Success criterion: niches that follow the white-matter tract, cortical ribbon and layers.
+
+### Prototype 1: option 1 on `omero_602778` (2026-11-22, scratchpad script, nothing in the repo)
+- **Setup**: the k = 8 run (`n_clusters = 8` stored in the Zarr). For each cell, the fraction of each k-means cluster among cells within R µm (itself included; `cKDTree.query_pairs` → sparse adjacency × one-hot clusters), then k-means (seed 42, `n_init=4`) on those composition vectors, niches numbered by size. Reused `report.load_report_data` / `report.compute` for the table, centroids, background and cluster names.
+- **Cost**: ~2 min total for 617,527 cells, almost all of it reading the Zarr from Z: (~95 s). Neighbourhoods: 1–2 s (4.5 M pairs at 50 µm, 17 M at 100 µm); each k-means ~6 s.
+- **Neighbours per cell** (median, 5–95%): 13 (5–26) at 50 µm; 47 (26–92) at 100 µm.
+- **Results**:
+
+  | radius | niches | silhouette (20k sample) | NMI vs communities | NMI vs clusters |
+  |---|---|---|---|---|
+  | 50 µm | 6 | 0.22 | 0.18 | 0.16 |
+  | 50 µm | 10 | 0.23 | 0.19 | 0.17 |
+  | **100 µm** | **6** | **0.30** | 0.27 | 0.15 |
+  | 100 µm | 10 | 0.25 | 0.29 | 0.14 |
+
+- **100 µm × 6 niches follows the anatomy (success criterion met)**:
+  - the white-matter tract splits into a **core** (60% PSYN/CNPASE) and a **rim / lower body** (PSYN/CNPASE + cluster 4), a boundary not visible in the cluster map;
+  - grey matter splits into bands parallel to the tract and the surface: **deep cortex** next to the tract (70% cluster 1), an **intermediate** band, and a **superficial mixed** layer along the top surface and folds (MAP2, GFAP, IBA1/PTAU);
+  - a 1% niche of **vessels and tissue edges** (low CNPASE/PSYN cells), a possible artefact mask.
+
+  The 20 largest Louvain communities, by contrast, are even blobs that cut across the tract.
+- **50 µm is too small** here: ~13 neighbours give noisy compositions and speckled maps; 10 niches subdivide the same regions without clearer structure.
+- **Caveats**: one slide and 6 markers; niches inherit the k-means clusters (about half the cells are in the two "no distinct marker" clusters); seed stability and other radii / niche counts not yet checked. Low NMI against both communities and clusters means niches are a distinct grouping.
+- **Next** (step 1 of 2): sweep radius 75/100/150/200 µm × 4–8 niches with silhouette and 3 seeds each, with tile-based maps. Then (step 2) integrate as a niche layer alongside communities (`obs`, GeoJSON, report, sweep), with the defaults decided by Dave.
 
 ## Future: per-cell spatial analysis of protein and spot distribution
 
