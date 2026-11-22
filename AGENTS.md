@@ -831,7 +831,15 @@ Success criterion: niches that follow the white-matter tract, cortical ribbon an
 6. **Docs**: flags in the table here, `docs/parameters.md` (a "Niches" section with a "values are context-dependent; use the sweep" admonition, plus guidance on reading the sweep: silhouette rises with radius so it can't pick the radius; prefer stable settings), `docs/outputs.md`, `docs/pipeline.md`, `README.md`.
 7. **Checks**: synthetic tests (known layout → expected niches, `-1` handling, renumbering, nuclei mapping, a Zarr round trip); then on the HPC a resume of `omero_602778` (the niche map should match prototype 2's 100 µm × 7) plus a niche sweep.
 
-Open: should niches be computed before or after the flagged non-specific clusters are known? (The report flags them; the pipeline doesn't yet.) Proposal for v1: use all clusters, and revisit with `--exclude-nonspecific`.
+**Decided (Dave, 2026-11-22): niches use all clusters in v1**, including any non-specific ones. Reasons:
+- the pipeline doesn't know which clusters are non-specific (only the report flags them, after the run);
+- non-specific cells still occupy space, and excluding them would leave holes in neighbourhoods and shift the compositions around them;
+- artefacts tend to form their own small niche (prototype 2's ~1% vessel/edge niche), which is informative;
+- `omero_602778` has no flagged clusters, so there's nothing to compare yet.
+
+Revisit together with `--exclude-nonspecific`, on a slide with a real debris cluster (e.g. the COMET example).
+
+Implementation notes (from review, 2026-11-22): convert centroids to µm (`obsm['spatial']` × `pixel_size_um`) before the neighbour search. Niches are built on the k-means labels, so they change with `--n-clusters`; record the k they came from (`uns`, `summary.json`) and show it in the report.
 
 ## Future: per-cell spatial analysis of protein and spot distribution
 
