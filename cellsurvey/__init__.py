@@ -10,4 +10,5 @@ from cellsurvey.segmentation import (get_pixel_size, expand_nuclei, run_stardist
 from cellsurvey.image_source import ImageSource, open_image_source
 from cellsurvey.export import export_to_qupath
 from cellsurvey.report import write_report
+from cellsurvey.niches import neighbourhood_composition, assign_niches, sweep_niches
 from cellsurvey.cli import main

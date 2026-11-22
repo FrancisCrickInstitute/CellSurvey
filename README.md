@@ -99,6 +99,11 @@ Key segmentation options:
 * `--seg-channels`: Comma-separated channel indices to segment on (default `0` for Stardist, all channels for InstanSeg).
 * `--keep-unnucleated`: InstanSeg only. Keep cells that contain no nucleus (dropped by default).
 
+Key analysis options:
+
+* `--n-clusters`: Number of k-means clusters (default `10`).
+* `--n-niches` / `--niche-radius`: **Neighbourhood niches**, which group cells by the mix of cluster types within a radius (defaults `7` niches at `100` µm; `--n-niches 0` skips them). Niches often follow anatomical regions and layers. The defaults are starting points: suitable values depend heavily on the tissue, so check them with the niche sweep below.
+
 ## Full Example
 
 ```bash
@@ -109,8 +114,9 @@ pixi run python run.py -i ~/data/sample.tiff -o ~/results/output -p ~/results/pl
 
 Every run ends by writing `report.html` to the plot directory: a single,
 self-contained web page (figures embedded) that summarises the result for a
-biologist. It covers cluster profiles with automatic names, maps of each cluster
-over the tissue image, communities, and data-quality flags. Open it in a browser,
+biologist. It covers marker distributions, cluster profiles with automatic names,
+maps of each cluster over the tissue image, communities, niches, and data-quality
+flags. Open it in a browser,
 email it, or print it to PDF. Skip it with `--no-report`, or re-make it from an
 existing result without re-running anything:
 
@@ -143,10 +149,19 @@ pixi run python -m cellsurvey.stability \
   --mode clusters
 ```
 
-Each writes per-cell labels plus a summary CSV (community counts, or the k-means
-inertia, silhouette and smallest cluster per `k`), named after the run
-(`<run>_community_sweep*.csv` / `<run>_cluster_sweep*.csv`), and leaves the Zarr
-untouched. The overview report includes them once re-made. Both use the `cell_boundaries`
+Or sweep the niche radius and number of niches (defaults: `75,100,150` µm × `4,5,6,7,8`):
+
+```bash
+pixi run python -m cellsurvey.stability \
+  --zarr <output>_seg.zarr \
+  --mode niches
+```
+
+Each writes per-cell labels plus a summary CSV (community counts; the k-means
+inertia, silhouette and smallest cluster per `k`; or silhouette and seed stability
+per niche setting), named after the run (`<run>_community_sweep*.csv` /
+`<run>_cluster_sweep*.csv` / `<run>_niche_sweep*.csv`), and leaves the Zarr
+untouched. The overview report includes them once re-made. The sweeps use the `cell_boundaries`
 layer if present, else the nuclei layer; override with `--cell-boundaries <layer>`.
 
 # Visualising Results

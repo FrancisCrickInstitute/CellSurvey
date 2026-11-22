@@ -97,6 +97,8 @@ The pipeline is split into modules under the `cellsurvey/` package. `run.py` is 
    - **Clustering features**: `utils.build_clustering_features(intensity_df, counts_df, --cluster-on, cell_area_um2)` builds the scaled per-cell features (`intensities`: z-scored; `spots`: spots per 100 µm² of cell area → `log1p` → z-scored, columns suffixed `' (spots)'`; `both`: the two groups, each divided by √(number of its columns)). k-means runs on these with `cluster_data(..., scale=False)`, and cluster labels are attached to `obs`.
    - **Same features everywhere**: the network edge weights (stage 7), UMAP/Leiden (stage 10, via `obsm['X_cellsurvey']` + `use_rep`) and the stability sweeps use them too. `cluster_on` is recorded in `summary.json` and `table.uns['cellsurvey']`.
 
+6b. **Neighbourhood niches** (`cli.py` → `niches.py`; skipped with `--n-niches 0`): for each cell, the fraction of each k-means cluster among cells within `--niche-radius` µm (default 100; itself included), then k-means (`--n-niches`, default 7, seed 42) on those compositions, renumbered by size. Stored as `obs['niche']`, on the cell shapes and nuclei, in `uns['cellsurvey']` (`n_niches`, `niche_radius_um`, `niche_n_clusters`) and `summary.json`. Niches depend on the k-means labels (they change with `--n-clusters`). Defaults are starting points: check them with `stability --mode niches`.
+
 7. **Network analysis** (`cli.py` → `network_analysis.py`): Extracts centroids from the cell boundaries GeoDataFrame. Builds a `scipy.spatial.Delaunay` triangulation, filters edges by `max_edge_distance`. Constructs a `networkx.Graph` from the filtered edges; edges are weighted by the similarity of the two cells' clustering features (`1 + Pearson corr` across features). Runs `nx.community.louvain_communities()` with the `community_resolution` parameter and fixed seed 42. `filter_small_communities` then relabels communities smaller than `--min-community-size` (default 10) as `-1` ("unassigned") and renumbers the rest by size (0 = largest); the stability sweep does the same, using the value stored in `table.uns['cellsurvey']['min_community_size']` by default (`utils.resolve_min_community_size`). Returns a dict with `cell_ids`, `community_labels`, and `cluster_labels` arrays. Embeds `kmeans_cluster` and `community` labels into the cell-layer GeoDataFrame and the AnnData table obs, and maps them onto the nuclei layer via `nucleus_id` (unlinked nuclei get -1), and writes `summary.json` (cell/cluster/community/edge counts; `n_communities` counts communities at or above the minimum, plus `n_communities_raw`, `min_community_size` and `n_unassigned_cells`) to `--plot_dir`. The segmented Zarr is written at this stage (single write after all labels are computed).
 
 8. **Spot-to-cell assignment** (`cli.py` → `utils.py`): Spatial join of spots to cell boundaries using GeoPandas (`gpd.sjoin` with `predicate='within'`). Returns `None` if no spots are present in the dataset (no guard needed in `cli.py` — `export_to_qupath` handles `None`).
@@ -135,6 +137,8 @@ All analysis parameters are exposed as command-line flags with sensible defaults
 | `--cluster-on` | `intensities` | Features for k-means, network edge weights and UMAP/Leiden: `intensities`, `spots` (spot density; needs spots) or `both` (groups weighted equally). Also in the stability sweep, where it defaults to the mode recorded in the Zarr (`utils.resolve_cluster_on`; `intensities` for older Zarrs) |
 | `--community-resolution` | `0.1` | Louvain community detection resolution |
 | `--min-community-size` | `10` | Communities with fewer cells are labelled `-1` (unassigned); the rest are numbered by size, 0 = largest. `1` keeps all. Also in the stability sweep, where it defaults to the value stored in the Zarr (10 for older Zarrs) |
+| `--n-niches` | `7` | Neighbourhood niches: k-means on each cell's mix of k-means clusters within `--niche-radius`; numbered by size. `0` skips niches. A starting point: check with `stability --mode niches` |
+| `--niche-radius` | `100` | Niche neighbourhood radius (µm). Context-dependent: check with the niche sweep |
 | `--max-edge-distance` | `50` | Max edge length (µm) for the Delaunay network |
 | `--radius-min` | `0` | Min radius (µm) for spatial neighbors graph |
 | `--radius-max` | `280` | Max radius (µm) for spatial neighbors graph |
@@ -755,7 +759,7 @@ Tens of whole slides × ~600k cells is ~10⁷ cells. Tables of intensities are f
 
 ## Future: anatomy-aware communities (neighbourhood niches)
 
-**Status**: options recorded (2026-11-21). **Option 1 prototyped (2026-11-22)**: on `omero_602778` it follows the anatomy at 100 µm × 6 niches (see "Prototype 1" below); parameter sweep next, nothing in the pipeline yet. Related: the Novae trial (cohort section) and the cohort plan's "shared niches" step.
+**Status**: options recorded (2026-11-21). Option 1 prototyped and swept (2026-11-22). **Step 2 implemented (2026-11-22) on `feature/overview-report`**: niches are part of the pipeline (`cellsurvey/niches.py`, `--n-niches`/`--niche-radius`, report section, `stability --mode niches`; see "Step 2 implementation" below). HPC resume check pending. Related: the Novae trial (cohort section) and the cohort plan's "shared niches" step.
 
 **Problem**: on `omero_602778`, the Louvain communities are compact, similar-sized patches (~2–3 mm) that ignore the anatomy the k-means clusters show clearly (white-matter tract, cortical ribbon, MAP2 layers; see the steps 1–3 HPC check and the report's community outlines).
 
@@ -820,7 +824,38 @@ Success criterion: niches that follow the white-matter tract, cortical ribbon an
 - **Outputs** (scratchpad, not kept): `sweep_r<radius>.png`, `sweep_metrics.png`, `best_r*_k*.png`, `niche_sweep_summary.csv`.
 - **Decisions (Dave, 2026-11-22)**: defaults **100 µm** and **7 niches** for now, both flags. **Suitable values are heavily context-dependent** (tissue, panel, cell density, the structures of interest, and the k-means clusters they're built on), so the docs must present them as starting points to check with the niche sweep, not as recommended values. No automatic choice per run: on 602778 "highest silhouette among stable settings" would pick 4, since silhouette favours fewer niches and larger radii.
 
-### Step 2 plan: niches in the pipeline (proposed 2026-11-22, awaiting go-ahead)
+### Step 2 implementation (2026-11-22)
+Implemented as planned below. Specifics:
+- **`cellsurvey/niches.py`**:
+  - `table_centroids_um` (centroids in µm in `obs` order: `obsm['spatial']` × pixel size, else shape centroids by id);
+  - `neighbourhood_composition` (one `cKDTree` per cluster, `query_ball_point(return_length=True, workers=-1)`; each cell counts itself; label `-1` / non-finite cells get `NaN` rows);
+  - `assign_niches` (k-means `n_init=4`, seed 42; `-1` for `NaN` rows) and `renumber_by_size`;
+  - `sweep_niches` (one composition per radius; 3 seeds per count, keeping the lowest-inertia fit; silhouette on a fixed 20k sample; seed ARI = mean pairwise ARI; smallest niche; median neighbours).
+- **Pipeline** (`cli.py`), after k-means and before the network:
+  - `obs['niche']`, on the cell shapes (by cell id; `-1` for shapes not in the table) and on the nuclei via `nucleus_id`;
+  - `uns['cellsurvey']` gets `n_niches`, `niche_radius_um` and `niche_n_clusters`;
+  - `summary.json` gets `n_niches`, `niche_radius_um`, `niche_n_clusters` and `niche_sizes`;
+  - `--n-niches 0` skips niches and removes any stale `niche` labels from a resumed table and shapes.
+- **GeoJSON**: a `Niche ID` measurement per cell; classification still by community.
+- **Report**: a "5. Niches" section (data quality is now 6):
+  - a plain-language explanation (also added to "How to read this" as the third kind of grouping);
+  - the radius / count / k used, with the context-dependence note;
+  - a tile map coloured by niche and a composition heatmap (% of each niche's cells per cluster);
+  - a table with automatic names from the cluster mix (`mostly 3 (PSYN/CNPASE), 62%` or `1 (…) 47% + 4 (…) 17%`);
+  - the niche sweep's plots (silhouette and seed ARI vs count, one line per radius; this run's radius drawn bold) and table, if a matching `<run>_niche_sweep*.csv` exists.
+
+  The cluster map and niche map share a `_dominant_tile_map` helper.
+- **Sweep**: `python -m cellsurvey.stability --mode niches --niche-radii 75,100,150 --n-niches 4,5,6,7,8` (table-only read) → `<run>_niche_sweep.csv` (per cell, `niche_r<R>_n<k>` columns, coordinates in µm) and `<run>_niche_sweep_summary.csv`.
+- **Checks**:
+  - **Synthetic** (two regions + a thin band): niches recover the layout (ARI 0.98), are numbered by size, handle `-1`, and an isolated cell counts itself. The sweep is stable (ARI 1.00). Every GeoJSON cell has `Niche ID`. A synthetic `_seg.zarr` gives `stability --mode niches` → run-named CSVs → a report with the niche section, the sweep table and "(this run)".
+  - **`omero_602778` in memory**: defaults (100 µm, 7, on the stored k = 8) computed in **5 s**. The map matches prototype 2:
+    - tract core = mostly 3 PSYN/CNPASE (62%); tract rim / lower body = 4 + 3;
+    - deep cortex = mostly 1 (72%); bands of 1 + 4 and an intermediate 3 + 1 rim along the tract;
+    - a superficial mixed layer (MAP2/GFAP/IBA1);
+    - a 1% vessel/edge niche = mostly 7 (low CNPASE/PSYN).
+- **To check on the HPC**: a `--resume-from` run of `omero_602778` (`--n-clusters 8`; niches at the defaults) plus `stability --mode niches`, then the report.
+
+### Step 2 plan: niches in the pipeline (proposed 2026-11-22; implemented, see above)
 1. **New module `cellsurvey/niches.py`** (no Sopa; numpy/scipy/sklearn only):
    - `neighbourhood_composition(xy_um, cluster_labels, radius_um)`: one `cKDTree` per cluster, `query_ball_point(return_length=True, workers=-1)`, rows normalised (each cell counts itself). Cells with label `-1` are neither counted nor given a composition.
    - `assign_niches(composition, n_niches, seed=42)`: k-means (`n_init=4`), renumbered by size (0 = largest, as communities).
@@ -1505,6 +1540,7 @@ Ten tips spanning experimental design → platform selection → data structure 
 │   ├── blob_detection.py             # detect_spots ((c,y,x) DataArray → spots PointsModel) → detect_blobs_tiled → detect_blobs_in_tile
 │   ├── network_analysis.py           # run_network_analysis (µm → px) + compute_louvain_communities + delaunay_edges (scipy Delaunay + networkx Louvain, expr-similarity weights, summary.json)
 │   ├── stability.py                  # run_stability_sweep (community) + run_cluster_sweep (k-means), read-only → CSV
+│   ├── niches.py                     # neighbourhood niches: neighbourhood_composition, assign_niches, sweep_niches, table_centroids_um
 │   ├── report.py                     # HTML overview report from <prefix>_seg.zarr (write_report; python -m cellsurvey.report)
 │   ├── image_source.py               # ImageSource + open_image_source (stage-1 input: local TIFF or omero://) → to_spatialdata / write / close; stored_pixel_size
 │   ├── omero_source.py               # OMERO reader: parse_omero_url, connect (login order), fileset check, per-thread RawPixelsStore tiles → lazy dask array

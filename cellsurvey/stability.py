@@ -254,10 +254,36 @@ def sweep_prefix(zarr_path):
     return name
 
 
+def niche_sweep_to_csv(result, cell_ids, xy_um, output_path):
+    """Write one row per cell, with a ``niche_r<radius>_n<k>`` column per setting (-1 = no niche)."""
+    df = pd.DataFrame({"cell_id": cell_ids, "x_um": xy_um[:, 0], "y_um": xy_um[:, 1]})
+    for (radius, k), col in zip(result["params"], result["labels"].T):
+        df[f"niche_r{_fmt(radius)}_n{k}"] = col
+    df.to_csv(output_path, index=False)
+    return df
+
+
+def niche_sweep_summary(result, n_cells, output_path):
+    """One row per (radius, niche count): silhouette, seed stability (ARI), smallest niche, neighbours."""
+    rows = []
+    for i, (radius, k) in enumerate(result["params"]):
+        rows.append({
+            "niche_radius_um": radius,
+            "n_niches": k,
+            "silhouette": result["silhouette"][i],
+            "seed_ari": result["seed_ari"][i],
+            "min_niche_size": result["min_niche_size"][i],
+            "min_niche_pct": 100 * result["min_niche_size"][i] / max(n_cells, 1),
+            "median_neighbours": result["median_neighbours"][i],
+            "inertia": result["inertia"][i],
+        })
+    pd.DataFrame(rows).to_csv(output_path, index=False)
+
+
 def sweep_paths(zarr_path, mode, folder=None):
-    """Default ``(per-cell CSV, summary CSV)`` for a sweep of ``zarr_path`` (``mode``: communities|clusters)."""
+    """Default ``(per-cell CSV, summary CSV)`` for a sweep of ``zarr_path`` (``mode``: communities|clusters|niches)."""
     folder = folder or os.path.dirname(os.path.abspath(zarr_path))
-    stem = "community" if mode == "communities" else "cluster"
+    stem = {"communities": "community", "clusters": "cluster", "niches": "niche"}[mode]
     base = os.path.join(folder, f"{sweep_prefix(zarr_path)}_{stem}_sweep")
     return f"{base}.csv", f"{base}_summary.csv"
 
@@ -266,8 +292,12 @@ def main():
     parser = argparse.ArgumentParser(
         description="Parameter sweeps over an existing segmented Zarr (read-only).")
     parser.add_argument("--zarr", required=True, help="Path to the segmented Zarr (*_seg.zarr).")
-    parser.add_argument("--mode", choices=["communities", "clusters"], default="communities",
+    parser.add_argument("--mode", choices=["communities", "clusters", "niches"], default="communities",
                         help="Which sweep to run (default: communities).")
+    parser.add_argument("--niche-radii", default="75,100,150",
+                        help="Neighbourhood radii in µm to sweep (niche mode).")
+    parser.add_argument("--n-niches", default="4,5,6,7,8",
+                        help="Niche counts to sweep (niche mode).")
     parser.add_argument("--resolutions", default="0.1,0.05,0.02,0.01",
                         help="Louvain resolutions to sweep (community mode).")
     parser.add_argument("--max-edge-distances", default="50",
@@ -298,7 +328,7 @@ def main():
     # The cluster sweep needs only the table (coordinates from obsm['spatial']); skip
     # loading the cell polygons, which takes minutes on whole slides.
     sdata = None
-    if args.mode == "clusters" and args.cell_boundaries is None:
+    if args.mode in ("clusters", "niches") and args.cell_boundaries is None:
         try:
             sdata = spatialdata.read_zarr(args.zarr, selection=("tables",))
         except TypeError:
@@ -320,6 +350,31 @@ def main():
         summary = args.summary or default_summary
         cluster_sweep_to_csv(result, output)
         cluster_sweep_summary(result, summary)
+    elif args.mode == "niches":
+        from cellsurvey.niches import sweep_niches, table_centroids_um
+        try:
+            radii = [float(x) for x in args.niche_radii.split(",")]
+            counts = [int(x) for x in args.n_niches.split(",")]
+        except ValueError:
+            parser.error("--niche-radii must be comma-separated numbers and --n-niches comma-separated integers")
+        if not all(r > 0 for r in radii) or not all(k >= 2 for k in counts):
+            parser.error("--niche-radii must be positive and --n-niches at least 2")
+        table = sdata.tables["table"]
+        if "kmeans_cluster" not in table.obs:
+            parser.error(f"{args.zarr} has no k-means clusters (obs['kmeans_cluster'])")
+        try:
+            pixel_size_um = resolve_pixel_size(sdata, args.pixel_size)
+        except ValueError as e:
+            parser.error(str(e))
+        xy_um = table_centroids_um(sdata, pixel_size_um, cell_boundaries=args.cell_boundaries)
+        cluster_labels = table.obs["kmeans_cluster"].astype(int).to_numpy()
+        print(f"Niches from each cell's mix of {len(np.unique(cluster_labels))} k-means clusters; "
+              f"radii {radii} µm × niche counts {counts}, 3 seeds each")
+        result = sweep_niches(xy_um, cluster_labels, radii, counts)
+        output = args.output or default_output
+        summary = args.summary or default_summary
+        niche_sweep_to_csv(result, table.obs.index.astype(str).to_numpy(), xy_um, output)
+        niche_sweep_summary(result, table.n_obs, summary)
     else:
         resolutions = [float(x) for x in args.resolutions.split(",")]
         max_edge_distances = [float(x) for x in args.max_edge_distances.split(",")]

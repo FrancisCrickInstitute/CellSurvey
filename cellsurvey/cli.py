@@ -32,6 +32,8 @@ from cellsurvey.network_analysis import run_network_analysis
 from cellsurvey.segmentation import expand_nuclei, run_stardist, run_instanseg
 from cellsurvey.export import export_to_qupath
 from cellsurvey.report import write_report, code_version
+from cellsurvey.niches import (neighbourhood_composition, assign_niches, table_centroids_um,
+                               DEFAULT_N_NICHES, DEFAULT_NICHE_RADIUS_UM)
 
 # cell_density.png shows only this many of the largest communities.
 MAX_DENSITY_COMMUNITIES = 20
@@ -94,6 +96,15 @@ def main():
                         help='Communities with fewer cells than this are labelled -1 (unassigned); the rest '
                              f'are numbered by size, 0 = largest (default: {DEFAULT_MIN_COMMUNITY_SIZE}; '
                              '1 keeps every community)')
+    parser.add_argument('--n-niches', type=int, default=DEFAULT_N_NICHES,
+                        help='Number of neighbourhood niches: groups of cells whose surroundings (within '
+                             '--niche-radius) have a similar mix of k-means clusters. 0 skips niches '
+                             f'(default: {DEFAULT_N_NICHES}; a starting point - check with '
+                             'python -m cellsurvey.stability --mode niches)')
+    parser.add_argument('--niche-radius', type=float, default=DEFAULT_NICHE_RADIUS_UM,
+                        help='Neighbourhood radius in µm for the niches (default: '
+                             f'{DEFAULT_NICHE_RADIUS_UM:g}; suitable values depend on the tissue - check with the '
+                             'niche sweep)')
     parser.add_argument('--max-edge-distance', type=float, default=50,
                         help='Max edge length in µm for the Delaunay network (default: 50)')
     parser.add_argument('--radius-min', type=float, default=0,
@@ -127,6 +138,10 @@ def main():
         parser.error("--omero-readers must be at least 1")
     if args.min_community_size < 1:
         parser.error("--min-community-size must be at least 1")
+    if args.n_niches < 0:
+        parser.error("--n-niches must be 0 (no niches) or more")
+    if args.n_niches > 0 and not args.niche_radius > 0:
+        parser.error("--niche-radius must be positive")
 
     # Spot-based clustering needs spots; a new run only gets them with --detect-blobs.
     # (A resumed run is checked once its table is loaded.)
@@ -419,6 +434,33 @@ def main():
 
     print(f"\nUpdated obs columns: {list(sdata.tables['table'].obs.columns)}")
 
+    # Neighbourhood niches: k-means on each cell's local mix of k-means clusters
+    # (independent of the Louvain network below). Labels follow the table's obs order.
+    niche_summary = {}
+    obs_niche = None
+    if args.n_niches > 0:
+        xy_um = table_centroids_um(sdata, pixel_size_um)
+        composition = neighbourhood_composition(xy_um, cluster_labels, args.niche_radius,
+                                                n_labels=int(args.n_clusters))
+        niche_labels = assign_niches(composition, args.n_niches)
+        sdata.tables['table'].obs['niche'] = pd.Categorical(niche_labels)
+        obs_niche = dict(zip(sdata.tables['table'].obs.index.astype(str), niche_labels))
+        sizes = np.bincount(niche_labels[niche_labels >= 0], minlength=args.n_niches)
+        niche_summary = {'n_niches': int(args.n_niches), 'niche_radius_um': float(args.niche_radius),
+                         'niche_n_clusters': int(args.n_clusters),
+                         'niche_sizes': {int(i): int(s) for i, s in enumerate(sizes)}}
+        print(f"Niches: {args.n_niches} niches from each cell's mix of the {args.n_clusters} k-means clusters "
+              f"within {args.niche_radius:g} µm (numbered by size): "
+              + ', '.join(f'{i}: {s:,}' for i, s in enumerate(sizes)))
+    else:
+        print("Niches skipped (--n-niches 0)")
+        # Don't leave a resumed run's old niche labels looking current.
+        if 'niche' in sdata.tables['table'].obs:
+            del sdata.tables['table'].obs['niche']
+        for key in resolve_shape_keys(sdata):
+            if key is not None and 'niche' in sdata.shapes[key].columns:
+                del sdata.shapes[key]['niche']
+
     # Build the network on the cell layer (not the nuclei), so cell ids match the
     # table produced by aggregation over that layer.
     nuclei_key, network_shapes_key = resolve_shape_keys(sdata)
@@ -430,7 +472,11 @@ def main():
                                 min_community_size=args.min_community_size,
                                 output_dir=args.plot_dir,
                                 summary_extra={'cluster_on': args.cluster_on,
-                                               'n_features': int(features.shape[1])})
+                                               'n_features': int(features.shape[1]),
+                                               **niche_summary})
+    # Niche per cell shape (aligned with result['cell_ids']); -1 for shapes not in the table.
+    shape_niches = (np.array([obs_niche.get(str(cid), -1) for cid in result['cell_ids']], dtype=int)
+                    if obs_niche is not None else None)
 
     spots_with_cells = assign_spots_to_cells(sdata, cell_boundaries=network_shapes_key)
 
@@ -438,7 +484,8 @@ def main():
                      output_path=args.geojson_path,
                      sdata=sdata, intensity_df=intensity_df, counts_df=counts_df,
                      spots_with_cells=spots_with_cells,
-                     cell_boundaries=network_shapes_key)
+                     cell_boundaries=network_shapes_key,
+                     niche_labels=obs_niche)
 
     # Persist everything to Zarr.
     # Write to a temporary path first, then replace the target path atomically
@@ -450,6 +497,8 @@ def main():
     sdata.shapes[network_shapes_key]['kmeans_cluster'] = result['cluster_labels']
     sdata.shapes[network_shapes_key]['community'] = result['community_labels']
     sdata.tables['table'].obs['community'] = pd.Categorical(result['community_labels'])
+    if shape_niches is not None:
+        sdata.shapes[network_shapes_key]['niche'] = shape_niches
     # Persist the pixel size so read-only consumers (stability sweep) can convert µm params.
     store_pixel_size(sdata, pixel_size_um)
     # Run parameters, so the report (and anyone reading the Zarr) needn't rely on summary.json.
@@ -458,7 +507,10 @@ def main():
                      max_edge_distance_um=float(args.max_edge_distance), segmenter=args.segmenter,
                      **({'instanseg_model': args.instanseg_model} if args.segmenter == 'instanseg'
                         else {'cell_expansion_um': float(args.cell_expansion)}),
-                     code_version=code_version() or 'unknown')
+                     code_version=code_version() or 'unknown',
+                     n_niches=int(args.n_niches),
+                     **({'niche_radius_um': float(args.niche_radius), 'niche_n_clusters': int(args.n_clusters)}
+                        if args.n_niches > 0 else {}))
 
     # Also attach cluster/community to the nuclei layer via the nucleus_id
     # recorded on each cell (survives sopa.aggregate's re-indexing). Nuclei not
@@ -473,6 +525,9 @@ def main():
         nuclei = sdata.shapes[nuclei_key]
         nuclei['kmeans_cluster'] = [nucleus_to_cluster.get(cid, -1) for cid in nuclei.index]
         nuclei['community'] = [nucleus_to_community.get(cid, -1) for cid in nuclei.index]
+        if shape_niches is not None:
+            nucleus_to_niche = dict(zip(nucleus_ids, shape_niches[linked]))
+            nuclei['niche'] = [nucleus_to_niche.get(cid, -1) for cid in nuclei.index]
     print(f'Saving Zarr to {seg_zarr_path}')
     try:
         tmpdir = tempfile.mkdtemp(dir=os.path.dirname(seg_zarr_path) or '.')

@@ -6,12 +6,14 @@ from cellsurvey.utils import get_colors_for_communities, resolve_shape_keys
 
 
 def export_to_qupath(cell_ids, community_labels, cluster_labels, output_path, sdata, intensity_df,
-                     spots_with_cells=None, cell_boundaries=None, counts_df=None):
+                     spots_with_cells=None, cell_boundaries=None, counts_df=None, niche_labels=None):
     """Write cells (and spots) as QuPath GeoJSON.
 
     Each cell gets ``Cell: <channel> mean`` measurements from ``intensity_df``
     and, if ``counts_df`` is given (runs with spots), ``Cell: <channel> spot
-    count`` measurements (raw counts).
+    count`` measurements (raw counts). ``niche_labels`` (a dict: cell id as a
+    string → niche) adds a ``Niche ID`` measurement (-1 if the cell has none);
+    the classification stays by community.
     """
     if cell_boundaries is None:
         cell_boundaries = resolve_shape_keys(sdata)[1]
@@ -44,6 +46,8 @@ def export_to_qupath(cell_ids, community_labels, cluster_labels, output_path, sd
             "Community ID": float(community),
             "Cluster ID": float(cluster_id)
         }
+        if niche_labels is not None:
+            measurements_dict["Niche ID"] = float(niche_labels.get(str(idx), -1))
 
         if idx in intensity_df.index:
             for col in intensity_df.columns:

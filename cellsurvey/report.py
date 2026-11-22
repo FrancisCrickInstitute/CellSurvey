@@ -127,6 +127,9 @@ def _load_background(sdata):
     Returns ``(image, (sx, sy), channel_name)`` with ``sx, sy`` = full-resolution
     pixels per background pixel, or ``(None, None, None)``.
     """
+    if not len(sdata.images):
+        print("Report: the Zarr has no image; drawing points on white")
+        return None, None, None
     try:
         name = sdata.attrs.get('cell_segmentation_image') or next(iter(sdata.images))
         img = sdata.images[name]
@@ -162,7 +165,7 @@ def _load_matching_sweep(zarr_path, n_cells, mode, folder=None):
     """
     from cellsurvey.stability import sweep_paths
     folder = folder or os.path.dirname(os.path.abspath(zarr_path))
-    stem = 'community' if mode == 'communities' else 'cluster'
+    stem = {'communities': 'community', 'clusters': 'cluster', 'niches': 'niche'}[mode]
     candidates = [sweep_paths(zarr_path, mode, folder),
                   (os.path.join(folder, f'{stem}_sweep.csv'), os.path.join(folder, f'{stem}_sweep_summary.csv'))]
     for cells_path, summary_path in candidates:
@@ -199,6 +202,7 @@ def load_report_data(zarr_path, summary_path=None, sweep_dir=None):
             summary = json.load(f)
     sweep = _load_matching_sweep(zarr_path, table.n_obs, 'communities', sweep_dir)
     cluster_sweep = _load_matching_sweep(zarr_path, table.n_obs, 'clusters', sweep_dir)
+    niche_sweep = _load_matching_sweep(zarr_path, table.n_obs, 'niches', sweep_dir)
 
     background, scale, background_channel = _load_background(sdata)
     xy = np.asarray(table.obsm['spatial'], dtype=float)[:, :2]
@@ -213,6 +217,8 @@ def load_report_data(zarr_path, summary_path=None, sweep_dir=None):
         'area_px': area_px,
         'x': xy[:, 0], 'y': xy[:, 1],
         'meta': meta, 'attrs': attrs, 'summary': summary, 'sweep': sweep, 'cluster_sweep': cluster_sweep,
+        'niche_sweep': niche_sweep,
+        'niche': obs['niche'].astype(int).to_numpy() if 'niche' in obs else None,
         'shape_layers': _shape_layers(zarr_path),
         'background': background, 'scale': scale, 'background_channel': background_channel,
     }
@@ -312,12 +318,34 @@ def compute(data):
                 'dominant_share': frac.max(axis=1),
                 'n_unassigned': int((~valid).sum()),
             }
+    niche = None
+    if data.get('niche') is not None:
+        nl = np.asarray(data['niche'])
+        valid = nl >= 0
+        if valid.any():
+            ct = pd.crosstab(nl[valid], cluster[valid])
+            frac = ct.div(ct.sum(axis=1), axis=0)
+            ids = sorted(ct.index.tolist())
+            niche = {'ids': ids, 'frac': frac, 'sizes': ct.sum(axis=1),
+                     'names': {n: niche_name(frac.loc[n], names) for n in ids},
+                     'n_unassigned': int((~valid).sum())}
     return {
         'markers': markers, 'classes': classes, 'Z': Z, 'clusters': clusters, 'sizes': sizes,
         'profile': profile, 'top': top, 'names': names, 'flagged': flagged, 'ns_frac': ns_frac,
         'nonspecific': nonspecific, 'n_needed': n_needed, 'marker_table': pd.DataFrame(marker_rows),
-        'comm': comm,
+        'comm': comm, 'niche': niche,
     }
+
+
+def niche_name(frac_row, cluster_names):
+    """Automatic niche name from its cluster mix, e.g. ``mostly 3 (PSYN/CNPASE)`` or ``1 (…) + 4 (…)``."""
+    top = frac_row.sort_values(ascending=False)
+    c1, s1 = top.index[0], top.iloc[0]
+    if s1 >= 0.5 or len(top) == 1:
+        return f'mostly {c1} ({cluster_names.get(c1, c1)}), {100 * s1:.0f}%'
+    c2, s2 = top.index[1], top.iloc[1]
+    return (f'{c1} ({cluster_names.get(c1, c1)}) {100 * s1:.0f}% + '
+            f'{c2} ({cluster_names.get(c2, c2)}) {100 * s2:.0f}%')
 
 
 # =============================================================================
@@ -402,24 +430,28 @@ def fig_cluster_maps(data, res, rng):
     return fig
 
 
-def fig_cluster_overview_map(data, res, bins=220):
-    """Each square bin coloured by its most common cluster, over the tissue image."""
+def _dominant_tile_map(data, labels, ids, colours, legend_labels, title, bins=220):
+    """Each square tile coloured by its most common label (``ids``), over the tissue image.
+
+    Tiles with fewer than ``MIN_CELLS_PER_TILE`` labelled cells stay blank;
+    negative labels are ignored.
+    """
     xs, ys = _display_xy(data)
-    finite = np.isfinite(xs) & np.isfinite(ys)
-    xs_f, ys_f, cl = xs[finite], ys[finite], data['cluster'][finite]
+    keep = np.isfinite(xs) & np.isfinite(ys) & (np.asarray(labels) >= 0)
+    xs_f, ys_f, lab = xs[keep], ys[keep], np.asarray(labels)[keep]
     if data['background'] is not None:
         h, w = data['background'].shape
         rng_x, rng_y = (0, w), (0, h)
     else:
-        rng_x, rng_y = (xs_f.min(), xs_f.max()), (ys_f.min(), ys_f.max())
+        f = np.isfinite(xs) & np.isfinite(ys)
+        rng_x, rng_y = (xs[f].min(), xs[f].max()), (ys[f].min(), ys[f].max())
     long_side = max(rng_x[1] - rng_x[0], rng_y[1] - rng_y[0])
     nx = max(1, int(bins * (rng_x[1] - rng_x[0]) / long_side))
     ny = max(1, int(bins * (rng_y[1] - rng_y[0]) / long_side))
-    counts = np.stack([np.histogram2d(ys_f[cl == c], xs_f[cl == c], bins=(ny, nx), range=(rng_y, rng_x))[0]
-                       for c in res['clusters']])
+    counts = np.stack([np.histogram2d(ys_f[lab == c], xs_f[lab == c], bins=(ny, nx), range=(rng_y, rng_x))[0]
+                       for c in ids])
     dominant = counts.argmax(axis=0)
     occupied = counts.sum(axis=0) >= MIN_CELLS_PER_TILE
-    colours = [_cluster_colour(c, res) for c in res['clusters']]
     rgba = np.zeros((ny, nx, 4))
     rgba[..., :3] = np.array(colours)[dominant]
     rgba[..., 3] = np.where(occupied, 0.85, 0.0)
@@ -427,10 +459,74 @@ def fig_cluster_overview_map(data, res, bins=220):
     fig, ax = plt.subplots(figsize=(9, 9 * (rng_y[1] - rng_y[0]) / max(rng_x[1] - rng_x[0], 1)))
     _tissue_axes(ax, data, xs, ys)
     ax.imshow(rgba, origin='upper', extent=(rng_x[0], rng_x[1], rng_y[1], rng_y[0]), interpolation='nearest')
-    handles = [mpatches.Patch(color=colours[i], label=f"{c}: {res['names'][c]}")
-               for i, c in enumerate(res['clusters'])]
+    handles = [mpatches.Patch(color=colours[i], label=legend_labels[i]) for i in range(len(ids))]
     ax.legend(handles=handles, fontsize=7, loc='upper left', bbox_to_anchor=(1.01, 1), frameon=False)
-    ax.set_title('All clusters at once: each tile shows its most common cluster', fontsize=11)
+    ax.set_title(title, fontsize=11)
+    return fig
+
+
+def fig_cluster_overview_map(data, res, bins=220):
+    """Each square bin coloured by its most common cluster, over the tissue image."""
+    return _dominant_tile_map(data, data['cluster'], res['clusters'],
+                              [_cluster_colour(c, res) for c in res['clusters']],
+                              [f"{c}: {res['names'][c]}" for c in res['clusters']],
+                              'All clusters at once: each tile shows its most common cluster', bins)
+
+
+NICHE_COLOURS = plt.get_cmap('Set1').colors + plt.get_cmap('Set3').colors
+
+
+def fig_niche_map(data, res):
+    """Each tile coloured by its most common niche, over the tissue image."""
+    niche = res['niche']
+    ids = niche['ids']
+    return _dominant_tile_map(data, data['niche'], ids,
+                              [NICHE_COLOURS[i % len(NICHE_COLOURS)] for i in range(len(ids))],
+                              [f"{n}: {niche['names'][n]}" for n in ids],
+                              'Niches: each tile shows its most common niche')
+
+
+def fig_niche_composition(res):
+    """Heatmap: the share of each k-means cluster among the cells of each niche."""
+    niche = res['niche']
+    frac = niche['frac'].reindex(index=niche['ids'], columns=res['clusters']).fillna(0)
+    fig, ax = plt.subplots(figsize=(max(6, 0.6 * len(res['clusters']) + 3.5), max(3, 0.45 * len(frac) + 1.5)),
+                           layout='constrained')
+    im = ax.imshow(frac.to_numpy(), aspect='auto', cmap='viridis', vmin=0, vmax=1)
+    for i in range(frac.shape[0]):
+        for j in range(frac.shape[1]):
+            v = frac.iat[i, j]
+            if v >= 0.05:
+                ax.text(j, i, f'{100 * v:.0f}', ha='center', va='center', fontsize=7,
+                        color='white' if v < 0.6 else 'black')
+    ax.set_xticks(range(len(res['clusters'])))
+    ax.set_xticklabels([f"{c}: {res['names'][c]}" for c in res['clusters']], rotation=45, ha='right', fontsize=8)
+    ax.set_yticks(range(len(frac)))
+    ax.set_yticklabels([f"niche {n} ({int(niche['sizes'][n]):,})" for n in frac.index], fontsize=8)
+    ax.set_title('What each niche is made of (% of its cells in each k-means cluster)', fontsize=11)
+    fig.colorbar(im, ax=ax, shrink=0.8, label='fraction of the niche\'s cells')
+    return fig
+
+
+def fig_niche_sweep(sweep, radius_used, k_used):
+    """Silhouette and seed stability against niche count, one line per radius."""
+    sw = sweep.sort_values(['niche_radius_um', 'n_niches'])
+    fig, axes = plt.subplots(1, 2, figsize=(10.5, 3.6), layout='constrained')
+    for radius, g in sw.groupby('niche_radius_um'):
+        style = dict(lw=2.4) if radius_used is not None and np.isclose(radius, radius_used) else dict(lw=1.2)
+        axes[0].plot(g['n_niches'], g['silhouette'], 'o-', label=f'{radius:g} µm', **style)
+        axes[1].plot(g['n_niches'], g['seed_ari'], 'o-', label=f'{radius:g} µm', **style)
+    axes[0].set_ylabel('silhouette (higher = better separated)')
+    axes[0].set_title('Separation (rises with radius: can\'t pick the radius)', fontsize=10)
+    axes[1].set_ylabel('seed stability (ARI; 1 = identical)')
+    axes[1].set_ylim(0, 1.05)
+    axes[1].set_title('Stability across random seeds', fontsize=10)
+    for a in axes:
+        a.set_xlabel('number of niches')
+        a.set_xticks(sorted(sw['n_niches'].unique()))
+        if k_used:
+            a.axvline(k_used, color='#C1622D', ls='--', lw=1)
+        a.legend(fontsize=7, title='radius', title_fontsize=7)
     return fig
 
 
@@ -713,6 +809,9 @@ def build_html(data, res, figs):
                          f"{_fmt(get('max_edge_distance_um'))} µm, minimum {_fmt(get('min_community_size'))} "
                          f"cells: <b>{len(comm['sizes'])} communities</b>, "
                          f"{comm['n_unassigned']:,} cells unassigned" if comm else 'not available')),
+        ('Niches', (f"<b>{len(res['niche']['ids'])} niches</b> from each cell's mix of the "
+                    f"{_fmt(get('niche_n_clusters') or len(res['clusters']))} k-means clusters within "
+                    f"{_fmt(get('niche_radius_um'))} µm" if res['niche'] else 'not computed')),
         ('CellSurvey code', _esc(f"run: {meta.get('code_version') or 'not recorded'}; "
                                  f"report: {code_version() or 'unknown'}")),
         ('Report settings', f'"positive" = robust z &gt; {POSITIVE_Z:g}; non-specific = positive in ≥ '
@@ -726,6 +825,7 @@ def build_html(data, res, figs):
                  '<li><a href="#clusters">Cell populations (clusters)</a></li>'
                  '<li><a href="#maps">Where things are</a></li>'
                  '<li><a href="#communities">Communities</a></li>'
+                 '<li><a href="#niches">Niches</a></li>'
                  '<li><a href="#quality">Data-quality flags</a></li></ol></nav>')
 
     # --- How to read ----------------------------------------------------------
@@ -743,7 +843,10 @@ def build_html(data, res, figs):
         'profiles go together, wherever they sit in the tissue.</li>'
         '<li><b>Communities</b> group cells by <i>where they are</i>: neighbouring cells go together, '
         'whatever they express. A cell type that is physically scattered shows up in many communities.</li>'
-        '</ul><p>Both come from the same data; they answer different questions.</p>')
+        '<li><b>Niches</b> group cells by <i>what surrounds them</i>: cells whose neighbourhoods have a similar mix '
+        'of clusters go together, so a niche is a kind of place (e.g. "mostly neurons", or a tissue layer), which can '
+        'occur in several parts of the tissue.</li>'
+        '</ul><p>All three come from the same data; they answer different questions.</p>')
     parts.append(f'<p class="muted">Cluster names are generated automatically from the (up to two) markers a '
                  f'cluster has raised (mean robust z ≥ {NAME_MIN_Z:g}); "low X" means no marker is raised but X '
                  f'is clearly below typical, and "no distinct marker" means neither. Names describe marker '
@@ -890,8 +993,61 @@ def build_html(data, res, figs):
             parts.append(_table(cols, [[_fmt(r[c]) for c in cols] for _, r in sweep.iterrows()],
                                 num_cols=tuple(range(len(cols)))))
 
+    # --- Niches -------------------------------------------------------------------
+    parts.append('<h2 id="niches">5. Niches</h2>')
+    niche = res['niche']
+    if niche is None:
+        parts.append('<p>No niches in this result (run with <code>--n-niches</code> greater than 0).</p>')
+    else:
+        radius = get('niche_radius_um')
+        parts.append(
+            f'<p><b>Niches</b> group cells by the <i>mix of cell types around them</i>: for each cell, the share of '
+            f'each k-means cluster among the cells within {_fmt(radius)} µm, then cells with similar mixes are '
+            f'grouped. So a niche is a kind of <i>place</i> (e.g. "mostly cluster 3" or "half 1, half 4"), and '
+            'unlike communities the same niche can occur in several parts of the tissue. They often follow '
+            'anatomical regions and layers better than communities, which tend to be compact patches. Niches are '
+            'numbered by size (0 = largest) and named after their most common clusters.</p>')
+        parts.append(f'<div class="note">This result uses <b>{len(niche["ids"])} niches at {_fmt(radius)} µm</b>, '
+                     f'built on the {_fmt(get("niche_n_clusters") or len(res["clusters"]))} k-means clusters above '
+                     '(changing the clusters changes the niches). Suitable values depend heavily on the tissue, '
+                     'panel, cell density and the structures of interest: treat them as a starting point and check '
+                     'them with a niche sweep (<code>python -m cellsurvey.stability --zarr &lt;output&gt;_seg.zarr '
+                     '--mode niches</code>).</div>')
+        parts.append(figs['niche_map'])
+        parts.append(figs['niche_composition'])
+        rows = [(str(n), _esc(niche['names'][n]), f"{int(niche['sizes'][n]):,}",
+                 f"{100 * niche['sizes'][n] / n_cells:.1f}%") for n in niche['ids']]
+        parts.append(_table(['Niche', 'Made of (most common clusters)', 'Cells', '%'], rows, num_cols=(2, 3)))
+        nsw = data['niche_sweep']
+        parts.append('<h3>Choosing the radius and number of niches</h3>')
+        if nsw is not None and 'niche_sweep' in figs:
+            parts.append('<p>From the niche sweep run on this result. <b>Silhouette</b> (separation) rises with the '
+                         'radius at every niche count, because bigger neighbourhoods average more cells and give '
+                         'smoother compositions, so it can compare niche counts at one radius but <i>can\'t</i> '
+                         'choose the radius. That is a choice of scale: larger radii give smoother, blockier regions; '
+                         'smaller ones keep thin structures but get noisy. <b>Seed stability</b> shows whether the '
+                         'same niches come back from different random starts (1 = identical); prefer settings near '
+                         '1.</p>')
+            parts.append(figs['niche_sweep'])
+            sw = nsw.sort_values(['niche_radius_um', 'n_niches'])
+            rows = []
+            for _, r in sw.iterrows():
+                row = [_fmt(r['niche_radius_um']), _fmt(r['n_niches']), _fmt(r.get('median_neighbours')),
+                       _fmt(r['silhouette'], 3), _fmt(r['seed_ari'], 2), _fmt(r['min_niche_size'])]
+                if radius is not None and np.isclose(r['niche_radius_um'], radius) \
+                        and int(r['n_niches']) == len(niche['ids']):
+                    row = [f'<b>{v}</b>' for v in row]
+                    row[1] += ' <b>(this run)</b>'
+                rows.append(row)
+            parts.append(_table(['radius (µm)', 'niches', 'median neighbours', 'silhouette', 'seed stability',
+                                 'smallest niche (cells)'], rows, num_cols=tuple(range(6))))
+        else:
+            parts.append('<p class="muted">No niche sweep was found for this result. Run <code>python -m '
+                         'cellsurvey.stability --zarr &lt;output&gt;_seg.zarr --mode niches</code>, then re-make this '
+                         'report.</p>')
+
     # --- Quality ------------------------------------------------------------------
-    parts.append('<h2 id="quality">5. Data-quality flags</h2>')
+    parts.append('<h2 id="quality">6. Data-quality flags</h2>')
     n_ns = int(res['nonspecific'].sum())
     mt = res['marker_table']
     if res['n_needed']:
@@ -963,6 +1119,13 @@ def write_report(zarr_path, plot_dir, summary_path=None, filename='report.html',
     if data['cluster_sweep'] is not None:
         figs['cluster_sweep'] = out.tag(fig_cluster_sweep(data['cluster_sweep'], len(res['clusters'])),
                                         'cluster_sweep', 'Cluster sweep')
+    if res['niche'] is not None:
+        figs['niche_map'] = out.tag(fig_niche_map(data, res), 'niche_map', 'Niche map')
+        figs['niche_composition'] = out.tag(fig_niche_composition(res), 'niche_composition', 'Niche composition')
+        if data['niche_sweep'] is not None:
+            radius = data['meta'].get('niche_radius_um', data['summary'].get('niche_radius_um'))
+            figs['niche_sweep'] = out.tag(fig_niche_sweep(data['niche_sweep'], radius, len(res['niche']['ids'])),
+                                          'niche_sweep', 'Niche sweep')
     if res['comm'] is not None:
         figs['outlines'] = out.tag(fig_community_outlines(data, res), 'community_outlines', 'Community outlines')
         figs['composition'] = out.tag(fig_community_composition(res), 'community_composition',

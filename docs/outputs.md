@@ -21,16 +21,19 @@ contains, and how to open it.
 Both are [SpatialData](https://www.nature.com/articles/s41592-024-02212-x) Zarr
 stores. The segmented store contains:
 
-- `cell_boundaries` — whole-cell polygons, with `kmeans_cluster` and
-  `community` labels and a `nucleus_id` column linking each cell to its nucleus.
+- `cell_boundaries` — whole-cell polygons, with `kmeans_cluster`,
+  `community` and `niche` labels and a `nucleus_id` column linking each cell to its nucleus.
   Cells in communities smaller than `--min-community-size` have community `-1`
-  (unassigned).
+  (unassigned); `niche` is `-1` for cells not in the table (and absent with
+  `--n-niches 0`).
   With Stardist these are nuclei expanded by `--cell-expansion`; with InstanSeg
   they are segmented directly.
 - A nuclei layer — `stardist_boundaries` (Stardist) or `nucleus_boundaries`
-  (InstanSeg) — with the same `kmeans_cluster` and `community` labels, copied
-  from each nucleus's cell. Nuclei not linked to a cell get `-1`.
-- `table` — an AnnData table of cells, measured over `cell_boundaries`.
+  (InstanSeg) — with the same `kmeans_cluster`, `community` and `niche` labels,
+  copied from each nucleus's cell. Nuclei not linked to a cell get `-1`.
+- `table` — an AnnData table of cells, measured over `cell_boundaries`, with
+  `kmeans_cluster`, `community` and `niche` in `obs` and the run's parameters in
+  `uns['cellsurvey']`.
   Without spots, `.X` holds the per-cell mean intensities (cells × markers).
   With `--detect-blobs`, `.X` holds the **spot counts** per spot channel and the
   intensities are in `obsm['intensities']`. That is how Sopa stores them.
@@ -64,9 +67,16 @@ Written to `--plot_dir`. A small JSON summary of the network analysis:
   "cluster_on": "intensities",
   "n_features": 21,
   "cluster_sizes": { "0": 1204, "1": 980, "...": "..." },
-  "community_sizes": { "0": 2100, "1": 1550, "...": "..." }
+  "community_sizes": { "0": 2100, "1": 1550, "...": "..." },
+  "n_niches": 7,
+  "niche_radius_um": 100.0,
+  "niche_n_clusters": 10,
+  "niche_sizes": { "0": 3100, "1": 2800, "...": "..." }
 }
 ```
+
+The niche fields are missing when `--n-niches 0` is used. `niche_n_clusters` is
+the number of k-means clusters the niches were built on.
 
 Useful for a quick sanity check of how many cells, clusters, and communities
 were found. `n_communities` counts communities of at least
@@ -120,6 +130,11 @@ opened in any browser, or printed to PDF. It contains:
 - **Communities**: outlines of the largest communities over the tissue,
   their composition by cluster, a short generated summary, and the resolution
   sweep if one was run for this result (see [Parameters](parameters.md)).
+- **Niches**: what niches are, a map coloured by niche over the tissue, what
+  each niche is made of (share of each cluster, with automatic names such as
+  "mostly 3 (PSYN/CNPASE), 62%"), the radius and number of niches used (with a
+  note that suitable values depend on the tissue), and the niche sweep if one
+  was run.
 - **Data-quality flags**: cells that are bright in many unrelated markers at
   once ("non-specific": likely autofluorescence or debris), clusters made
   mostly of them, markers whose "positive" cells are largely non-specific, and
@@ -151,8 +166,9 @@ The GeoJSON contains:
 
 - **Cell boundaries** (from `cell_boundaries`, or the nuclei layer in a
   nuclei-only run) as annotations, coloured by community (unassigned cells are
-  grey, classified `Unassigned`), with cluster and
-  per-marker mean-intensity measurements (`Cell: <channel> mean`) attached, and,
+  grey, classified `Unassigned`), with `Community ID`, `Cluster ID`, `Niche ID`
+  (unless `--n-niches 0`) and per-marker mean-intensity measurements
+  (`Cell: <channel> mean`) attached, and,
   with `--detect-blobs`, the raw spot count per spot channel
   (`Cell: <channel> spot count`).
 - **RNA spots** as detection objects (only when `--detect-blobs` was used),

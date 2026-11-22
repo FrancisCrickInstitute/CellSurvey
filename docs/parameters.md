@@ -95,6 +95,47 @@ passed, and detects RNA spots on the channels you specify.
       ("unassigned", grey in QuPath), and the rest are **numbered by size**:
       community 0 is the largest.
 
+## Niches
+
+| Flag | Default | What it controls |
+|---|---|---|
+| `--n-niches` | `7` | Number of neighbourhood niches. `0` skips niches. |
+| `--niche-radius` | `100` | Neighbourhood radius in **µm**. |
+
+**Niches** group cells by the *mix of cell types around them*. For each cell,
+CellSurvey takes the share of each k-means cluster among the cells within
+`--niche-radius`, then groups cells with similar mixes into `--n-niches` niches,
+numbered by size (0 = largest). A niche is a kind of *place* (e.g. "mostly
+cluster 3", or "half cluster 1, half cluster 4"), and the same niche can occur in
+several parts of the tissue. Communities, by contrast, are single connected
+patches. Niches often follow anatomical regions and layers much better than
+communities. Because they're built on the k-means clusters, changing
+`--n-clusters` changes the niches too.
+
+!!! warning "The defaults are starting points, not recommendations"
+    Suitable values depend heavily on the tissue, the marker panel, cell
+    density, the structures you care about, and the k-means clusters the niches
+    are built on. The defaults (100 µm, 7 niches) worked well on one brain
+    section; check them on your own data with the
+    [niche sweep](#niche-sweep) before relying on them.
+
+!!! tip "Reading the niche sweep"
+    - **The radius sets the scale.** Larger radii average more cells, so niches
+      get smoother and blockier and thin structures (a thin layer, a vessel)
+      merge into their surroundings. Smaller radii keep fine structure but get
+      noisy (a 50 µm radius with ~13 neighbours per cell gave speckled maps on
+      one slide).
+    - **Silhouette can't choose the radius**: it rises with radius at every
+      niche count, because smoother compositions are always easier to separate.
+      Use it to compare niche counts *at one radius*.
+    - **Prefer stable settings**: seed stability near 1 means the same niches
+      come back from different random starts. A setting whose stability is
+      clearly lower than its neighbours usually has one small niche that only
+      some starts find.
+    - Look at the maps (the report draws the run's niches over the tissue):
+      the useful setting is usually the one whose niches match structures you
+      can recognise.
+
 ## Spatial analysis
 
 | Flag | Default | What it controls |
@@ -232,6 +273,33 @@ This writes `<run>_cluster_sweep.csv` (a `cluster_k<k>` column per value) and
 
 The cluster sweep only reads the table, not the cell outlines, so it's quick even
 on whole slides (about 2 minutes for 617k cells and 8 values of `k`).
+
+### Niche sweep
+
+Sweep the niche radius and the number of niches (defaults: radii `75,100,150`
+µm × `4,5,6,7,8` niches):
+
+```bash
+pixi run python -m cellsurvey.stability \
+  --zarr <output>_seg.zarr \
+  --mode niches \
+  --niche-radii 75,100,150 \
+  --n-niches 4,5,6,7,8
+```
+
+Niches are built from the run's k-means clusters (stored in the Zarr). Each
+setting is fitted from 3 random starts. The sweep writes `<run>_niche_sweep.csv`
+(a `niche_r<radius>_n<count>` column per setting) and
+`<run>_niche_sweep_summary.csv`, with per setting:
+
+- **silhouette** (separation, on a 20,000-cell sample);
+- **seed stability** (the agreement between the 3 starts; 1 = identical);
+- the **smallest niche** (cells and %) and the median number of neighbours per
+  cell at that radius.
+
+See [Reading the niche sweep](#niches) for how to use these numbers. Like the
+cluster sweep, it reads only the table (about 5 minutes for 617k cells and 15
+settings).
 
 ### Which shapes are swept
 

@@ -167,6 +167,22 @@ Groups cells by their expression profile.
 - **Output**: a `kmeans_cluster` label per cell.
 - **Where**: `cellsurvey/utils.py` (`cluster_data`).
 
+### Neighbourhood niches
+
+Groups cells by the mix of cell types around them.
+
+- **What it does**: for each cell, takes the share of each k-means cluster among
+  the cells within `--niche-radius` µm (default 100), then runs k-means on those
+  neighbourhood compositions to make `--n-niches` niches (default 7), numbered by
+  size. Niches are places with a characteristic cell-type mix (e.g. a tissue
+  layer), and one niche can occur in several parts of the tissue. They're built
+  on the k-means clusters, so they change with `--n-clusters`. Skipped with
+  `--n-niches 0`. The defaults are starting points: check them with the
+  [niche sweep](parameters.md#niche-sweep).
+- **Output**: a `niche` label per cell (on the table, cells and nuclei), a
+  `Niche ID` in the GeoJSON, and the niche settings in `summary.json`.
+- **Where**: `cellsurvey/niches.py`.
+
 ## 7. Network analysis
 
 Builds a spatial network of neighbouring cells and detects communities.
