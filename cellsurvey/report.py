@@ -720,7 +720,7 @@ def fig_marker_distributions(res):
 def fig_raw_distributions(data, res):
     """Raw (un-normalised) per-cell intensities of every marker, plus control channels for reference.
 
-    All panels share one log intensity axis, so absolute levels can be compared:
+    All panels share one linear intensity axis, so absolute levels can be compared:
     a marker whose cells all sit near the background (and near the control
     channels) is probably absent, and its "positive" cells are then just the
     brightest noise. The "positive" line and the typical cell are the same
@@ -729,12 +729,13 @@ def fig_raw_distributions(data, res):
     df = data['intensity_df']
     raw = res['raw_table']
     channels = raw['channel'].tolist()
-    values = {ch: np.clip(df[ch].to_numpy(dtype=float), 0, None) + 1 for ch in channels}
+    values = {ch: np.clip(df[ch].to_numpy(dtype=float), 0, None) for ch in channels}
     values = {ch: v[np.isfinite(v)] for ch, v in values.items()}
-    lo = max(1.0, min(np.percentile(v, 0.01) for v in values.values() if v.size))
-    hi = max(np.percentile(v, 99.99) for v in values.values() if v.size)
-    hi = max(hi, raw['positive_line'].max() + 1, lo * 10)
-    bins = np.logspace(np.log10(lo), np.log10(hi), 120)
+    # Linear axis from 0 to the brightest channel's 99.9th percentile (or the highest "positive" line);
+    # the few brighter cells are folded into the last bin.
+    hi = max(np.percentile(v, 99.9) for v in values.values() if v.size)
+    hi = max(hi, raw['positive_line'].max() * 1.1, 1.0)
+    bins = np.linspace(0, hi, 120)
     ncols = min(4, len(channels))
     nrows = math.ceil(len(channels) / ncols)
     fig, axes = plt.subplots(nrows, ncols, figsize=(3.4 * ncols, 2.5 * nrows), squeeze=False,
@@ -744,19 +745,19 @@ def fig_raw_distributions(data, res):
     for ax, r in zip(axes.ravel(), raw.itertuples()):
         ax.axis('on')
         control = r.kind != 'marker'
-        ax.hist(np.clip(values[r.channel], lo, hi), bins=bins, log=True,
+        ax.hist(np.clip(values[r.channel], 0, hi), bins=bins, log=True,
                 color='#C9CCD1' if control else '#9A9FA8')
-        ax.axvline(r.positive_line + 1, color='#C1622D', lw=1.5)
-        ax.axvline(r.median + 1, color='#6C5B9E', lw=0.8, ls=':')
-        ax.set_xscale('log')
+        ax.axvline(r.positive_line, color='#C1622D', lw=1.5)
+        ax.axvline(r.median, color='#6C5B9E', lw=0.8, ls=':')
+        ax.set_xlim(0, hi)
         ax.set_title(f'{r.channel}' + (' (control)' if control else '')
                      + f'\nline at {r.positive_line:,.0f} = {r.ratio:.1f}× typical', fontsize=8.5)
         ax.tick_params(labelsize=7)
     for ax in axes[-1]:
         if ax.axison:
-            ax.set_xlabel('mean intensity per cell + 1 (log)', fontsize=7)
-    fig.suptitle('Raw marker intensities (same axis for every panel; log count). Orange = the same "positive" line; '
-                 'dotted = typical cell', fontsize=11)
+            ax.set_xlabel('mean intensity per cell', fontsize=7)
+    fig.suptitle('Raw marker intensities (same linear axis for every panel; log count). Orange = the same '
+                 '"positive" line; dotted = typical cell', fontsize=11)
     return fig
 
 
@@ -1020,7 +1021,7 @@ def build_html(data, res, figs):
     parts.append('<h3>Raw intensities</h3>')
     parts.append(
         '<p>First, each marker\'s <b>raw</b> intensity (the mean over each cell), with every panel on the '
-        'same log axis. This shows what the normalised view below hides: how bright each marker actually is. '
+        'same linear axis (cell counts on a log scale). This shows what the normalised view below hides: how bright each marker actually is. '
         f'The orange "positive" line and the dotted typical cell are the same cutoffs used below, converted back '
         f'to intensity.{controls_note}</p>')
     parts.append(figs['raw_distributions'])

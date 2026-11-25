@@ -123,7 +123,7 @@ opened in any browser, or printed to PDF. It contains:
   cells express), *niches* and *niche regions* (what surrounds them), and
   *communities* (where cells sit).
 - **Markers**: first the **raw** intensity distribution of every marker, all on
-  one log axis, with control channels (e.g. `AF`) for reference and a table of
+  one linear axis, with control channels (e.g. `AF`) for reference and a table of
   each marker's typical level, "positive" line and 99th percentile. This shows
   whether a marker has real signal: a marker whose cells all sit at a low,
   background level has "positive" cells that are just the brightest noise.
