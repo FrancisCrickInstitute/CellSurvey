@@ -110,7 +110,7 @@ The pipeline is split into modules under the `cellsurvey/` package. `run.py` is 
 
 8. **Spot-to-cell assignment** (`cli.py` → `utils.py`): Spatial join of spots to cell boundaries using GeoPandas (`gpd.sjoin` with `predicate='within'`). Returns `None` if no spots are present in the dataset (no guard needed in `cli.py` — `export_to_qupath` handles `None`).
 
-9. **QuPath GeoJSON export** (`cli.py` → `export.py`): Exports cell boundaries and spot detections as GeoJSON features with community/cluster assignments and measurements (`Cell: <channel> mean` intensities and, with spots, `Cell: <channel> spot count`) for QuPath visualization. Takes `cell_ids`, `community_labels`, and `cluster_labels` as direct arrays. Output path is `--geojson-path` (default `<output_file>.geojson`, i.e. beside the Zarrs; derived from `-o` even when resuming).
+9. **QuPath GeoJSON export** (`cli.py` → `export.py`): Exports cell boundaries and spot detections as GeoJSON features with community/cluster/niche/region measurements (`Community ID`, `Cluster ID`, `Niche ID`, `Region ID`) and intensities (`Cell: <channel> mean` and, with spots, `Cell: <channel> spot count`) for QuPath visualization. **Classification** (since 2026-11-25): by niche region (`Region_<id>`, coloured by the region's majority niche with the report's `NICHE_COLOURS`, so QuPath matches the report's region map), falling back to community (`Community_<id>`) when there are no regions (`--n-niches 0`, or all `-1`); spots take their parent cell's class; cells without one are `Unassigned` (grey). Takes `cell_ids`, `community_labels`, and `cluster_labels` as direct arrays. Output path is `--geojson-path` (default `<output_file>.geojson`, i.e. beside the Zarrs; derived from `-o` even when resuming).
 
 10. **Spatial neighborhood analysis** (`cli.py`): Computes spatial neighbors radius graph, mean hop distance heatmap between clusters (`cell_type_to_cell_type.png`), UMAP embedding with k-means coloring (`umap_kmeans_cluster.png`), and Leiden clustering with `igraph` backend (`umap_leiden.png`); neighbours/UMAP/Leiden use the clustering features (`use_rep='X_cellsurvey'`), not Scanpy's count normalisation of `.X`. Also emits density maps (`cell_density.png`, `cli.plot_cell_density`: a 4-column grid of one panel per k-means cluster, then the `MAX_DENSITY_COMMUNITIES` = 20 largest communities by size; the suptitle states how many communities and unassigned cells were left out; every panel shares the whole-tissue extent and is drawn with y increasing downwards, like the image), a heatmap of the clustering features per cluster (`cluster_intensity_heatmap.png`, z-scored without the `both` group weighting), and a morphology-by-cluster plot (`morphology_by_cluster.png`, cell area converted from Sopa's px² to µm²; only if an `area` column is present). All plots are saved to `--plot_dir`.
 
@@ -339,7 +339,7 @@ Open:
 
      Touches the argparse setup and checks in `cli.py`, the resume pixel-size fallback, the flag table and commands here and in `CLAUDE.md`, `docs/parameters.md` and `README.md`. Check: resume with only `--resume-from` + `-p`; resume of a pre-pixel-size Zarr with and without `--pixel-size`; a new run still requires `-i`.
 - **Windows: `UnicodeEncodeError` when output is redirected**: with stdout piped or sent to a file, Windows Python encodes with cp1252, and printing channel names such as `αSMA` crashes the run. Workaround: `PYTHONIOENCODING=utf-8`. Fix: `sys.stdout.reconfigure(encoding='utf-8')` (and stderr) at the top of `run.py`. Interactive consoles and Linux are unaffected.
-- **`python -m cellsurvey.stability` warns `'cellsurvey.stability' found in sys.modules…`** (harmless, pre-existing): `cellsurvey/__init__.py` imports `stability` (and `cli`), so running the module with `-m` loads it twice. Fix: import lazily in `__init__`, or give the sweep its own entry point.
+- **`python -m cellsurvey.stability` (and `cellsurvey.report`) warn `'cellsurvey.<module>' found in sys.modules…`** (harmless, pre-existing): `cellsurvey/__init__.py` imports `stability`, `report` (and `cli`), so running a module with `-m` loads it twice. Fix: import lazily in `__init__`, or give the sweep its own entry point.
 - **Windows: Stardist on CPU is extremely slow**: a local run on `test_crop` used more than an hour of CPU time in segmentation (4 patches), against about 14 s on an HPC CPU node. Not investigated; win-64 is only for local testing.
 - **TF gets imported late in the default env** (not a bug): after the network step, Scanpy's UMAP imports umap-learn, which optionally imports TensorFlow (for `ParametricUMAP`) when it is installed. It costs some import time and logs TF's CPU-feature message. The instanseg env has no TF.
 
@@ -767,7 +767,7 @@ Tens of whole slides × ~600k cells is ~10⁷ cells. Tables of intensities are f
 
 ## Future: anatomy-aware communities (neighbourhood niches)
 
-**Status**: options recorded (2026-11-21). Option 1 prototyped and swept (2026-11-22). **Step 2 implemented (2026-11-22) on `feature/overview-report`**: niches are part of the pipeline (`cellsurvey/niches.py`, `--n-niches`/`--niche-radius`, report section, `stability --mode niches`; see "Step 2 implementation" below). HPC resume check pending. **Step 3 (contiguous regions) prototyped and implemented (2026-11-22)**: "niche regions" (B) follow the anatomy and composition-weighted Louvain (A) doesn't. Regions are now a layer alongside niches and communities (`niche_regions`, `--min-region-size`, `obs['niche_region']`, GeoJSON `Region ID`, report subsection); see "Step 3 prototype" and "Step 3 implementation" below. HPC check pending, together with step 2. Related: the Novae trial (cohort section) and the cohort plan's "shared niches" step.
+**Status**: options recorded (2026-11-21). Option 1 prototyped and swept (2026-11-22). **Step 2 implemented (2026-11-22) on `feature/overview-report`**: niches are part of the pipeline (`cellsurvey/niches.py`, `--n-niches`/`--niche-radius`, report section, `stability --mode niches`; see "Step 2 implementation" below). **Step 3 (contiguous regions) prototyped and implemented (2026-11-22)**: "niche regions" (B) follow the anatomy and composition-weighted Louvain (A) doesn't. Regions are now a layer alongside niches and communities (`niche_regions`, `--min-region-size`, `obs['niche_region']`, GeoJSON `Region ID`, report subsection); see "Step 3 prototype" and "Step 3 implementation" below. **HPC check of steps 2–3 passed (2026-11-25)**; see below. Related: the Novae trial (cohort section) and the cohort plan's "shared niches" step.
 
 **Problem**: on `omero_602778`, the Louvain communities are compact, similar-sized patches (~2–3 mm) that ignore the anatomy the k-means clusters show clearly (white-matter tract, cortical ribbon, MAP2 layers; see the steps 1–3 HPC check and the report's community outlines).
 
@@ -844,8 +844,8 @@ Implemented as planned below. Specifics:
   - `uns['cellsurvey']` gets `n_niches`, `niche_radius_um` and `niche_n_clusters`;
   - `summary.json` gets `n_niches`, `niche_radius_um`, `niche_n_clusters` and `niche_sizes`;
   - `--n-niches 0` skips niches and removes any stale `niche` labels from a resumed table and shapes.
-- **GeoJSON**: a `Niche ID` measurement per cell; classification still by community.
-- **Report**: a "5. Niches" section (data quality is now 6):
+- **GeoJSON**: a `Niche ID` measurement per cell; classification still by community (by niche region since 2026-11-25).
+- **Report**: a "5. Niches" section (data quality is now 6; niches became section 4, before communities, on 2026-11-25):
   - a plain-language explanation (also added to "How to read this" as the third kind of grouping);
   - the radius / count / k used, with the context-dependence note;
   - a tile map coloured by niche and a composition heatmap (% of each niche's cells per cluster);
@@ -952,6 +952,38 @@ Implementation notes (from review, 2026-11-22): convert centroids to µm (`obsm[
   - **Synthetic** (two separate blocks of one niche, a middle niche and a strip, 3% speckle, an isolated island, cells with no niche): 4 regions (ARI 0.998 against the 4 places); each region contiguous; numbered by size; island and no-niche cells `-1`; merge chains; degenerate inputs; GeoJSON `Region ID`; the report subsection; an older Zarr without regions.
   - **`omero_602778` in memory**: 36 regions from 7,786 pieces in 12 s (mostly Delaunay); 4,680 cells (0.8%) unassigned. The largest is the tract body (135k cells, 89% in its niche). Regions per niche: 0: 12, 1: 1, 2: 4, 3: 6, 4: 3, 5: 8, 6: 2. The report map matches the prototype.
 - **To check on the HPC**: the same resume run as step 2 (regions come with it), then the report.
+
+### HPC check of steps 2–3: passed (2026-11-25)
+A `--resume-from` run of `omero_602778` with `--n-clusters 8` and the niche defaults (outputs `out/omero_602778_plots_niches`), then `stability --mode niches` (default radii 75/100/150 × 4–8 niches), then the report re-made standalone so it includes the niche sweep.
+- **Same as the in-memory results**:
+  - 7 niches with identical sizes (138,197 / 134,957 / 107,244 / 83,868 / 83,390 / 63,489 / 6,382);
+  - 36 regions from 7,786 pieces, 4,680 cells unassigned; the largest region is the tract body, 135,402 cells;
+  - k-means (k = 8) and the communities (116; 1,723 raw; 2,521 unassigned) also unchanged.
+- **Outputs**:
+  - `summary.json` has `n_niches`, `niche_radius_um`, `niche_n_clusters`, `niche_sizes`, `n_niche_regions`, `min_region_size`, `n_region_unassigned_cells` and `niche_region_sizes`;
+  - every GeoJSON cell has `Niche ID` and `Region ID` next to `Community ID` / `Cluster ID`;
+  - the report (7.6 MB, 23 s standalone) has section 5 "Niches" with "Niche regions" and "Choosing the radius and number of niches"; the sweep table marks "(this run)", and the sweep plot draws 100 µm bold with a line at 7.
+- **Niche sweep on the HPC reproduces prototype 2** (silhouette / seed ARI): 100 µm × 7 = 0.294 / 0.98; 6 niches unstable at every radius (ARI 0.85–0.86); 7–8 niches unstable at 75 µm (0.76–0.79).
+- **Maps checked visually**:
+  - niches: tract core (mostly 3, PSYN/CNPASE), tract body and lower tract (4 + 3), the rim along the tract (3 + 1), deep cortex (mostly 1), bands of 1 + 4, a GFAP-rich band (1 + 2) in the upper cortex, and a small vessel/edge niche (mostly 7) around vessels and folds;
+  - regions: the tract body (0), the two tract arms (1, 5), rim strips (8, 12, 18, 20, 21), and the cortex split into bands and patches. Niche 0 (the most widespread) forms 12 separate regions, as intended.
+- **Harmless log noise**: `RuntimeWarning: 'cellsurvey.report' found in sys.modules…` when run with `-m` (the same eager-import issue as `stability`, see Known issues); "ignoring … community_sweep_summary.csv: it's from another run" (an old fixed-name sweep file from `test_crop` in `out/`; can be deleted).
+- **Open (Dave)**: whether niche regions should replace Louvain communities.
+
+### Regions as the main "places" layer, communities kept (2026-11-25)
+**Decided (Dave)**: the "middle path". Niche regions become the main places layer, communities stay alongside, and whether to drop one is deferred (e.g. until a comparison on the 29-plex COMET slide, where more features may give Louvain informative edge weights).
+- **GeoJSON**: classified by niche region (`Region_<id>`, coloured by its niche), falling back to community when there are no regions; `Community ID` stays a measurement (see stage 9).
+- **Report**: niches and regions are now section **4 "Niches and niche regions"**, before **5 "Communities"** (`build_html` builds communities first, then moves them after the niche block). "How to read this" lists clusters → niches/regions → communities and says both place layers are shown while we learn which works better; the communities intro points to the regions for comparison.
+- **Checks**: synthetic GeoJSON test (region classes and niche colours, `Unassigned`, spots following their parent cell, community fallback with no regions or all `-1`); report re-made from `omero_602778_seg.zarr` with the new order.
+
+### Raw marker distributions in report section 1 (2026-11-25)
+**Why (Dave)**: on the robust z scale every marker looks alike, which hides that some (PSYN, PTAU on `omero_602778`) are essentially absent, so their "positive" cells are background noise and artefact.
+- **Section 1** now starts with "Raw intensities": `fig_raw_distributions`, a histogram per marker of the per-cell mean intensity on **one shared log axis** (+1), with the **control channels** (e.g. `AF`) as pale reference panels. The orange "positive" line and dotted typical cell are the robust-z cutoffs converted back to intensity (`raw_at_z`: `sinh(median + z × spread)` on the arcsinh scale; `robust_z_params` is now shared with `robust_z`). A note explains how to read it (raw levels aren't strictly comparable between markers, but a marker sitting at background level near the controls, with no bright tail, is probably absent), then a table: typical cell, "positive" line, line ÷ typical, 99th percentile. The robust-z view follows as "Normalised (robust z)", with a sentence that it makes absent markers look as real as bright ones.
+- **On `omero_602778`** (typical / line / ratio / 99th pct): CNPASE 44.6 / 386 / 8.6× / 129; PSYN 23.0 / 55 / 2.4× / 66; GFAP 119 / 564 / 4.7× / 511; PTAU 17.4 / 33 / 1.9× / 38; IBA1 36.1 / 77 / 2.1× / 216; MAP2 50.4 / 314 / 6.2× / 366; AF (control) 205 / 406 / 2.0× / 658.
+  - PSYN and PTAU sit well below the AF control with no bright population: probably absent.
+  - IBA1's ratio is also low (2.1×) but it has a real shoulder of bright cells, so the ratio is a hint, not a test.
+  - CNPASE's line lies above its 99th percentile (hence only 32 "positive" cells): its bright cells are a broad population, not a tail.
+- **Possible follow-up (not decided)**: an automatic "possibly absent" flag per marker (e.g. typical level and 99th percentile below the control channels' typical level), used in the data-quality section and the cluster names.
 
 ## Future: per-cell spatial analysis of protein and spot distribution
 

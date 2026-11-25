@@ -29,11 +29,14 @@ For traditional pathology workflows, open the exported GeoJSON in
 [QuPath](https://qupath.github.io/):
 
 1. **File → Import → GeoJSON**, then select `<output>.geojson` (written next to the Zarr stores).
-2. Cell boundaries appear as annotations coloured by community.
+2. Cell boundaries appear as annotations classified by niche region
+   (`Region_<id>`, coloured by the region's niche), or by community when niches
+   were skipped (`--n-niches 0`).
 3. RNA spots (when `--detect-blobs` was used) appear as detection objects.
 
-Each cell annotation carries its cluster, community, and per-marker mean
-intensity as measurements.
+Each cell annotation carries its cluster, community, niche, niche region and
+per-marker mean intensity as measurements. To see communities instead, colour
+or filter by the `Community ID` measurement.
 
 ## 3. TissUUmaps
 

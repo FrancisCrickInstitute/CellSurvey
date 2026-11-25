@@ -120,8 +120,14 @@ opened in any browser, or printed to PDF. It contains:
   are recognised by name), the clustering and community parameters, and the
   CellSurvey code version.
 - **How to read this**: z-scores, and the difference between *clusters* (what
-  cells express) and *communities* (where cells sit).
-- **Markers**: the distribution of every marker, with the illustrative
+  cells express), *niches* and *niche regions* (what surrounds them), and
+  *communities* (where cells sit).
+- **Markers**: first the **raw** intensity distribution of every marker, all on
+  one log axis, with control channels (e.g. `AF`) for reference and a table of
+  each marker's typical level, "positive" line and 99th percentile. This shows
+  whether a marker has real signal: a marker whose cells all sit at a low,
+  background level has "positive" cells that are just the brightest noise.
+  Then the same distributions on the robust z scale, with the illustrative
   "positive" line (robust z > 2) and how many cells are above it, plus a warning
   that this line is a choice rather than a property of the data.
 - **Cell populations**: a heatmap of each k-means cluster's average marker
@@ -134,15 +140,17 @@ opened in any browser, or printed to PDF. It contains:
 - **Where things are**: each cluster drawn over the tissue image (the nuclear
   channel), one map coloured by the most common cluster in each area, and the
   "positive" cells for each marker (non-specific cells in grey).
-- **Communities**: outlines of the largest communities over the tissue,
-  their composition by cluster, a short generated summary, and the resolution
-  sweep if one was run for this result (see [Parameters](parameters.md)).
-- **Niches**: what niches are, a map coloured by niche over the tissue, what
+- **Niches and niche regions**: what niches are, a map coloured by niche over the tissue, what
   each niche is made of (share of each cluster, with automatic names such as
   "mostly 3 (PSYN/CNPASE), 62%"), the radius and number of niches used (with a
   note that suitable values depend on the tissue), the **niche regions** (a map
   coloured by niche with region borders and numbers, and a table of the largest
   regions), and the niche sweep if one was run.
+- **Communities**: outlines of the largest communities over the tissue,
+  their composition by cluster, a short generated summary, and the resolution
+  sweep if one was run for this result (see [Parameters](parameters.md)).
+  Communities and niche regions are two ways of dividing the tissue into
+  places; both are kept while we learn which works better.
 - **Data-quality flags**: cells that are bright in many unrelated markers at
   once ("non-specific": likely autofluorescence or debris), clusters made
   mostly of them, markers whose "positive" cells are largely non-specific, and
@@ -173,8 +181,11 @@ them elsewhere (`--output`/`--summary`), point to that folder with
 The GeoJSON contains:
 
 - **Cell boundaries** (from `cell_boundaries`, or the nuclei layer in a
-  nuclei-only run) as annotations, coloured by community (unassigned cells are
-  grey, classified `Unassigned`), with `Community ID`, `Cluster ID`, `Niche ID`
+  nuclei-only run) as annotations. They are classified by **niche region**
+  (`Region_<id>`, coloured by the region's niche, as in the report's region
+  map), or by community (`Community_<id>`) when niches are skipped
+  (`--n-niches 0`). Cells without one are grey, classified `Unassigned`. Each
+  cell carries `Community ID`, `Cluster ID`, `Niche ID`
   and `Region ID` (unless `--n-niches 0`) and per-marker mean-intensity measurements
   (`Cell: <channel> mean`) attached, and,
   with `--detect-blobs`, the raw spot count per spot channel

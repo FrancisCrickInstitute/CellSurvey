@@ -14,8 +14,12 @@ def export_to_qupath(cell_ids, community_labels, cluster_labels, output_path, sd
     and, if ``counts_df`` is given (runs with spots), ``Cell: <channel> spot
     count`` measurements (raw counts). ``niche_labels`` and ``region_labels``
     (dicts: cell id as a string → label) add ``Niche ID`` and ``Region ID``
-    measurements (-1 if the cell has none); the classification stays by
-    community.
+    measurements (-1 if the cell has none).
+
+    Classification: by niche region (``Region_<id>``, coloured by the region's
+    niche, as in the report's region map) when ``region_labels`` has any
+    region; otherwise by community (``Community_<id>``). Cells without one are
+    ``Unassigned`` (grey). ``Community ID`` is always a measurement.
     """
     if cell_boundaries is None:
         cell_boundaries = resolve_shape_keys(sdata)[1]
@@ -29,20 +33,29 @@ def export_to_qupath(cell_ids, community_labels, cluster_labels, output_path, sd
     n_communities = int(community_labels.max()) + 1 if (community_labels >= 0).any() else 0
     community_colors = get_colors_for_communities(n_communities)
 
+    by_region = region_labels is not None and any(v >= 0 for v in region_labels.values())
+    region_colours = _region_colours(region_labels, niche_labels) if by_region else {}
+
+    def classify(cell_id):
+        """(classification name, RGB) for a cell id (as stored in the shapes / spots)."""
+        if by_region:
+            r = int(region_labels.get(str(cell_id), -1))
+            if r >= 0:
+                return f"Region_{r}", region_colours[r]
+        else:
+            community = cell_to_community.get(cell_id, -1)
+            if 0 <= community < len(community_colors):
+                return f"Community_{int(community)}", community_colors[int(community)]
+        return "Unassigned", [128, 128, 128]
+
     features = []
 
-    print("Exporting cell boundaries with community labels...")
+    print(f"Exporting cell boundaries, classified by {'niche region' if by_region else 'community'}...")
     boundaries = sdata.shapes[cell_boundaries]
     for idx, row in boundaries.iterrows():
         community = cell_to_community.get(idx, -1)
         cluster_id = cell_to_cluster.get(idx, -1)
-
-        if 0 <= community < len(community_colors):
-            color = community_colors[int(community)]
-            classification_name = f"Community_{int(community)}"
-        else:
-            color = [128, 128, 128]
-            classification_name = "Unassigned"
+        classification_name, color = classify(idx)
 
         measurements_dict = {
             "Community ID": float(community),
@@ -91,13 +104,7 @@ def export_to_qupath(cell_ids, community_labels, cluster_labels, output_path, sd
             cell_id_val = row['cell_id']
             sigma = float(row['sigma'])
 
-            community = cell_to_community.get(cell_id_val, -1)
-            if 0 <= community < len(community_colors):
-                spot_color = community_colors[int(community)]
-                spot_classification = f"Community_{int(community)}"
-            else:
-                spot_color = [128, 128, 128]
-                spot_classification = "Unassigned"
+            spot_classification, spot_color = classify(cell_id_val)
 
             circle = Point(float(row['x']), float(row['y'])).buffer(sigma)
 
@@ -133,3 +140,20 @@ def export_to_qupath(cell_ids, community_labels, cluster_labels, output_path, sd
 
     print(f"\n\u2713 Exported {len(features)} total features")
     print(f"Output file: {output_path}")
+
+
+def _region_colours(region_labels, niche_labels):
+    """RGB (0\u2013255) per region: the colour of its majority niche, as in the report's region map."""
+    from cellsurvey.report import NICHE_COLOURS
+    counts = {}
+    for cid, r in region_labels.items():
+        n = int(niche_labels.get(cid, -1)) if niche_labels is not None else -1
+        if r >= 0 and n >= 0:
+            counts.setdefault(int(r), {}).setdefault(n, 0)
+            counts[int(r)][n] += 1
+    colours = {}
+    for r in {int(v) for v in region_labels.values() if v >= 0}:
+        niche = max(counts[r], key=counts[r].get) if r in counts else 0
+        rgb = NICHE_COLOURS[niche % len(NICHE_COLOURS)]
+        colours[r] = [int(round(255 * c)) for c in rgb[:3]]
+    return colours

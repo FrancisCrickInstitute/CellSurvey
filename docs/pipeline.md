@@ -249,7 +249,9 @@ If no spots were detected, this stage is skipped entirely.
 Exports everything for viewing in QuPath.
 
 - **What it does**: writes cell boundaries and (optional) spots as GeoJSON
-  features, coloured by community, with cluster and per-marker measurements.
+  features, classified and coloured by niche region (or by community when
+  niches are skipped), with community, cluster, niche, region and per-marker
+  measurements.
 - **Output**: the file at `--geojson-path` (default `<output>.geojson`, next to the Zarr stores).
 - **Where**: `cellsurvey/export.py` (`export_to_qupath`).
 

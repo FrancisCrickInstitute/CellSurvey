@@ -229,15 +229,27 @@ def load_report_data(zarr_path, summary_path=None, sweep_dir=None):
 # Computations (no plotting)
 # =============================================================================
 
-def robust_z(values):
-    """Robust z-score of arcsinh intensity: (asinh(x) - median) / IQR (IQR 0 → std, then 1)."""
+def robust_z_params(values):
+    """``(median, spread)`` of arcsinh intensity, as used by :func:`robust_z` (IQR; 0 → std, then 1)."""
     a = np.arcsinh(np.asarray(values, dtype='float64'))
     med = np.median(a)
     q75, q25 = np.percentile(a, [75, 25])
     spread = q75 - q25
     if not spread > 0:
         spread = a.std() if a.std() > 0 else 1.0
-    return (a - med) / spread
+    return float(med), float(spread)
+
+
+def robust_z(values):
+    """Robust z-score of arcsinh intensity: (asinh(x) - median) / IQR (IQR 0 → std, then 1)."""
+    med, spread = robust_z_params(values)
+    return (np.arcsinh(np.asarray(values, dtype='float64')) - med) / spread
+
+
+def raw_at_z(values, z):
+    """The raw intensity at robust z = ``z`` for this channel (``z = 0``: the median cell)."""
+    med, spread = robust_z_params(values)
+    return float(np.sinh(med + z * spread))
 
 
 def nonspecific_threshold(n_markers):
@@ -303,6 +315,18 @@ def compute(data):
         marker_rows.append({'marker': m, 'n_positive': n_pos, 'pct_positive': 100 * pos.mean(),
                             'pct_nonspecific': 100 * share, 'status': status})
 
+    # Raw (un-normalised) levels: the "positive" line and the typical cell back on the intensity scale,
+    # for the markers and, as a background reference, the control channels.
+    raw_rows = []
+    for ch in markers + [c for c in df.columns if classes[c] == 'control' and c not in markers]:
+        v = df[ch].to_numpy(dtype=float)
+        v = v[np.isfinite(v)]
+        median, line = raw_at_z(v, 0), raw_at_z(v, POSITIVE_Z)
+        raw_rows.append({'channel': ch, 'kind': classes[ch] if ch not in markers else 'marker',
+                         'median': median, 'positive_line': line,
+                         'ratio': line / median if median > 0 else np.nan,
+                         'p99': float(np.percentile(v, 99)) if v.size else np.nan})
+
     comm = None
     if data['community'] is not None:
         community = data['community']
@@ -350,7 +374,7 @@ def compute(data):
         'markers': markers, 'classes': classes, 'Z': Z, 'clusters': clusters, 'sizes': sizes,
         'profile': profile, 'top': top, 'names': names, 'flagged': flagged, 'ns_frac': ns_frac,
         'nonspecific': nonspecific, 'n_needed': n_needed, 'marker_table': pd.DataFrame(marker_rows),
-        'comm': comm, 'niche': niche, 'region': region,
+        'raw_table': pd.DataFrame(raw_rows), 'comm': comm, 'niche': niche, 'region': region,
     }
 
 
@@ -693,6 +717,49 @@ def fig_marker_distributions(res):
     return fig
 
 
+def fig_raw_distributions(data, res):
+    """Raw (un-normalised) per-cell intensities of every marker, plus control channels for reference.
+
+    All panels share one log intensity axis, so absolute levels can be compared:
+    a marker whose cells all sit near the background (and near the control
+    channels) is probably absent, and its "positive" cells are then just the
+    brightest noise. The "positive" line and the typical cell are the same
+    cutoffs as on the robust z scale, converted back to intensity.
+    """
+    df = data['intensity_df']
+    raw = res['raw_table']
+    channels = raw['channel'].tolist()
+    values = {ch: np.clip(df[ch].to_numpy(dtype=float), 0, None) + 1 for ch in channels}
+    values = {ch: v[np.isfinite(v)] for ch, v in values.items()}
+    lo = max(1.0, min(np.percentile(v, 0.01) for v in values.values() if v.size))
+    hi = max(np.percentile(v, 99.99) for v in values.values() if v.size)
+    hi = max(hi, raw['positive_line'].max() + 1, lo * 10)
+    bins = np.logspace(np.log10(lo), np.log10(hi), 120)
+    ncols = min(4, len(channels))
+    nrows = math.ceil(len(channels) / ncols)
+    fig, axes = plt.subplots(nrows, ncols, figsize=(3.4 * ncols, 2.5 * nrows), squeeze=False,
+                             layout='constrained', sharex=True)
+    for ax in axes.ravel():
+        ax.axis('off')
+    for ax, r in zip(axes.ravel(), raw.itertuples()):
+        ax.axis('on')
+        control = r.kind != 'marker'
+        ax.hist(np.clip(values[r.channel], lo, hi), bins=bins, log=True,
+                color='#C9CCD1' if control else '#9A9FA8')
+        ax.axvline(r.positive_line + 1, color='#C1622D', lw=1.5)
+        ax.axvline(r.median + 1, color='#6C5B9E', lw=0.8, ls=':')
+        ax.set_xscale('log')
+        ax.set_title(f'{r.channel}' + (' (control)' if control else '')
+                     + f'\nline at {r.positive_line:,.0f} = {r.ratio:.1f}× typical', fontsize=8.5)
+        ax.tick_params(labelsize=7)
+    for ax in axes[-1]:
+        if ax.axison:
+            ax.set_xlabel('mean intensity per cell + 1 (log)', fontsize=7)
+    fig.suptitle('Raw marker intensities (same axis for every panel; log count). Orange = the same "positive" line; '
+                 'dotted = typical cell', fontsize=11)
+    return fig
+
+
 def fig_positive_maps(data, res, rng):
     """Cells above the "positive" line for each marker, over the tissue; non-specific cells in grey."""
     xs, ys = _display_xy(data)
@@ -909,8 +976,8 @@ def build_html(data, res, figs):
                  '<li><a href="#markers">Markers</a></li>'
                  '<li><a href="#clusters">Cell populations (clusters)</a></li>'
                  '<li><a href="#maps">Where things are</a></li>'
+                 '<li><a href="#niches">Niches and niche regions</a></li>'
                  '<li><a href="#communities">Communities</a></li>'
-                 '<li><a href="#niches">Niches</a></li>'
                  '<li><a href="#quality">Data-quality flags</a></li></ol></nav>')
 
     # --- How to read ----------------------------------------------------------
@@ -923,15 +990,18 @@ def build_html(data, res, figs):
         '"noticeably brighter than the typical cell for that marker"; it does <i>not</i> mean the cell is '
         'definitively positive. That line is a separate judgement call.</p>')
     parts.append(
-        '<p><b>Two different kinds of grouping</b>, easy to confuse:</p><ul>'
+        '<p><b>Different kinds of grouping</b>, easy to confuse:</p><ul>'
         '<li><b>Clusters</b> (k-means) group cells by <i>what they express</i>: cells with similar marker '
         'profiles go together, wherever they sit in the tissue.</li>'
-        '<li><b>Communities</b> group cells by <i>where they are</i>: neighbouring cells go together, '
-        'whatever they express. A cell type that is physically scattered shows up in many communities.</li>'
         '<li><b>Niches</b> group cells by <i>what surrounds them</i>: cells whose neighbourhoods have a similar mix '
         'of clusters go together, so a niche is a kind of place (e.g. "mostly neurons", or a tissue layer), which can '
-        'occur in several parts of the tissue.</li>'
-        '</ul><p>All three come from the same data; they answer different questions.</p>')
+        'occur in several parts of the tissue. <b>Niche regions</b> split each niche into its separate, connected '
+        'pieces, so each region is one place in the tissue.</li>'
+        '<li><b>Communities</b> group cells by <i>where they are</i>: neighbouring cells go together, '
+        'whatever they express. A cell type that is physically scattered shows up in many communities. '
+        'Communities and niche regions both divide the tissue into places, by different methods; both are shown '
+        'while we learn which works better.</li>'
+        '</ul><p>All of them come from the same data; they answer different questions.</p>')
     parts.append(f'<p class="muted">Cluster names are generated automatically from the (up to two) markers a '
                  f'cluster has raised (mean robust z ≥ {NAME_MIN_Z:g}); "low X" means no marker is raised but X '
                  f'is clearly below typical, and "no distinct marker" means neither. Names describe marker '
@@ -944,12 +1014,37 @@ def build_html(data, res, figs):
     mt = res['marker_table']
     unimodal_note = ('Most markers show one broad pile with a tail rather than two clear peaks ("off" and '
                      '"on"), so ')
-    parts.append(f'<p>The brightness distribution of every marker on the robust z scale. The <b>orange line</b> '
-                 f'is the illustrative "positive" cutoff used throughout this report (z = {POSITIVE_Z:g}); the '
-                 f'dotted line is the typical cell (z = 0). {unimodal_note}the positive line is a <i>choice</i>, '
-                 'not a property of the data: move it and different cells flip sides. Where the biology '
-                 'depends on it, choose the line deliberately for each marker, or treat the marker as a '
-                 'continuous quantity.</p>')
+    raw = res['raw_table']
+    controls_note = (' Control channels (pale grey) show what background and autofluorescence look like on '
+                     'this slide.' if (raw['kind'] != 'marker').any() else '')
+    parts.append('<h3>Raw intensities</h3>')
+    parts.append(
+        '<p>First, each marker\'s <b>raw</b> intensity (the mean over each cell), with every panel on the '
+        'same log axis. This shows what the normalised view below hides: how bright each marker actually is. '
+        f'The orange "positive" line and the dotted typical cell are the same cutoffs used below, converted back '
+        f'to intensity.{controls_note}</p>')
+    parts.append(figs['raw_distributions'])
+    parts.append(
+        '<div class="note">Raw levels aren\'t strictly comparable between markers (each is imaged at its own '
+        'exposure and gain), but they show whether a marker has real signal. <b>If a marker\'s cells all sit at '
+        'a low level, close to the control channels, with no bright tail, the marker is probably absent or '
+        'failed</b>: its "positive" cells are just the brightest background noise and artefacts, and the robust '
+        'z scale below stretches that noise to look like any other marker. The ratio of the "positive" line to '
+        'the typical cell is another hint: a line only slightly above typical means "positive" cells are barely '
+        'brighter than the rest.</div>')
+    parts.append(_table(
+        ['Channel', 'Typical cell (median)', '"Positive" line', 'Line ÷ typical', '99th percentile'],
+        [(_esc(r.channel) + (' <span class="muted">(control)</span>' if r.kind != 'marker' else ''),
+          f'{r.median:,.1f}', f'{r.positive_line:,.1f}', f'{r.ratio:.1f}×', f'{r.p99:,.1f}')
+         for r in raw.itertuples()], num_cols=(1, 2, 3, 4)))
+    parts.append('<h3>Normalised (robust z)</h3>')
+    parts.append(f'<p>The same distributions on the robust z scale, which puts every marker on the same ruler. '
+                 f'The <b>orange line</b> is the illustrative "positive" cutoff used throughout this report '
+                 f'(z = {POSITIVE_Z:g}); the dotted line is the typical cell (z = 0). {unimodal_note}the positive '
+                 'line is a <i>choice</i>, not a property of the data: move it and different cells flip sides. '
+                 'Where the biology depends on it, choose the line deliberately for each marker, or treat the '
+                 'marker as a continuous quantity. Because every marker is rescaled to the same spread, this view '
+                 'makes absent markers look as "real" as bright ones; check the raw view above.</p>')
     parts.append(figs['marker_distributions'])
     parts.append(_table(['Marker', '"Positive" cells', '%'],
                         [(_esc(r.marker), f'{r.n_positive:,}', f'{r.pct_positive:.1f}%') for r in mt.itertuples()],
@@ -1033,8 +1128,9 @@ def build_html(data, res, figs):
                  'artefacts are easy to tell apart from real marker patterns.</p>')
     parts.append(figs['positive_maps'])
 
-    # --- Communities -----------------------------------------------------------
-    parts.append('<h2 id="communities">4. Communities</h2>')
+    # --- Communities (built here, then moved after the niches below) -------------
+    comm_start = len(parts)
+    parts.append('<h2 id="communities">5. Communities</h2>')
     if comm is None:
         parts.append('<p>No community labels in this result.</p>')
     else:
@@ -1043,7 +1139,9 @@ def build_html(data, res, figs):
             'triangulation, edges up to the maximum distance, each weighted by how similar the two cells\' '
             'features are), then <b>Louvain</b> community detection splits it at a <b>resolution</b> setting. '
             'Higher resolution gives more, smaller communities. Communities smaller than the minimum size are '
-            'labelled "unassigned" (mostly isolated cells at tissue edges or gaps) and left out below.</p>')
+            'labelled "unassigned" (mostly isolated cells at tissue edges or gaps) and left out below. '
+            'Communities are another way of dividing the tissue into places, alongside the niche regions in '
+            'section 4; compare the two maps.</p>')
         sizes = comm['sizes']
         top10 = sizes.index[:10]
         dom_counts = comm['dominant'].loc[top10].value_counts()
@@ -1079,7 +1177,8 @@ def build_html(data, res, figs):
                                 num_cols=tuple(range(len(cols)))))
 
     # --- Niches -------------------------------------------------------------------
-    parts.append('<h2 id="niches">5. Niches</h2>')
+    niche_start = len(parts)
+    parts.append('<h2 id="niches">4. Niches and niche regions</h2>')
     niche = res['niche']
     if niche is None:
         parts.append('<p>No niches in this result (run with <code>--n-niches</code> greater than 0).</p>')
@@ -1166,6 +1265,9 @@ def build_html(data, res, figs):
                          'cellsurvey.stability --zarr &lt;output&gt;_seg.zarr --mode niches</code>, then re-make this '
                          'report.</p>')
 
+    # Niches and regions (section 4) come before communities (section 5).
+    parts[comm_start:] = parts[niche_start:] + parts[comm_start:niche_start]
+
     # --- Quality ------------------------------------------------------------------
     parts.append('<h2 id="quality">6. Data-quality flags</h2>')
     n_ns = int(res['nonspecific'].sum())
@@ -1227,6 +1329,8 @@ def write_report(zarr_path, plot_dir, summary_path=None, filename='report.html',
     rng = np.random.default_rng(seed)
     out = _Figures(os.path.join(plot_dir, 'report'))
     figs = {
+        'raw_distributions': out.tag(fig_raw_distributions(data, res), 'raw_marker_distributions',
+                                     'Raw marker intensities'),
         'marker_distributions': out.tag(fig_marker_distributions(res), 'marker_distributions',
                                         'Marker distributions'),
         'profile': out.tag(fig_cluster_profile(res), 'cluster_profile', 'Cluster marker profiles'),
